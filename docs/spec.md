@@ -18,9 +18,10 @@ session nodes** rather than Git's branch model. Built in Elixir.
 
 ## 1. Vision
 
-Cadence is a source control system for a single developer (and optionally a
-small trusted circle) that removes the friction of Git's branch model while
-preserving a complete, navigable history.
+Cadence is a source control system for a single developer, a small team, or a
+self-hosted company — optionally exposing a read-only public view — that
+removes the friction of Git's branch model while preserving a complete,
+navigable history.
 
 The core idea: **every working session becomes a node in a directed acyclic
 graph.** There is no `main`. There are no branches in the Git sense. There is
@@ -123,7 +124,7 @@ via `cadence_shared`. They do **not** share a runtime.
 | **Session pointer** | Per-user, per-project cursor indicating which node that user is currently editing from. |
 | **Active head** | A node in a user's active heads set. Normally the most recent commit; forks add the parent to this set. |
 | **Fork / Sandbox** | A new child node created from the current node, where the parent remains an active head. |
-| **Meld / Union** | A new node with multiple parents, created server-side by an AI coding agent. |
+| **Meld / Union** | The DAG's *merge*: a new node with 2+ parents, combining divergent lines of work, created server-side by an AI coding agent. |
 | **Flag** | Per-node lifecycle marker: `functioning`, `in-progress`, `broken`, `sandbox`. |
 | **Pinned** | A set of nodes explicitly surfaced by the owner for public preview. |
 | **Preview node** | The node shown to unauthenticated visitors. Derived, not stored. |
@@ -161,15 +162,23 @@ Node
   id                :uuid
   project_id        :uuid
   git_commit_sha    :string          # reference into the Git object store
-  parents           :[uuid]          # empty for root, 1 for normal, 2+ for meld
+  parents           :[uuid]          # empty for root, 1 for normal, 2+ for meld;
+                                     # uuid[] + GIN index (edges table = migration path)
   flags             :[atom]          # subset of :functioning | :in-progress | :broken | :sandbox
   pinned            :boolean
   message           :string          # AI-generated, human-editable
-  session_metadata  :map             # arbitrary: duration, files touched, agent model used
+  session_metadata  :map             # small: duration, files touched, model; no inline diffs
   created_by        :uuid
   created_at        :utc_datetime
   docs_state        :atom            # :current | :pending | :skipped
 ```
+
+`parents` is stored as a `uuid[]` array with a GIN index for cheap child lookup
+(`WHERE parents @> ARRAY[x]`). If a project grows large enough that recursive
+traversal slows, migrate to a normalized `node_edges(parent_id, child_id)`
+table — the documented migration path. `session_metadata` must stay small:
+diffs and doc-diffs are stored as Git objects (referenced by SHA), never
+inlined into the row.
 
 ### 4.2 Project
 
@@ -211,14 +220,32 @@ preview_node  = pinned_sorted.first
 
 ### 4.5 Roles & permissions
 
-| Role | Commit | Fork | Switch | Union | Pin | Delete | Manage members |
-|---|---|---|---|---|---|---|---|
-| `owner` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `trusted` | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ |
-| `viewer` | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
-| unauthenticated | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| Role | Commit | Fork | Switch | Union | Approve | Pin | Delete | Manage members |
+|---|---|---|---|---|---|---|---|---|
+| `owner` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `trusted` | ✓ | ✓ | ✓ | ✓ | ✓* | ✗ | ✗ | ✗ |
+| `viewer` | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| unauthenticated | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+
+\* `trusted` may *propose* melds/promotions; whether they may *approve* them is
+a per-project grant set by the owner (the basic "can/can't approve melds"
+switch). See §6.6.
 
 Public visitors are unauthenticated and see the preview node only.
+
+### 4.6 Teams, approvers & supervisor (lightweight)
+
+Cadence deliberately avoids an org-chart/HR model. For collaboration it
+supports only lightweight, metadata-grade relationships:
+
+- **Team** — a named set of users, optionally used to scope who may approve.
+- **Approver** — a per-project boolean on a membership: can this user approve
+  melds/promotions?
+- **Supervisor** — an optional per-user pointer (e.g. "reports to"), used only
+  for display/attribution in the DAG (edit/approval contexts). Not enforced.
+
+None of these alter the DAG itself; they only shape *who may promote* a node
+and how credit is displayed.
 
 ---
 
@@ -409,6 +436,29 @@ Parents:
 ...
 ```
 
+### 6.6 Proposals, review & promotion
+
+Meld/union is the DAG's merge; **promotion** is what replaces "merge into a
+branch." A meld is not created (or not promoted to the visible line) until a
+human approves it.
+
+- **Proposal** — a pending request to create a meld node, or to promote an
+  existing node to `pinned`. Carries: parent node IDs, the resulting tree (for
+  a meld), proposer, and status (`pending | approved | rejected`).
+- **Shareable link** — every proposal has a stable URL that renders the parents,
+  resulting diff/tree, flags, and status. It is meant to be pasted into
+  Slack/email/whatever comms tool the team uses; Cadence hosts the *view*, not
+  the conversation.
+- **Approve/reject** — reviewers (owner, or `trusted` users granted `approve`)
+  approve or reject. Lightweight: no inline comments or threads.
+- **On approval** — the meld node is created (per §6.5) and/or the node is
+  promoted (`pinned`). Only approval moves state; proposing is non-disruptive
+  and does not move anyone's session pointer.
+- **Guards** — a meld is still never auto-promoted to `functioning` (§3.1);
+  approval promotes the *line*, validation sets the *flag*.
+
+See §16 for open questions on the exact promotion target and proposal model.
+
 ---
 
 ## 7. Phase 3 — Web UI & Portfolio
@@ -428,6 +478,7 @@ Parents:
 - View all nodes, including `broken` and `sandbox`.
 - Trigger actions.
 - Manage memberships.
+- Review and approve/reject meld proposals (shareable link).
 - View doc diffs and approve/reject pending doc revisions.
 
 ### 7.3 DAG visualization spec
@@ -1021,9 +1072,10 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - Markdown docs pages via `MDEx`.
 - Preview node logic + pinning.
 
-**Phase 4 — Unions (week 14–15)**
+**Phase 4 — Unions & review (week 14–15)**
 - Server-side meld worker.
 - Permission checks.
+- Proposal entity + approve/reject gate + shareable link (§6.6).
 - Broadcast + client refresh.
 
 **Phase 5 — Doc automation (week 16)**
@@ -1036,16 +1088,25 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - Action manifest parsing.
 - Web UI action buttons + streaming output.
 
+**Phase 7 — Storage engineering (week 18+)**
+- Server-side lossless repack: pack loose objects into packfiles with delta
+  compression (background job; read transparently through `GitStore`).
+  Non-destructive — history is never pruned (§15).
+- Sync object negotiation: existence handshake so clients don't re-push objects
+  the server already holds.
+
 ---
 
 ## 14. Non-Goals
 
 - Full Git protocol compatibility (no `git clone` / `git push` interop).
-- Replacing Git as the storage layer — we wrap it.
+- Replacing Git as the storage layer — we implement Git's object format
+  directly.
 - Real-time collaborative editing (CRDT, etc.). Sessions are commit-based.
 - A general-purpose CI/CD system. Actions are for the owner's convenience and
   portfolio demonstration.
-- Multi-tenant SaaS. This is a personal tool with optional trusted users.
+- A hosted multi-tenant SaaS. Cadence is self-hosted per team/org, with no
+  org-chart/HR machinery (see §4.6).
 
 ---
 
@@ -1086,6 +1147,16 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       object store for Git packfiles.
 - [ ] **Multi-user conflict UX:** when two trusted users fork from the same
       node, how does the picker display the divergence?
+- [ ] **Promotion target:** does approval promote to `pinned`, `functioning`,
+      or a distinct "protected line" marker? (See §6.6.)
+- [ ] **Proposal model:** approve/reject policy — any single approver, or a
+      quorum of N? Should a rejected proposal be re-submittable?
+- [ ] **Team/supervisor schema:** exact shape and sync channel for the
+      lightweight §4.6 relationships.
+- [ ] **Proposal link format:** URL scheme and what the shareable view renders
+      (diff vs. tree vs. flags).
+- [ ] **Storage repack trigger:** when to run the Phase 7 lossless repack (size
+      threshold vs. scheduled job), and the array→edges migration threshold.
 
 ---
 

@@ -25,16 +25,32 @@ Phase 1b — Shared schemas + GitStore (GitStore complete)
       (`hello world\n` blob = `3b18e512…`, empty tree = `4b825dc6…`) and a full
       round-trip (build_tree → commit → checkout). All green.
 - [x] `mix compile` clean; `mix format` clean.
+- [x] Spec evolved toward multi-user collaboration: clarified that the meld/union
+      *is* the DAG's merge (2+ parents) and that "merge into a branch" is
+      replaced by **promotion** to a flag; added `Approve` to the role matrix
+      (§4.5), lightweight `team`/`approver`/`supervisor` metadata (§4.6), and a
+      proposals/review/promotion lifecycle with shareable links (§6.6); widened
+      the vision from "single dev + trusted circle" to "single dev / team /
+      self-hosted company" (§1, §14).
+- [x] Storage-engineering direction captured: `parents` = `uuid[]` + GIN index
+      with `node_edges` table as the documented migration path (§4.1);
+      `session_metadata` must not inline diffs (§4.1); added **Phase 7 —
+      Storage engineering** (lossless delta repack + sync object negotiation,
+      never pruning history) (§13); open trigger/migration threshold in §16.
 
 ## Next
 - Phase 1b (remaining): `Node`, `Project`, `Membership` Ecto schemas in
   `cadence_shared` (with changesets) and `Sync.Message` protocol structs.
+  - `Node.parents` as `uuid[]` + GIN index; `session_metadata` small (no
+    inline diffs).
+  - `Membership` carries §4.5/§4.6 fields: `approver` (boolean), `team`,
+    `supervisor` (metadata-grade).
 
 ## Blocked
 - (none)
 
 ## Spec Deltas
-- (none)
+- (none — review/promotion + storage direction now in spec; open details in §16)
 
 ## Last Updated
-2026-10-12 — GitStore absorbed + DAG-specialized + tested
+2026-10-12 — session wrapped: GitStore done, multi-user + storage direction captured
