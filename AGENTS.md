@@ -78,7 +78,7 @@ cadence/                        (umbrella root)
 
 | App | May depend on | Must NOT depend on |
 |---|---|---|
-| `cadence_shared` | Ecto, `gitex`, `omni`/`axiom_ai`, `libgraph` | Phoenix, Postgres, Bandit, any web stack |
+| `cadence_shared` | Ecto, `axiom_ai`, `libgraph` | Phoenix, Postgres, Bandit, any web stack |
 | `cadence_daemon` | `cadence_shared`, SQLite (`ecto_sqlite3`), `file_system`, `Bandit`, `Plug`, `Hammer` | Phoenix, Postgres, LiveView |
 | `cadence_server` | `cadence_shared`, Phoenix, LiveView, Postgres, `ex_docker_api`, `AshAuthentication` | — |
 
@@ -100,7 +100,8 @@ Both point at schemas defined in `cadence_shared`.
 These are the constraints that agents most commonly violate. They are not
 suggestions.
 
-1. **Never shell out to `git`.** Use `gitex` for all Git object operations.
+1. **Never shell out to `git`.** Use `Cadence.Shared.GitStore` for all Git
+   object operations.
 2. **Never run `mix phx.new`.** The server app is created manually.
 3. **Never add a dependency** outside spec §11 without first updating the
    spec's technology table and getting approval.
@@ -113,8 +114,7 @@ suggestions.
 7. **Never skip ahead in the build order** (spec §13). Each phase depends on
    the previous one.
 8. **Never commit secrets.** Tokens go in `~/.config/cadence/env` (chmod 600)
-   or in `.env` for the server. Never in TOML, never in `config/`, never in
-   source.
+   or in a `.env` file. Never in `config/`, never in source.
 9. **Never mount the raw Docker socket** in a publicly-reachable deployment.
    Use the socket proxy. See spec §8.4.
 10. **Never rename things without a find-and-replace across the whole
@@ -292,8 +292,8 @@ Phase 1b — Shared schemas + GitStore
 
 ## Next
 - `GitStore.init/1` — initialize a bare repo at a given path.
-  Blocked on: deciding whether to use gitex's raw API or build a
-  small porcelain layer first. See spec §5.2.
+  Blocked on: deciding whether to use `Cadence.Shared.GitStore` directly or
+  build a small porcelain layer first. See spec §5.2.
 
 ## Blocked
 - (none)

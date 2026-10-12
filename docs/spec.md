@@ -227,7 +227,7 @@ Public visitors are unauthenticated and see the preview node only.
 ### 5.1 Responsibilities
 
 - Watch registered project directories for file changes.
-- Commit to a local Git repository using `gitex` (pure Elixir, no shell-out).
+- Commit to a local Git object store using `Cadence.Shared.GitStore` (pure Elixir, no shell-out).
 - Queue commits when offline; flush on reconnect.
 - Run the doc-automation sub-process before final commit.
 - Serve a Unix socket / local HTTP API to the Neovim plugin.
@@ -238,7 +238,7 @@ Public visitors are unauthenticated and see the preview node only.
 ```
 Cadence.Daemon.Application
 ├── Cadence.Daemon.SyncLedger          (GenServer, persistent state)
-├── Cadence.Daemon.GitStore            (GenServer, wraps gitex)
+├── Cadence.Shared.GitStore            (git object store; lives in cadence_shared)
 ├── Cadence.Daemon.ProjectRegistry     (DynamicSupervisor)
 │   └── Per project:
 │       ├── Cadence.Daemon.Watcher     (file_system + debounce)
@@ -270,7 +270,7 @@ file event
   → if docs affected (per schema): run DocAgent (may defer if offline)
   → write revised docs to working tree
   → generate commit message (LLM: code diff + doc diff)
-  → commit locally via gitex
+  → commit locally via Cadence.Shared.GitStore
   → create Node record in local store
   → mark user's session_pointer = new node
   → enqueue cloud sync
@@ -317,9 +317,10 @@ Diff:
 
 ### 5.6 Configuration
 
-- TOML at `~/.config/cadence/config.toml` for non-secret settings.
-- Env overrides in `~/.config/cadence/env` (chmod 600).
-- Env vars override TOML.
+- Daemon configuration is environment variables only (see §12.6), supplied via
+  a `.env` file or exported directly into the process environment.
+- Secrets live in `~/.config/cadence/env` (chmod 600), never in source or
+  `config/`.
 
 ---
 
@@ -647,7 +648,7 @@ limiter shared across the daemon.
 
 The daemon authenticates to the server with a bearer token (personal access
 token) issued by the server. Stored in `~/.config/cadence/env` (chmod 600),
-never in the TOML.
+never in source or `config/`.
 
 ### 10.2 Local → Cloud
 
@@ -704,19 +705,23 @@ SyncMessage.Union
 |---|---|
 | Daemon & server language | Elixir (OTP) |
 | Web framework | Phoenix + LiveView |
-| Git object model | `gitex` |
+| Git object store | `Cadence.Shared.GitStore` (native; implements Git's public object format) |
 | File watching | `file_system` |
-| LLM clients | `omni` or `axiom_ai` (abstract over OpenAI/Anthropic) |
+| LLM client | `axiom_ai` (DeepSeek via OpenAI-compatible base URL) |
 | Markdown rendering | `MDEx` |
 | Auth | `AshAuthentication` + `Ash` |
 | Docker API | `ex_docker_api` |
-| Rate limiting | `Hammer` |
-| Graph model | `libgraph` or Erlang `:digraph` |
+| Rate limiting | `Hammer` (lives in `cadence_shared`) |
+| Graph model | `libgraph` |
 | TUI (optional, daemon-side) | `ExRatatui` |
 | Neovim plugin | Lua + plenary.nvim |
 | HTTP client (daemon → cloud) | `Req` |
+| ORM / schemas | Ecto (`ecto`, `ecto_sql`) |
+| JSON codec | `Jason` |
+| HTTP server | `Bandit` |
+| HTTP abstraction | `Plug` |
 | Local persistent store | SQLite via `ecto_sqlite3` |
-| Cloud database | PostgreSQL |
+| Cloud database | PostgreSQL (`postgrex`) |
 | PubSub | `Phoenix.PubSub` |
 | SVG rendering (web) | Hand-rolled LiveComponent |
 
@@ -751,7 +756,7 @@ cadence/
 
 - `Cadence.Shared.Node`, `.Project`, `.Membership` (Ecto schemas)
 - `Cadence.Shared.Sync.Message` (protocol types)
-- `Cadence.Shared.GitStore` (wraps `gitex`)
+- `Cadence.Shared.GitStore` (git object store: blob/tree/commit; DAG-specialized, derived from `gitex`)
 - `Cadence.Shared.LLM` (wraps `omni` / `axiom_ai`)
 - `Cadence.Shared.RepoBehaviour` (adapter-agnostic queries used by both)
 
@@ -767,8 +772,8 @@ schemas, with different adapters (SQLite vs Postgres). Name them explicitly:
 - No Phoenix, no Postgres, no LiveView.
 - SQLite via `ecto_sqlite3` for local metadata.
 - Unix socket API at `~/.local/state/cadence/daemon.sock`.
-- Configuration: TOML at `~/.config/cadence/config.toml`, env overrides,
-  secrets in `~/.config/cadence/env` (chmod 600).
+- Configuration: environment variables only (see §12.6), supplied via `.env`
+  or the process environment; secrets in `~/.config/cadence/env` (chmod 600).
 - Communicates with the server **only** via the HTTP sync protocol (§10).
 - No distributed Erlang. No shared process tree with the server.
 
@@ -804,9 +809,10 @@ services:
       CAD_OAUTH_GITHUB_CLIENT_SECRET: "${CAD_OAUTH_GITHUB_CLIENT_SECRET}"
       CAD_OAUTH_GOOGLE_CLIENT_ID: "${CAD_OAUTH_GOOGLE_CLIENT_ID}"
       CAD_OAUTH_GOOGLE_CLIENT_SECRET: "${CAD_OAUTH_GOOGLE_CLIENT_SECRET}"
-      CAD_LLM_PROVIDER: "${CAD_LLM_PROVIDER:-anthropic}"
+      CAD_LLM_PROVIDER: "${CAD_LLM_PROVIDER:-deepseek}"
       CAD_LLM_API_KEY: "${CAD_LLM_API_KEY}"
-      CAD_LLM_MODEL: "${CAD_LLM_MODEL:-claude-sonnet-4-5}"
+      CAD_LLM_MODEL: "${CAD_LLM_MODEL:-deepseek-chat}"
+      CAD_LLM_BASE_URL: "${CAD_LLM_BASE_URL:-https://api.deepseek.com}"
       CAD_DOCKER_SOCKET: "${CAD_DOCKER_SOCKET:-http://docker-proxy:2375}"
       CAD_PUBLIC_URL: "https://${CAD_PHX_HOST}"
     volumes:
@@ -868,10 +874,11 @@ if config_env() == :prod do
     url: System.fetch_env!("CAD_DATABASE_URL"),
     pool_size: String.to_integer(System.get_env("CAD_DB_POOL_SIZE", "10"))
 
-  config :cadence_shared, Cadence.LLM,
+  config :cadence_shared, Cadence.Shared.LLM,
     provider: System.fetch_env!("CAD_LLM_PROVIDER"),
     api_key: System.fetch_env!("CAD_LLM_API_KEY"),
-    model: System.fetch_env!("CAD_LLM_MODEL")
+    model: System.fetch_env!("CAD_LLM_MODEL"),
+    base_url: System.get_env("CAD_LLM_BASE_URL")
 
   config :cadence_server, Cadence.Server.Actions,
     docker_socket: System.get_env("CAD_DOCKER_SOCKET", "http://localhost:2375"),
@@ -897,9 +904,10 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_OAUTH_GITHUB_CLIENT_SECRET` | no | — | GitHub OAuth |
 | `CAD_OAUTH_GOOGLE_CLIENT_ID` | no | — | Google OAuth |
 | `CAD_OAUTH_GOOGLE_CLIENT_SECRET` | no | — | Google OAuth |
-| `CAD_LLM_PROVIDER` | yes | — | `anthropic` \| `openai` \| … |
+| `CAD_LLM_PROVIDER` | yes | — | `deepseek` \| `openai` \| `anthropic` \| … |
 | `CAD_LLM_API_KEY` | yes | — | Provider key |
 | `CAD_LLM_MODEL` | no | provider default | Model ID |
+| `CAD_LLM_BASE_URL` | no | provider default | Base URL (DeepSeek: `https://api.deepseek.com`) |
 | `CAD_DOCKER_SOCKET` | no | `http://localhost:2375` | Docker API (via proxy) |
 | `CAD_ACTIONS_ENABLED` | no | `true` | Disable action layer |
 | `CAD_PUBLIC_URL` | yes | — | Canonical URL for links |
@@ -917,6 +925,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_LLM_PROVIDER` | yes | — | Same as server |
 | `CAD_LLM_API_KEY` | yes | — | Same as server |
 | `CAD_LLM_MODEL` | no | provider default | Same as server |
+| `CAD_LLM_BASE_URL` | no | provider default | Same as server |
 | `CAD_WATCH_DEBOUNCE_MS` | no | `2000` | Idle before commit |
 | `CAD_SYNC_TIMEOUT_MS` | no | `500` | Picker sync attempt |
 
@@ -950,7 +959,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   proxy. Never expose the raw socket to the Cadence container in a
   publicly-reachable deployment.
 - The daemon's auth token is a bearer token issued by the server. Store it in
-  `~/.config/cadence/env` (chmod 600), never in the TOML.
+  `~/.config/cadence/env` (chmod 600), never in source or `config/`.
 - All sync traffic over HTTPS only.
 - Actions are opt-in per project and disabled server-wide with
   `CAD_ACTIONS_ENABLED=false` if the deployment doesn't need them.
@@ -970,8 +979,9 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - `Node`, `Project`, `Membership` Ecto schemas in `cadence_shared`.
 - Changesets.
 - `Sync.Message` protocol structs.
-- `GitStore` wrapping `gitex`: init repo, write blob, create tree, create
-  commit, read commit. Full round-trip test on a temp directory.
+- `Cadence.Shared.GitStore`: init (bare/working), write/read blob,
+  build/read tree, write/read commit (explicit parents, no refs), checkout.
+  Full round-trip test on a temp directory.
 
 **Phase 1c — Daemon watcher + commit queue (week 4)**
 - `file_system` watcher with debounce.
@@ -1089,8 +1099,8 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `apps/cadence_server/priv/templates/`       | Dockerfile language templates        |
 | `apps/cadence_server/priv/repo/migrations/` | Postgres migrations                  |
 | `apps/cadence_daemon/priv/repo/migrations/` | SQLite migrations                    |
-| `~/.config/cadence/config.toml`             | Daemon non-secret config             |
 | `~/.config/cadence/env`                     | Daemon secrets (chmod 600)           |
+| `<project>/.env`                            | Daemon/server env vars               |
 | `~/.local/state/cadence/daemon.sock`        | Daemon Unix socket                   |
 | `~/.local/state/cadence/cadence.db`         | Daemon SQLite database               |
 | `/data/git`                                 | Server Git object storage            |
