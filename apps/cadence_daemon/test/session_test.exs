@@ -66,6 +66,50 @@ defmodule Cadence.Daemon.SessionTest do
     refute parent.id in membership.active_heads
   end
 
+  test "state returns read-only defaults without a membership",
+       %{project: project, user_id: user_id} do
+    assert %{user_id: ^user_id, session_pointer: nil, active_heads: []} =
+             Session.state(project.id)
+  end
+
+  test "state reflects the pointer and active heads", %{project: project} do
+    Session.ensure_membership!(project.id)
+    parent = node_fixture(project.id)
+    child = node_fixture(project.id, [parent.id])
+    {:ok, _} = Session.spawn_after(project.id, parent, child)
+
+    assert %{session_pointer: child_id, active_heads: [parent_id]} = Session.state(project.id)
+    assert child_id == child.id
+    assert parent_id == parent.id
+  end
+
+  test "anchor_node returns the session pointer when set", %{project: project} do
+    Session.ensure_membership!(project.id)
+    parent = node_fixture(project.id)
+    _child = node_fixture(project.id, [parent.id])
+    {:ok, _} = Session.switch(project.id, parent.id)
+
+    assert Session.anchor_node(project.id).id == parent.id
+  end
+
+  test "anchor_node falls back to the local user's most-recent node", %{project: project} do
+    mine = node_fixture(project.id)
+    Session.ensure_membership!(project.id)
+
+    assert Session.anchor_node(project.id).id == mine.id
+  end
+
+  test "anchor_node prefers the preview node when the user has none", %{project: project} do
+    other = other_user_node(project.id, pinned: true)
+    Session.ensure_membership!(project.id)
+
+    assert Session.anchor_node(project.id).id == other.id
+  end
+
+  test "anchor_node is nil for an empty project", %{project: project} do
+    assert Session.anchor_node(project.id) == nil
+  end
+
   defp project_fixture(owner_id) do
     %{name: "p", slug: "p-#{System.unique_integer([:positive])}", owner_id: owner_id}
     |> Project.changeset()
@@ -80,6 +124,22 @@ defmodule Cadence.Daemon.SessionTest do
       flags: [:"in-progress"],
       message: "m",
       created_by: Application.get_env(:cadence_daemon, :local_user_id),
+      created_at: DateTime.utc_now(),
+      docs_state: :pending
+    }
+    |> Node.changeset()
+    |> Repo.insert!()
+  end
+
+  defp other_user_node(project_id, opts \\ []) do
+    %{
+      project_id: project_id,
+      git_commit_sha: String.duplicate("b", 40),
+      parents: [],
+      flags: [:"in-progress"],
+      pinned: Keyword.get(opts, :pinned, false),
+      message: "m",
+      created_by: Ecto.UUID.generate(),
       created_at: DateTime.utc_now(),
       docs_state: :pending
     }

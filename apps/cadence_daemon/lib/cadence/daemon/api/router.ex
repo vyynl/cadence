@@ -8,7 +8,7 @@ defmodule Cadence.Daemon.API.Router do
   import Ecto.Query
 
   alias Cadence.Daemon.{CommitQueue, ProjectRegistry, Projects, Repo, Session}
-  alias Cadence.Shared.Node
+  alias Cadence.Shared.{DAG, Node}
 
   plug(Plug.Parsers, parsers: [:json], json_decoder: Jason)
   plug(:match)
@@ -36,12 +36,28 @@ defmodule Cadence.Daemon.API.Router do
   end
 
   get "/nodes" do
-    case conn.query_params["project_id"] do
-      nil ->
+    case fetch_project(conn.query_params["project_id"]) do
+      {:error, :missing} ->
         send_json(conn, 400, %{error: "project_id is required"})
 
-      project_id ->
+      {:error, :not_found} ->
+        send_json(conn, 404, %{error: "project not found"})
+
+      {:ok, project_id} ->
         send_json(conn, 200, %{nodes: list_nodes(project_id)})
+    end
+  end
+
+  get "/graph" do
+    case fetch_project(conn.query_params["project_id"]) do
+      {:error, :missing} ->
+        send_json(conn, 400, %{error: "project_id is required"})
+
+      {:error, :not_found} ->
+        send_json(conn, 404, %{error: "project not found"})
+
+      {:ok, project_id} ->
+        send_json(conn, 200, graph_json(project_id))
     end
   end
 
@@ -94,12 +110,47 @@ defmodule Cadence.Daemon.API.Router do
 
   defp switch_node(_), do: {:error, :no_project}
 
+  defp fetch_project(nil), do: {:error, :missing}
+
+  defp fetch_project(project_id) do
+    if Projects.get_project(project_id), do: {:ok, project_id}, else: {:error, :not_found}
+  end
+
   defp list_nodes(project_id) do
+    project_id |> project_nodes() |> Enum.map(&node_json/1)
+  end
+
+  defp project_nodes(project_id) do
     Node
     |> where([n], n.project_id == ^project_id)
     |> order_by([n], desc: n.created_at, desc: n.id)
     |> Repo.all()
-    |> Enum.map(&node_json/1)
+  end
+
+  # Structural graph for the Neovim picker (spec §6.2, §13 Phase 2a): nodes with
+  # topological depth, parent->child edges, and the resolved default/preview
+  # node. Coordinate/glyph layout is the renderer's concern.
+  defp graph_json(project_id) do
+    nodes = project_nodes(project_id)
+    depths = DAG.depths(nodes)
+    session = Session.state(project_id)
+
+    default =
+      DAG.default_node(nodes,
+        session_pointer: session.session_pointer,
+        user_id: session.user_id
+      )
+
+    preview = DAG.preview_node(nodes)
+
+    %{
+      project_id: project_id,
+      session: session,
+      default_node_id: default && default.id,
+      preview_node_id: preview && preview.id,
+      nodes: Enum.map(nodes, &Map.put(node_json(&1), :depth, Map.get(depths, &1.id, 0))),
+      edges: DAG.edges(nodes)
+    }
   end
 
   defp project_json(project) do

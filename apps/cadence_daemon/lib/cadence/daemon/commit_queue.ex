@@ -161,10 +161,11 @@ defmodule Cadence.Daemon.CommitQueue do
   end
 
   # The parent for a normal commit is the node the local user is currently
-  # editing from (spec §3.2). It falls back to the last committed node only
-  # before any pointer exists (the first commit).
+  # editing from (spec §3.2). With no explicit pointer yet, the session anchors
+  # on the user's most-recent node (or the preview node) — never another user's
+  # tip (spec §6.3). `state.head` is a last resort for an empty project.
   defp base_node(state) do
-    Session.current_node(state.project_id) || state.head
+    Session.anchor_node(state.project_id) || state.head
   end
 
   defp latest_node(project_id) do

@@ -7,8 +7,10 @@ defmodule Cadence.Daemon.Session do
   `active_heads` are the nodes this user considers live (see spec §4.3).
   """
 
+  import Ecto.Query
+
   alias Cadence.Daemon.{Env, Repo}
-  alias Cadence.Shared.{Membership, Node}
+  alias Cadence.Shared.{DAG, Membership, Node}
 
   @role :owner
 
@@ -44,6 +46,55 @@ defmodule Cadence.Daemon.Session do
       %{session_pointer: node_id} -> Repo.get(Node, node_id)
       nil -> nil
     end
+  end
+
+  @doc """
+  Read-only session state for the local user: `:user_id`, `:session_pointer`
+  (possibly `nil`), and `:active_heads`. Does not create a membership.
+  """
+  @spec state(Ecto.UUID.t()) :: %{
+          user_id: Ecto.UUID.t() | nil,
+          session_pointer: Ecto.UUID.t() | nil,
+          active_heads: [Ecto.UUID.t()]
+        }
+  def state(project_id) do
+    user_id = Env.local_user_id()
+
+    case Repo.get_by(Membership, user_id: user_id, project_id: project_id) do
+      nil ->
+        %{user_id: user_id, session_pointer: nil, active_heads: []}
+
+      membership ->
+        %{
+          user_id: user_id,
+          session_pointer: membership.session_pointer,
+          active_heads: membership.active_heads || []
+        }
+    end
+  end
+
+  @doc """
+  Resolves the node a session should anchor on (the parent of the next commit),
+  without requiring an explicit pointer (spec §6.3):
+
+  1. the current session-pointer node, if one is set;
+  2. otherwise the local user's most-recent node;
+  3. otherwise the preview node.
+  """
+  @spec anchor_node(Ecto.UUID.t()) :: Node.t() | nil
+  def anchor_node(project_id) do
+    current_node(project_id) || fallback_anchor(project_id)
+  end
+
+  defp fallback_anchor(project_id) do
+    DAG.default_node(project_nodes(project_id), user_id: Env.local_user_id())
+  end
+
+  defp project_nodes(project_id) do
+    Node
+    |> where([n], n.project_id == ^project_id)
+    |> order_by([n], desc: n.created_at, desc: n.id)
+    |> Repo.all()
   end
 
   @doc """

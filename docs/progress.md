@@ -193,11 +193,31 @@ Phase 1f complete → moving into Phase 2a (DAG picker)
   exits 0.
 - [x] 4 more tests (changeset validator ×4 incl. nil-ignored; ProjectSupervisor).
   99 tests total (68 shared + 31 daemon), green across repeated runs.
+- [x] Phase 2a Slice A — `Cadence.Shared.DAG` (shared, `libgraph`-backed):
+  `graph/1`, `depths/1` (longest-path layering; melds = deepest parent + 1),
+  `edges/1`, `roots/1`, `children/1`, `preview_node/1` (§4.4), and
+  `default_node/2` (pointer → most-recent-by-user → preview).
+- [x] `Cadence.Daemon.Session.state/1` (read-only `{user_id, session_pointer,
+  active_heads}`) and `Session.anchor_node/1` (pointer → user's most-recent →
+  preview, via `DAG.default_node/2`). `CommitQueue.base_node/1` now anchors on
+  `Session.anchor_node/1`, so a session with no explicit pointer parents from
+  the local user's own most-recent node rather than the project-wide tip.
+- [x] `GET /graph?project_id=` — 400 missing / 404 unknown project / 200 with
+  `project_id`, `session`, `default_node_id`, `preview_node_id`, `nodes` (each
+  with `depth`), and `edges`. `GET /nodes` now also returns 404 for an unknown
+  project (was `200 []`). No `width` in the API — the client owns it.
+- [x] 25 more tests (15 DAG; 6 `Session`; 4 router `/graph`+`/nodes`).
+  124 tests total (83 shared + 41 daemon), green; format/`--warnings-as-errors`
+  clean. No migration, no config change.
 
 ## Next
-- Phase 2a — DAG picker: render nodes + edges in the Neovim floating window
-  with the elbow layout (§7.3), navigation/hover tooltips, default-selection
-  logic (§6.3), and `:CadUnion` picker mode (UI only). See spec §13 Phase 2a.
+- Phase 2a Slice B (Neovim): `cadence.nvim` renders the `/graph` payload in the
+  floating window — layer→row, barycenter column ordering, `min(cols, 80)` wrap
+  with a break marker, elbow glyphs; per-flag highlight groups; nearest-node
+  navigation; `CursorMoved` tooltip; `:CadOpen` default-selects
+  `default_node_id` and Enter → `POST /switch`; `:CadUnion` (UI only, `<C-s>`
+  stubbed); README + headless smoke test. Deferred: cloud-sync default (§6.3
+  step 1, Phase 2b) and the Telescope project picker (would add a dep to §11).
 - Remaining audit items (lower priority): derive service timeouts from config
   rather than literals; consider `.gitignore`-style patterns beyond `CAD_IGNORE`;
   `Membership.last_seen_at` is defined but unused; `CommitQueue` still inlines
@@ -220,8 +240,17 @@ Phase 1f complete → moving into Phase 2a (DAG picker)
   back to a static message) rather than the "required" flag in §12.6. The
   daemon must boot and auto-commit without an LLM configured (local-first).
   Consider softening §12.6 for the daemon.
+- `GET /graph` is a new daemon endpoint beyond the Phase 1d list; it serves the
+  structural DAG (depth/edges/session/default) for the picker. `libgraph` is no
+  longer unused — it backs `Cadence.Shared.DAG`.
+- `GET /nodes` now returns `404` for an unknown `project_id` (previously
+  `200 []`) to match `/spawn`/`/switch`. Both are documented in §13 Phase 2a.
+- Session anchoring (§6.3) now applies to commits, not just the picker: with no
+  explicit pointer, a commit parents from the *local user's* most-recent node
+  (then the preview node), never the project-wide tip. This is what makes a
+  synced-but-not-yet-touched machine resume cleanly (Phase 2b).
 
 ## Last Updated
-2026-10-14 — session: full audit follow-through — correctness A1/A2, efficiency
-A3/A4, A5 per-project supervisor, B dedup, C prod config + hammer dep. 99 tests
-green; `MIX_ENV=prod` build green. Next up: Phase 2a DAG picker.
+2026-10-14 — Phase 2a Slice A: `Cadence.Shared.DAG` + user-scoped session
+anchor + `GET /graph`; 124 tests green. Next: Phase 2a Slice B (Neovim grid
+renderer + navigation + union UI).

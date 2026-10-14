@@ -1078,6 +1078,9 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - Store message on node.
 
 **Phase 2a — DAG picker (week 8–9)**
+- Daemon serves the structural graph via `GET /graph`: per-node topological
+  depth, parent→child edges, session state, and the resolved default/preview
+  node (§6.2, §6.3). Coordinate/glyph layout stays in the client.
 - Render nodes + edges in the floating window with the elbow layout.
 - Navigation, hover tooltips, default selection logic.
 - `:CadUnion` picker mode (UI only, no server yet).
