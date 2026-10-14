@@ -385,11 +385,17 @@ Diff:
 
 ### 6.2 Picker UI
 
-- Floating window, left-aligned, max width bound (`min(terminal_cols, 80)`).
-- Nodes rendered as filled dots (`●`) with a highlight group per flag.
-- Edges rendered with `│ ╲ ╱ ─` composed into a grid.
+- Left-aligned floating **rail**, width `clamp(floor(terminal_cols * 0.2), 20, 60)`
+  (configurable); `nowrap`, so wider layers scroll horizontally as the cursor
+  moves.
+- Nodes rendered as filled dots (`●`, or `◉` when pinned) with a highlight group
+  per flag.
+- Edges rendered with `│ ╲ ╱ ─` composed into a grid; each edge inherits its
+  **child's** flag color.
 - Full navigation: up/down/left/right between nodes.
-- Hover (`CursorMoved`) → floating tooltip with commit date, message, flag.
+- Hover (`CursorMoved`) → a side panel with committer, date/time, flag(s), and
+  the commit message. A color-coded diff preview is planned (a later slice);
+  layer-wrapping and auto-open are follow-ups.
 - In union mode: CR toggles `✓`; footer shows selection count and submit hint.
 
 ### 6.3 Default selection logic

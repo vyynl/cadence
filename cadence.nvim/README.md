@@ -31,9 +31,21 @@ The socket path is resolved as: `setup({socket_path})` → `$CAD_STATE_DIR/daemo
 
 | Command          | Behavior                                                        |
 |------------------|-----------------------------------------------------------------|
-| `:CadOpen`       | List the current project's nodes in a floating window.          |
+| `:CadOpen`       | Open the DAG picker for the current project.                    |
+| `:CadSwitch`     | Same picker (Enter moves the session pointer to the node).      |
+| `:CadUnion`      | Open the picker in union mode (`CR` toggles `✓`; submission needs the server). |
 | `:CadSpawn [name]` | Spawn a `sandbox` child from the current node (prompts if no name). |
-| `:CadSwitch`     | Pick a node and move the session pointer to it.                 |
+
+## Picker
+
+The DAG renders as a left-aligned rail (`clamp(20% of width, 20, 60)` columns,
+configurable via `require("cadence").setup({ graph = { ... } })`).
+
+- `h`/`j`/`k`/`l` (and arrows) move between nodes.
+- `<CR>` switches the session pointer to the highlighted node.
+- Hovering a node opens a panel with committer, date/time, flags, and message.
+- `<Tab>` enters/leaves the hover panel (e.g. to scroll a long message).
+- `q`/`<Esc>` close.
 
 The "current project" is determined by matching `vim.fn.getcwd()` against the
 `work_dir` of registered projects (`GET /projects`). Open Neovim from inside the
@@ -50,9 +62,16 @@ mix cad.register MyProject my-project ~/code/my-project
 
 # terminal C — in ~/code/my-project
 nvim
-#   :CadOpen       -> lists nodes
-#   :CadSpawn      -> spawns a sandbox child, then :CadOpen shows it
-#   :CadSwitch     -> pick a node to move the session pointer
+#   :CadOpen       -> DAG rail; hover shows metadata/message; <CR> switches
+#   :CadSpawn      -> spawns a sandbox child, then :CadOpen shows it branched
+#   :CadSwitch     -> same picker, titled "switch"
+#   :CadUnion      -> picker in union mode (CR toggles ✓)
+```
+
+Run the layout unit tests (pure Lua, no daemon needed):
+
+```bash
+nvim --headless -l cadence.nvim/spec/graph_spec.lua
 ```
 
 Note: a normal commit advances the session pointer automatically (spec §5.3), so

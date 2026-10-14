@@ -1,5 +1,6 @@
 local cadence = require("cadence")
 local client = require("cadence.client")
+local graph = require("cadence.graph")
 local ui = require("cadence.ui")
 
 local function socket()
@@ -35,41 +36,57 @@ local function with_project(fn)
   fn(project)
 end
 
---- Fetch the nodes for `project`, or nil on failure.
-local function fetch_nodes(project)
-  local res = client.get("/nodes?project_id=" .. project.id, socket())
-  if not res or res.status ~= 200 then
-    return nil
+--- Open the DAG picker for `project`. `opts.union` enables union mode.
+local function open_picker(project, opts)
+  opts = opts or {}
+
+  local res = client.get("/graph?project_id=" .. project.id, socket())
+  if not res or res.status == 0 then
+    vim.notify("cadence daemon unreachable", vim.log.levels.ERROR)
+    return
   end
-  return res.body.nodes or {}
-end
-
-local function node_line(node)
-  local flags = table.concat(node.flags or {}, ",")
-  return string.format("%-8s  %-14s  %s", node.id:sub(1, 8), flags, node.message or "")
-end
-
---- Open the node picker for `project`. `on_select` receives the chosen node.
-local function open_nodes(title, project, on_select)
-  local nodes = fetch_nodes(project)
-  if not nodes then
-    vim.notify("failed to list nodes", vim.log.levels.ERROR)
+  if res.status == 404 then
+    vim.notify("project not found", vim.log.levels.ERROR)
+    return
+  end
+  if res.status ~= 200 or not res.body then
+    vim.notify("failed to load graph", vim.log.levels.ERROR)
     return
   end
 
-  local callback = nil
-  if on_select then
-    callback = function(row)
-      on_select(nodes[row])
-    end
-  end
+  local payload = res.body
+  local layout = graph.layout(payload.nodes or {}, payload.edges or {}, {})
 
-  ui.open(title .. " — " .. project.slug, vim.tbl_map(node_line, nodes), callback)
+  ui.open_graph(layout, {
+    title = opts.title or project.slug,
+    default_node_id = payload.default_node_id,
+    union = opts.union,
+    on_switch = function(node_id)
+      local switch = client.post("/switch", { project_id = project.id, node_id = node_id }, socket())
+      if switch and switch.status == 200 then
+        vim.notify("switched to " .. node_id:sub(1, 8), vim.log.levels.INFO)
+      else
+        vim.notify("switch failed", vim.log.levels.ERROR)
+      end
+    end,
+  })
 end
 
 vim.api.nvim_create_user_command("CadOpen", function()
   with_project(function(project)
-    open_nodes("cadence", project, nil)
+    open_picker(project, { title = project.slug })
+  end)
+end, {})
+
+vim.api.nvim_create_user_command("CadSwitch", function()
+  with_project(function(project)
+    open_picker(project, { title = "switch — " .. project.slug })
+  end)
+end, {})
+
+vim.api.nvim_create_user_command("CadUnion", function()
+  with_project(function(project)
+    open_picker(project, { title = "union — " .. project.slug, union = true })
   end)
 end, {})
 
@@ -88,19 +105,3 @@ vim.api.nvim_create_user_command("CadSpawn", function(args)
     end
   end)
 end, { nargs = "?" })
-
-vim.api.nvim_create_user_command("CadSwitch", function()
-  with_project(function(project)
-    open_nodes("switch", project, function(node)
-      if node then
-        local res =
-          client.post("/switch", { project_id = project.id, node_id = node.id }, socket())
-        if res and res.status == 200 then
-          vim.notify("switched to " .. node.id:sub(1, 8), vim.log.levels.INFO)
-        else
-          vim.notify("switch failed", vim.log.levels.ERROR)
-        end
-      end
-    end)
-  end)
-end, {})

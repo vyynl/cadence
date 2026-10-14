@@ -2,12 +2,19 @@ local M = {}
 
 M.config = {
   socket_path = nil,
+  graph = {
+    -- Rail width = clamp(floor(columns * width_ratio), min_width, max_width).
+    width_ratio = 0.2,
+    min_width = 20,
+    max_width = 60,
+  },
 }
 
 --- Configure the plugin. Call from your Neovim config:
 ---   require("cadence").setup({ socket_path = "/tmp/cadence.sock" })
 M.setup = function(opts)
   M.config = vim.tbl_deep_extend("force", M.config, opts or {})
+  require("cadence.ui").setup_highlights()
 end
 
 --- Resolve the daemon Unix socket path.

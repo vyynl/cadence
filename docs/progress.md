@@ -209,15 +209,27 @@ Phase 1f complete → moving into Phase 2a (DAG picker)
 - [x] 25 more tests (15 DAG; 6 `Session`; 4 router `/graph`+`/nodes`).
   124 tests total (83 shared + 41 daemon), green; format/`--warnings-as-errors`
   clean. No migration, no config change.
+- [x] Phase 2a Slice B — Neovim DAG picker (UI; no daemon change):
+  `cadence.nvim/lua/cadence/graph.lua` (pure layout: 2-rows-per-layer, root order
+  by recency, layer order by parent barycenter, edge rasterization tagged with
+  the child's flag, plus `nearest/3`, `node_at/3`, `default_id/2`);
+  `ui.lua` `open_graph/2` renders the left-aligned rail (`clamp(20%, 20, 60)`,
+  configurable), per-flag node + edge highlights, `h/j/k/l`+arrow navigation,
+  a hover panel (committer/date/flags/message) focusable with `<Tab>`, and a
+  union footer. `:CadOpen`/`:CadSwitch` both open the picker (Enter →
+  `POST /switch`); new `:CadUnion` (`CR` toggles `✓`, `<C-s>` stubbed). README +
+  spec §6.2 updated.
+- [x] `cadence.nvim/spec/graph_spec.lua` (pure, runs via
+  `nvim --headless -l`) covers linear/branch/meld layout, edge flag-tagging,
+  `nearest/3`, `node_at`, `default_id`, pinned glyph, empty project. A headless
+  UI smoke (rail + default cursor + hover panel + union toggle) also passes.
 
 ## Next
-- Phase 2a Slice B (Neovim): `cadence.nvim` renders the `/graph` payload in the
-  floating window — layer→row, barycenter column ordering, `min(cols, 80)` wrap
-  with a break marker, elbow glyphs; per-flag highlight groups; nearest-node
-  navigation; `CursorMoved` tooltip; `:CadOpen` default-selects
-  `default_node_id` and Enter → `POST /switch`; `:CadUnion` (UI only, `<C-s>`
-  stubbed); README + headless smoke test. Deferred: cloud-sync default (§6.3
-  step 1, Phase 2b) and the Telescope project picker (would add a dep to §11).
+- Phase 2a Slice B2 — diff preview: `Cadence.Shared.Diff` (pure line-diff, no new
+  dep), `GET /diff?project_id=&node_id=`, and the GitHub-style color-coded hover
+  panel (plus the git author). Then the deferred picker items: layer wrap +
+  break marker, §6.3 auto-open on VimEnter, Telescope project picker, and the
+  cloud-sync default selection (Phase 2b).
 - Remaining audit items (lower priority): derive service timeouts from config
   rather than literals; consider `.gitignore`-style patterns beyond `CAD_IGNORE`;
   `Membership.last_seen_at` is defined but unused; `CommitQueue` still inlines
@@ -249,8 +261,12 @@ Phase 1f complete → moving into Phase 2a (DAG picker)
   explicit pointer, a commit parents from the *local user's* most-recent node
   (then the preview node), never the project-wide tip. This is what makes a
   synced-but-not-yet-touched machine resume cleanly (Phase 2b).
+- Picker rail width deviates from the original §6.2 bound (`min(cols, 80)`): it
+  is now `clamp(floor(cols*0.2), 20, 60)`. §6.2 was updated to match.
+- Hover is richer than §6.2's "date, message, flag": it now shows committer +
+  date/time + flag(s) + message, with a color-coded diff preview planned (B2).
 
 ## Last Updated
-2026-10-14 — Phase 2a Slice A: `Cadence.Shared.DAG` + user-scoped session
-anchor + `GET /graph`; 124 tests green. Next: Phase 2a Slice B (Neovim grid
-renderer + navigation + union UI).
+2026-10-14 — Phase 2a Slice B (Neovim DAG picker: graph.lua + ui.lua +
+`:CadUnion`; pure layout spec + headless UI smoke green). Next: Slice B2 (diff
+preview) then the deferred picker items.
