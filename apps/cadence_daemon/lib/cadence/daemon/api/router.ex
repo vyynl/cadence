@@ -7,7 +7,7 @@ defmodule Cadence.Daemon.API.Router do
 
   import Ecto.Query
 
-  alias Cadence.Daemon.{CommitQueue, ProjectRegistry, Projects, Repo, Session}
+  alias Cadence.Daemon.{CommitQueue, NodeDiff, ProjectRegistry, Projects, Repo, Session}
   alias Cadence.Shared.{DAG, Node}
 
   plug(Plug.Parsers, parsers: [:json], json_decoder: Jason)
@@ -58,6 +58,35 @@ defmodule Cadence.Daemon.API.Router do
 
       {:ok, project_id} ->
         send_json(conn, 200, graph_json(project_id))
+    end
+  end
+
+  get "/diff" do
+    project_param = conn.query_params["project_id"]
+    node_id = conn.query_params["node_id"]
+
+    if is_nil(project_param) or is_nil(node_id) do
+      send_json(conn, 400, %{error: "project_id and node_id are required"})
+    else
+      case fetch_project(project_param) do
+        {:error, :not_found} ->
+          send_json(conn, 404, %{error: "project not found"})
+
+        {:ok, project_id} ->
+          case NodeDiff.build(project_id, node_id) do
+            {:ok, payload} ->
+              send_json(conn, 200, payload)
+
+            {:error, :not_found} ->
+              send_json(conn, 404, %{error: "node not found in project"})
+
+            {:error, :no_location} ->
+              send_json(conn, 404, %{error: "project location not found"})
+
+            {:error, :no_commit} ->
+              send_json(conn, 404, %{error: "commit not found"})
+          end
+      end
     end
   end
 

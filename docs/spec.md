@@ -1006,6 +1006,8 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_SYNC_TIMEOUT_MS` | no | `500` | Picker sync attempt |
 | `CAD_IGNORE` | no | `_build,deps,node_modules,.venv,venv,__pycache__,.elixir_ls,target` | Comma-separated entry names skipped when snapshotting the working tree (`.git` is always skipped) |
 | `CAD_LLM_RETRY_INITIAL_MS` | no | `0` | Delay before the first background commit-message attempt |
+| `CAD_DIFF_MAX_FILES` | no | `20` | Max files in a node diff (hover preview) |
+| `CAD_DIFF_MAX_LINES_PER_FILE` | no | `400` | Max diff lines per file |
 
 ### 12.7 First-boot sequence (server)
 
@@ -1087,6 +1089,8 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - Daemon serves the structural graph via `GET /graph`: per-node topological
   depth, parent→child edges, session state, and the resolved default/preview
   node (§6.2, §6.3). Coordinate/glyph layout stays in the client.
+- Daemon serves a per-node line diff via `GET /diff?project_id=&node_id=` for
+  the hover preview (node vs. first parent).
 - Render nodes + edges in the floating window with the elbow layout.
 - Navigation, hover tooltips, default selection logic.
 - `:CadUnion` picker mode (UI only, no server yet).

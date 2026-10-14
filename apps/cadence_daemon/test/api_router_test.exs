@@ -148,6 +148,38 @@ defmodule Cadence.Daemon.API.RouterTest do
     assert body["preview_node_id"] == child_id
   end
 
+  test "GET /diff requires project_id and node_id" do
+    conn = Plug.Test.conn(:get, "/diff?project_id=#{Ecto.UUID.generate()}") |> call()
+    assert conn.status == 400
+
+    conn = Plug.Test.conn(:get, "/diff") |> call()
+    assert conn.status == 400
+  end
+
+  test "GET /diff returns 404 for an unknown project" do
+    conn =
+      Plug.Test.conn(
+        :get,
+        "/diff?project_id=#{Ecto.UUID.generate()}&node_id=#{Ecto.UUID.generate()}"
+      )
+      |> call()
+
+    assert conn.status == 404
+  end
+
+  test "GET /diff returns 404 for a node not in the project" do
+    project = insert_project(Ecto.UUID.generate())
+
+    conn =
+      Plug.Test.conn(
+        :get,
+        "/diff?project_id=#{project.id}&node_id=#{Ecto.UUID.generate()}"
+      )
+      |> call()
+
+    assert conn.status == 404
+  end
+
   defp insert_project(owner_id) do
     %{name: "g", slug: "g-#{System.unique_integer([:positive])}", owner_id: owner_id}
     |> Project.changeset()

@@ -31,6 +31,11 @@ if config_env() != :test do
     llm_retry_attempts: String.to_integer(System.get_env("CAD_LLM_RETRY_ATTEMPTS", "3")),
     llm_retry_initial_ms: String.to_integer(System.get_env("CAD_LLM_RETRY_INITIAL_MS", "0")),
     llm_retry_backoff_ms: String.to_integer(System.get_env("CAD_LLM_RETRY_BACKOFF_MS", "5000"))
+
+  config :cadence_daemon,
+    diff_max_files: String.to_integer(System.get_env("CAD_DIFF_MAX_FILES", "20")),
+    diff_max_lines_per_file:
+      String.to_integer(System.get_env("CAD_DIFF_MAX_LINES_PER_FILE", "400"))
 end
 
 config :cadence_shared, Cadence.Shared.LLM,

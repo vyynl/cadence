@@ -14,4 +14,14 @@ defmodule Cadence.Daemon.Env do
   @doc "Entry names skipped when snapshotting a working tree (`.git` is always skipped)."
   @spec ignore_names() :: [String.t()]
   def ignore_names, do: Application.get_env(:cadence_daemon, :ignore, [])
+
+  @doc "Maximum number of files returned by a node diff."
+  @spec diff_max_files() :: non_neg_integer()
+  def diff_max_files, do: Application.get_env(:cadence_daemon, :diff_max_files, 20)
+
+  @doc "Maximum number of diff lines returned per file."
+  @spec diff_max_lines_per_file() :: non_neg_integer()
+  def diff_max_lines_per_file do
+    Application.get_env(:cadence_daemon, :diff_max_lines_per_file, 400)
+  end
 end
