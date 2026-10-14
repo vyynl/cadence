@@ -12,6 +12,8 @@ defmodule Cadence.Shared.Membership do
 
   import Ecto.Changeset
 
+  alias Cadence.Shared.Changeset, as: SharedChangeset
+
   @primary_key false
 
   @roles [:owner, :trusted, :viewer]
@@ -49,18 +51,6 @@ defmodule Cadence.Shared.Membership do
     ])
     |> validate_required([:user_id, :project_id, :role])
     |> validate_inclusion(:role, @roles)
-    |> validate_uuid_fields([:user_id, :project_id, :supervisor, :session_pointer])
-  end
-
-  defp validate_uuid_fields(changeset, fields) do
-    Enum.reduce(fields, changeset, fn field, acc ->
-      validate_change(acc, field, fn ^field, value ->
-        if is_nil(value) or (is_binary(value) and match?({:ok, _}, Ecto.UUID.cast(value))) do
-          []
-        else
-          [{field, "is not a valid UUID"}]
-        end
-      end)
-    end)
+    |> SharedChangeset.validate_uuid([:user_id, :project_id, :supervisor, :session_pointer])
   end
 end

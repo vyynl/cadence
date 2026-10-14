@@ -11,6 +11,8 @@ defmodule Cadence.Shared.Node do
 
   import Ecto.Changeset
 
+  alias Cadence.Shared.Changeset, as: SharedChangeset
+
   @primary_key {:id, Ecto.UUID, autogenerate: true}
 
   @flags [:functioning, :"in-progress", :broken, :sandbox]
@@ -25,7 +27,7 @@ defmodule Cadence.Shared.Node do
     field(:message, :string)
     field(:session_metadata, :map, default: %{})
     field(:created_by, Ecto.UUID)
-    field(:created_at, :utc_datetime)
+    field(:created_at, :utc_datetime_usec)
     field(:docs_state, Ecto.Enum, values: @docs_states)
   end
 
@@ -51,21 +53,9 @@ defmodule Cadence.Shared.Node do
       :docs_state
     ])
     |> validate_required([:project_id, :git_commit_sha, :created_by, :docs_state])
-    |> validate_uuid_fields([:project_id, :created_by])
+    |> SharedChangeset.validate_uuid([:project_id, :created_by])
     |> validate_subset(:flags, @flags)
     |> validate_inclusion(:docs_state, @docs_states)
     |> validate_format(:git_commit_sha, ~r/^[0-9a-f]{40}$/)
-  end
-
-  defp validate_uuid_fields(changeset, fields) do
-    Enum.reduce(fields, changeset, fn field, acc ->
-      validate_change(acc, field, fn ^field, value ->
-        if is_binary(value) && match?({:ok, _}, Ecto.UUID.cast(value)) do
-          []
-        else
-          [{field, "is not a valid UUID"}]
-        end
-      end)
-    end)
   end
 end

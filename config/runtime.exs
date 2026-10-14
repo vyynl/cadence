@@ -7,6 +7,14 @@ if config_env() != :test do
   config :cadence_daemon, Cadence.Daemon.Repo, database: Path.join(state_dir, "cadence.db")
 
   config :cadence_daemon,
+    ignore:
+      System.get_env(
+        "CAD_IGNORE",
+        "_build,deps,node_modules,.venv,venv,__pycache__,.elixir_ls,target"
+      )
+      |> String.split(",", trim: true)
+
+  config :cadence_daemon,
     watch_debounce_ms: String.to_integer(System.get_env("CAD_WATCH_DEBOUNCE_MS", "2000")),
     watch_backend:
       (case System.get_env("CAD_WATCH_BACKEND", "fs_inotify") do
@@ -21,6 +29,7 @@ if config_env() != :test do
     llm_rate_scale: String.to_integer(System.get_env("CAD_LLM_RATE_SCALE", "60000")),
     llm_diff_max_bytes: String.to_integer(System.get_env("CAD_LLM_DIFF_MAX_BYTES", "32768")),
     llm_retry_attempts: String.to_integer(System.get_env("CAD_LLM_RETRY_ATTEMPTS", "3")),
+    llm_retry_initial_ms: String.to_integer(System.get_env("CAD_LLM_RETRY_INITIAL_MS", "0")),
     llm_retry_backoff_ms: String.to_integer(System.get_env("CAD_LLM_RETRY_BACKOFF_MS", "5000"))
 end
 

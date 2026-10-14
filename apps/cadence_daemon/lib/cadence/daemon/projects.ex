@@ -10,7 +10,7 @@ defmodule Cadence.Daemon.Projects do
 
   import Ecto.Query
 
-  alias Cadence.Daemon.{Dirs, ProjectLocation, ProjectRegistry, Repo, Session}
+  alias Cadence.Daemon.{Dirs, Env, ProjectLocation, ProjectRegistry, Repo, Session}
   alias Cadence.Shared.Project
 
   @doc """
@@ -67,7 +67,7 @@ defmodule Cadence.Daemon.Projects do
     project_attrs = %{
       name: attrs["name"],
       slug: attrs["slug"],
-      owner_id: attrs["owner_id"] || local_user_id()
+      owner_id: attrs["owner_id"] || Env.local_user_id()
     }
 
     case %Project{} |> Project.changeset(project_attrs) |> Repo.insert() do
@@ -107,9 +107,5 @@ defmodule Cadence.Daemon.Projects do
       work_dir: location && location.work_dir,
       git_dir: location && location.git_dir
     }
-  end
-
-  defp local_user_id do
-    Application.get_env(:cadence_daemon, :local_user_id)
   end
 end

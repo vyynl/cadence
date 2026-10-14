@@ -2,6 +2,8 @@ defmodule Cadence.Daemon.API.RouterTest do
   use ExUnit.Case, async: false
 
   alias Cadence.Daemon.API.Router
+  alias Cadence.Daemon.Repo
+  alias Cadence.Shared.{Node, Project}
 
   defp call(conn), do: Router.call(conn, [])
 
@@ -46,6 +48,38 @@ defmodule Cadence.Daemon.API.RouterTest do
   test "GET /nodes requires project_id" do
     conn = Plug.Test.conn(:get, "/nodes") |> call()
     assert conn.status == 400
+  end
+
+  test "GET /nodes orders deterministically when timestamps tie" do
+    owner_id = Ecto.UUID.generate()
+
+    {:ok, project} =
+      %{name: "n", slug: "nodes-#{System.unique_integer([:positive])}", owner_id: owner_id}
+      |> Project.changeset()
+      |> Repo.insert()
+
+    created_at = ~U[2026-10-14 12:00:00.000000Z]
+    [high_id, low_id] = Enum.sort([Ecto.UUID.generate(), Ecto.UUID.generate()], :desc)
+
+    Enum.each([low_id, high_id], fn id ->
+      %{
+        id: id,
+        project_id: project.id,
+        git_commit_sha: String.duplicate("c", 40),
+        flags: [:"in-progress"],
+        message: "m",
+        created_by: owner_id,
+        created_at: created_at,
+        docs_state: :pending
+      }
+      |> Node.changeset()
+      |> Repo.insert!()
+    end)
+
+    conn = Plug.Test.conn(:get, "/nodes?project_id=#{project.id}") |> call()
+    assert conn.status == 200
+
+    assert Enum.map(Jason.decode!(conn.resp_body)["nodes"], & &1["id"]) == [high_id, low_id]
   end
 
   test "POST /spawn for an unknown project returns 404" do

@@ -55,7 +55,7 @@ defmodule Cadence.Daemon.MessageQueue do
       {:noreply, state}
     else
       entry = %{project_id: project_id, attempts: 0}
-      schedule_retry(node_id, 1)
+      schedule_retry(node_id, 0)
       {:noreply, %{state | entries: Map.put(state.entries, node_id, entry)}}
     end
   end
@@ -72,7 +72,7 @@ defmodule Cadence.Daemon.MessageQueue do
             {:noreply, %{state | entries: Map.delete(state.entries, node_id)}}
 
           {:retry, entry} ->
-            schedule_retry(node_id, entry.attempts + 1)
+            schedule_retry(node_id, entry.attempts)
             {:noreply, %{state | entries: Map.put(state.entries, node_id, entry)}}
 
           :drop ->
@@ -112,6 +112,10 @@ defmodule Cadence.Daemon.MessageQueue do
     Process.send_after(self(), {:retry, node_id}, backoff_ms(attempt))
   end
 
+  # The first attempt (attempt 0, on enqueue) fires immediately; later attempts
+  # back off linearly.
+  defp backoff_ms(0), do: Application.get_env(:cadence_daemon, :llm_retry_initial_ms, 0)
+
   defp backoff_ms(attempt) do
     base = Application.get_env(:cadence_daemon, :llm_retry_backoff_ms, 5_000)
     base * attempt
@@ -125,7 +129,7 @@ defmodule Cadence.Daemon.MessageQueue do
   end
 
   defp build_diff_text(node, location) do
-    git = GitStore.init(location.git_dir, bare: true)
+    git = GitStore.open(location.git_dir, bare: true)
 
     case GitStore.read_commit(git, node.git_commit_sha) do
       nil ->

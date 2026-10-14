@@ -23,6 +23,23 @@ defmodule Cadence.Daemon.Client do
   end
 
   @doc """
+  Sends a request and returns the decoded body, raising on any non-2xx response
+  (using the server's `error` message when present).
+  """
+  def expect!(method, path, body \\ nil, socket_path \\ Cadence.Daemon.API.socket_path()) do
+    case request(method, path, body, socket_path) do
+      %{status: status, body: body} when status in 200..299 ->
+        body
+
+      %{body: %{"error" => error}} ->
+        raise error
+
+      %{status: status} ->
+        raise "cadence daemon request failed with status #{status}"
+    end
+  end
+
+  @doc """
   Resolves a project slug (or passes through an id) to a project id by asking
   `GET /projects`.
   """

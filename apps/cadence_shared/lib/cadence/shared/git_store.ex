@@ -30,6 +30,10 @@ defmodule Cadence.Shared.GitStore do
   @dir_mode "40000"
   @file_mode "100644"
 
+  # Never snapshotted: Cadence's own store lives outside the work tree, but a
+  # work tree may contain nested repositories whose `.git` must not be captured.
+  @always_ignored [".git"]
+
   defstruct home_dir: nil
 
   @doc """
@@ -41,12 +45,25 @@ defmodule Cadence.Shared.GitStore do
   """
   @spec init(Path.t(), keyword()) :: t()
   def init(path, opts \\ []) do
+    repo = open(path, opts)
+
+    File.mkdir_p!(Path.join([repo.home_dir, "objects", "info"]))
+    File.mkdir_p!(Path.join([repo.home_dir, "objects", "pack"]))
+
+    repo
+  end
+
+  @doc """
+  Return a handle to an existing store without creating anything.
+
+  Use this for read-only access (e.g. reconstructing a diff); unlike `init/2`
+  it never touches the filesystem, so callers cannot accidentally recreate
+  directories they are only reading.
+  """
+  @spec open(Path.t(), keyword()) :: t()
+  def open(path, opts \\ []) do
     bare = Keyword.get(opts, :bare, false)
     home_dir = if bare, do: Path.expand(path), else: Path.expand(Path.join(path, ".git"))
-
-    File.mkdir_p!(Path.join([home_dir, "objects", "info"]))
-    File.mkdir_p!(Path.join([home_dir, "objects", "pack"]))
-
     %__MODULE__{home_dir: home_dir}
   end
 
@@ -77,9 +94,15 @@ defmodule Cadence.Shared.GitStore do
 
   Regular files become blobs, subdirectories become trees. Other entry types
   (symlinks, sockets, ...) are skipped.
+
+  `.git` directories are always skipped so nested repositories are never
+  snapshotted. Additional entry names can be skipped with `ignore: [names]`;
+  names match the basename at any depth (e.g. `_build`, `node_modules`).
   """
-  @spec build_tree(t(), Path.t()) :: sha()
-  def build_tree(repo, dir) do
+  @spec build_tree(t(), Path.t(), keyword()) :: sha()
+  def build_tree(repo, dir, opts \\ []) do
+    ignore = Keyword.get(opts, :ignore, [])
+
     entries =
       dir
       |> File.ls!()
@@ -87,27 +110,33 @@ defmodule Cadence.Shared.GitStore do
       |> Enum.flat_map(fn name ->
         path = Path.join(dir, name)
 
-        case File.lstat!(path).type do
-          :directory ->
-            [%{name: name, mode: @dir_mode, type: :tree, ref: build_tree(repo, path)}]
+        if ignored?(name, ignore) do
+          []
+        else
+          case File.lstat!(path).type do
+            :directory ->
+              [%{name: name, mode: @dir_mode, type: :tree, ref: build_tree(repo, path, opts)}]
 
-          :regular ->
-            [
-              %{
-                name: name,
-                mode: @file_mode,
-                type: :blob,
-                ref: write_blob(repo, File.read!(path))
-              }
-            ]
+            :regular ->
+              [
+                %{
+                  name: name,
+                  mode: @file_mode,
+                  type: :blob,
+                  ref: write_blob(repo, File.read!(path))
+                }
+              ]
 
-          _ ->
-            []
+            _ ->
+              []
+          end
         end
       end)
 
     write_tree(repo, entries)
   end
+
+  defp ignored?(name, ignore), do: name in @always_ignored or name in ignore
 
   @doc "Read a tree by SHA, returning its entries, or `nil` if absent."
   @spec read_tree(t(), sha()) :: [entry()] | nil

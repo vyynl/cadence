@@ -139,11 +139,69 @@ Phase 1f complete → moving into Phase 2a (DAG picker)
   inlined (only `System.get_env`/`Application.get_env` references).
 - [x] 87 tests total (61 shared + 26 daemon), all green; `mix format
   --check-formatted` + `mix compile --warnings-as-errors` clean.
+- [x] Correctness pass A1 — normal commits now parent from the **session
+  pointer** (`Session.current_node/1`), falling back to the last committed node
+  only before a pointer exists. `CommitQueue` gained `base_node/1`, used by both
+  `do_commit/2` and `build_diff_text/2`, so `:CadSwitch` actually changes the
+  next commit's parent (was silently chaining off the project tip). Spec §3.2.
+- [x] Correctness pass A2 — `Node.created_at` is now `:utc_datetime_usec`
+  (migration `create_core_tables` updated; added composite index
+  `nodes(project_id, created_at)`), and both `latest_node/1` and `GET /nodes`
+  order by `created_at desc, id desc` for deterministic ordering when
+  timestamps tie.
+- [x] 3 new daemon tests (switch-then-commit parents from pointer; deterministic
+  latest-node lookup; deterministic `GET /nodes`). 90 tests total (61 shared +
+  29 daemon), all green; `mix format --check-formatted` +
+  `mix compile --warnings-as-errors` clean. **Breaking change:** existing
+  `~/.local/state/cadence/cadence.db` must be deleted and re-migrated (the
+  `create_core_tables` migration was edited in place — pre-release).
+- [x] Efficiency pass A3 — `GitStore.build_tree/3` now takes `ignore: [names]`
+  (basename match at any depth) and **always** skips `.git`, so nested repos and
+  build/dependency dirs are never snapshotted. Daemon passes `CAD_IGNORE`
+  (default `_build,deps,node_modules,.venv,venv,__pycache__,.elixir_ls,target`)
+  from `config/runtime.exs`. Spec §5.3, §12.6.
+- [x] Efficiency pass A4 — auto-commits are non-blocking: `:auto` writes a
+  placeholder with `message_pending` and hands the node to `MessageQueue`, which
+  now fires the first attempt immediately (new `CAD_LLM_RETRY_INITIAL_MS`) then
+  backs off. `CommitQueue` no longer calls the LLM inline (removed
+  `build_diff_text/2`/`diff_max_bytes/0` there; diff reconstruction lives only in
+  `MessageQueue`). Spec §5.3.
+- [x] Added `GitStore.open/2` (read-only handle, no filesystem side effects) and
+  switched `MessageQueue`'s diff reconstruction from `init/2` to `open/2`. `init/2`
+  was `mkdir_p`-ing on every background retry, which raced with test teardown
+  (`File.rm_rf!`). Read paths no longer mutate the store.
+- [x] 5 new tests (2 GitStore ignore/`.git`; `open/2` creates nothing; daemon
+  ignore propagation; async message fill). 94 tests total (64 shared + 30
+  daemon), all green across repeated runs; `mix format --check-formatted` +
+  `mix compile --warnings-as-errors` clean.
+- [x] A5 — added `Cadence.Daemon.ProjectSupervisor` (`:rest_for_one`) owning each
+  project's `{CommitQueue, Watcher}` pair; `ProjectRegistry` now starts one
+  supervisor per project, so the watcher failing to boot can no longer orphan a
+  running commit queue. Test asserts one supervised unit + registry lookup.
+  Spec §5.2.
+- [x] B dedup — extracted `Cadence.Shared.Changeset.validate_uuid/2` (Node,
+  Project, Membership); `Cadence.Daemon.Env.local_user_id/0` + `ignore_names/0`
+  (CommitQueue, Session, Projects); `Cadence.Daemon.Client.expect!/4` so the
+  `mix cad.*` tasks share one request/error path; and factor the Neovim plugin's
+  project-resolution + node-listing boilerplate (`with_project`, `fetch_nodes`,
+  `open_nodes`). Note: Ecto's `validate_change/3` skips `nil` (changeset.ex:2519),
+  so the helper only validates present values; required-ness stays in
+  `validate_required/2`.
+- [x] C — added `config/prod.exs` (the missing file made `MIX_ENV=prod` config
+  evaluation fail) and declared `{:hammer, "~> 7.5"}` directly in
+  `cadence_daemon/mix.exs`. `MIX_ENV=prod mix compile --warnings-as-errors` now
+  exits 0.
+- [x] 4 more tests (changeset validator ×4 incl. nil-ignored; ProjectSupervisor).
+  99 tests total (68 shared + 31 daemon), green across repeated runs.
 
 ## Next
 - Phase 2a — DAG picker: render nodes + edges in the Neovim floating window
   with the elbow layout (§7.3), navigation/hover tooltips, default-selection
   logic (§6.3), and `:CadUnion` picker mode (UI only). See spec §13 Phase 2a.
+- Remaining audit items (lower priority): derive service timeouts from config
+  rather than literals; consider `.gitignore`-style patterns beyond `CAD_IGNORE`;
+  `Membership.last_seen_at` is defined but unused; `CommitQueue` still inlines
+  `@default_author`; `cadence_server` is still an empty scaffold (Phase 2b).
 
 ## Blocked
 - (none)
@@ -164,4 +222,6 @@ Phase 1f complete → moving into Phase 2a (DAG picker)
   Consider softening §12.6 for the daemon.
 
 ## Last Updated
-2026-10-14 — session wrapped: Phase 1f complete (AI commit messages + runtime config)
+2026-10-14 — session: full audit follow-through — correctness A1/A2, efficiency
+A3/A4, A5 per-project supervisor, B dedup, C prod config + hammer dep. 99 tests
+green; `MIX_ENV=prod` build green. Next up: Phase 2a DAG picker.

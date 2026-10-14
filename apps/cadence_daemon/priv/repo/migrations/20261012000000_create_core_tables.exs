@@ -25,11 +25,12 @@ defmodule Cadence.Daemon.Repo.Migrations.CreateCoreTables do
       add :message, :string
       add :session_metadata, :map, null: false
       add :created_by, :binary_id, null: false
-      add :created_at, :utc_datetime
+      add :created_at, :utc_datetime_usec
       add :docs_state, :string, null: false
     end
 
     create index(:nodes, [:project_id])
+    create index(:nodes, [:project_id, :created_at])
 
     create table(:memberships, primary_key: false) do
       add :user_id, :binary_id, primary_key: true, null: false

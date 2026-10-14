@@ -1,8 +1,8 @@
 defmodule Cadence.Daemon.CommitQueueTest do
   use ExUnit.Case, async: false
 
-  alias Cadence.Daemon.{CommitQueue, Repo, Session}
-  alias Cadence.Shared.{GitStore, Project}
+  alias Cadence.Daemon.{CommitQueue, ProjectLocation, Repo, Session}
+  alias Cadence.Shared.{GitStore, Node, Project}
 
   setup do
     root = Path.join(System.tmp_dir!(), "cadence_queue_#{System.unique_integer([:positive])}")
@@ -16,6 +16,17 @@ defmodule Cadence.Daemon.CommitQueueTest do
       %{name: "p", slug: "p-#{System.unique_integer([:positive])}", owner_id: owner_id}
       |> Project.changeset()
       |> Repo.insert()
+
+    # MessageQueue reconstructs the diff from the project location, so register
+    # one here (production does this in `Projects.register_project/1`).
+    %ProjectLocation{}
+    |> ProjectLocation.changeset(%{
+      project_id: project.id,
+      work_dir: work_dir,
+      git_dir: git_dir,
+      created_at: DateTime.utc_now()
+    })
+    |> Repo.insert!()
 
     on_exit(fn -> File.rm_rf!(root) end)
 
@@ -60,6 +71,69 @@ defmodule Cadence.Daemon.CommitQueueTest do
     assert Session.current_node(project.id).id == second.id
   end
 
+  test "a commit parents from the session pointer after a switch",
+       %{work_dir: work_dir, git_dir: git_dir, project: project} do
+    queue =
+      start_supervised!(
+        {CommitQueue, [project_id: project.id, work_dir: work_dir, git_dir: git_dir]}
+      )
+
+    {:ok, first} = CommitQueue.commit(queue, "first")
+    {:ok, second} = CommitQueue.commit(queue, "second")
+    assert second.parents == [first.id]
+
+    {:ok, _} = Session.switch(project.id, first.id)
+
+    File.write!(Path.join(work_dir, "c.txt"), "branch\n")
+    {:ok, third} = CommitQueue.commit(queue, "third")
+
+    assert third.parents == [first.id]
+
+    git = GitStore.init(git_dir, bare: true)
+    assert GitStore.read_commit(git, third.git_commit_sha).parent == [first.git_commit_sha]
+  end
+
+  test "node lookup is deterministic when timestamps tie",
+       %{work_dir: work_dir, git_dir: git_dir, project: project} do
+    created_at = ~U[2026-10-14 12:00:00.000000Z]
+    [high_id, low_id] = Enum.sort([Ecto.UUID.generate(), Ecto.UUID.generate()], :desc)
+    low = insert_node(project, low_id, created_at)
+    high = insert_node(project, high_id, created_at)
+
+    queue =
+      start_supervised!(
+        {CommitQueue, [project_id: project.id, work_dir: work_dir, git_dir: git_dir]}
+      )
+
+    # No session pointer yet, so the first commit falls back to the latest node,
+    # which must be the higher-id node when created_at ties (deterministic).
+    {:ok, child} = CommitQueue.commit(queue, "child")
+
+    assert child.parents == [high.id]
+    refute child.parents == [low.id]
+  end
+
+  test "commit skips configured ignore directories",
+       %{work_dir: work_dir, git_dir: git_dir, project: project} do
+    Application.put_env(:cadence_daemon, :ignore, ["_build"])
+    on_exit(fn -> Application.delete_env(:cadence_daemon, :ignore) end)
+
+    File.mkdir_p!(Path.join(work_dir, "_build"))
+    File.write!(Path.join(work_dir, "_build/junk.beam"), "x")
+    File.write!(Path.join(work_dir, "src.txt"), "ok\n")
+
+    queue =
+      start_supervised!(
+        {CommitQueue, [project_id: project.id, work_dir: work_dir, git_dir: git_dir]}
+      )
+
+    {:ok, node} = CommitQueue.commit(queue, "first")
+
+    git = GitStore.init(git_dir, bare: true)
+    tree = GitStore.read_commit(git, node.git_commit_sha).tree
+    assert git |> GitStore.read_tree(tree) |> Enum.map(& &1.name) == ["src.txt"]
+  end
+
   test "auto-generates a message via the LLM",
        %{work_dir: work_dir, git_dir: git_dir, project: project} do
     Application.put_env(:cadence_daemon, :llm, Cadence.Daemon.TestLLM)
@@ -84,9 +158,18 @@ defmodule Cadence.Daemon.CommitQueueTest do
 
     {:ok, node} = CommitQueue.commit(queue)
 
-    assert node.message == "Generated\n\n- x"
-    assert node.flags == [:"in-progress"]
-    assert node.session_metadata == %{"model" => "test-model"}
+    # The commit returns immediately with a placeholder; MessageQueue fills the
+    # real message in the background (spec §5.3, §5.5).
+    assert node.message == "session commit"
+    assert node.session_metadata["message_pending"] == true
+
+    assert eventually(fn ->
+             loaded = Repo.get!(Node, node.id)
+
+             loaded.message == "Generated\n\n- x" and
+               loaded.flags == [:"in-progress"] and
+               loaded.session_metadata == %{"model" => "test-model"}
+           end)
   end
 
   test "falls back to a placeholder and marks pending when the LLM fails",
@@ -111,5 +194,39 @@ defmodule Cadence.Daemon.CommitQueueTest do
     assert node.message == "session commit"
     assert node.flags == [:"in-progress"]
     assert node.session_metadata["message_pending"] == true
+  end
+
+  defp insert_node(project, id, created_at) do
+    %{
+      id: id,
+      project_id: project.id,
+      git_commit_sha: String.duplicate("b", 40),
+      parents: [],
+      flags: [:"in-progress"],
+      message: "m",
+      created_by: project.owner_id,
+      created_at: created_at,
+      docs_state: :pending
+    }
+    |> Node.changeset()
+    |> Repo.insert!()
+  end
+
+  defp eventually(fun, timeout \\ 3000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    try_until(fun, deadline)
+  end
+
+  defp try_until(fun, deadline) do
+    if fun.() do
+      true
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        flunk("condition not met within timeout")
+      else
+        Process.sleep(20)
+        try_until(fun, deadline)
+      end
+    end
   end
 end

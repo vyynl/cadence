@@ -170,11 +170,14 @@ Node
   message           :string          # AI-generated, human-editable
   session_metadata  :map             # small: duration, files touched, model; no inline diffs
   created_by        :uuid
-  created_at        :utc_datetime
+  created_at        :utc_datetime_usec
   docs_state        :atom            # :current | :pending | :skipped
 ```
 
-`parents` is stored as a `uuid[]` array with a GIN index for cheap child lookup
+`created_at` is microsecond-precision so node ordering (latest-node lookup,
+picker list) reflects insertion order; ties are broken deterministically by
+`id` (order by `created_at desc, id desc`). `parents` is stored as a `uuid[]`
+array with a GIN index for cheap child lookup
 (`WHERE parents @> ARRAY[x]`). If a project grows large enough that recursive
 traversal slows, migrate to a normalized `node_edges(parent_id, child_id)`
 table — the documented migration path. `session_metadata` must stay small:
@@ -265,17 +268,23 @@ and how credit is displayed.
 
 ```
 Cadence.Daemon.Application
-├── Cadence.Daemon.SyncLedger          (GenServer, persistent state)
-├── Cadence.Shared.GitStore            (git object store; lives in cadence_shared)
+├── Cadence.Daemon.Repo                (SQLite via ecto_sqlite3)
+├── Cadence.Daemon.LLMRateLimit        (Hammer, shared ETS)
+├── Cadence.Daemon.AgentWorker         (Task.Supervisor for LLM calls)
+├── Cadence.Daemon.MessageQueue        (async commit-message retry)
 ├── Cadence.Daemon.ProjectRegistry     (DynamicSupervisor)
-│   └── Per project:
-│       ├── Cadence.Daemon.Watcher     (file_system + debounce)
+│   └── Cadence.Daemon.ProjectSupervisor  (per project, :rest_for_one)
 │       ├── Cadence.Daemon.CommitQueue (serialized commits per project)
-│       └── Cadence.Daemon.DocAgent    (Task.Supervisor child)
-├── Cadence.Daemon.SyncClient          (HTTP client to cloud, retry logic)
+│       └── Cadence.Daemon.Watcher     (file_system + debounce)
 ├── Cadence.Daemon.API                 (Bandit/Plug, Unix socket)
-└── Cadence.Daemon.AgentWorker         (Task.Supervisor for LLM calls)
+├── Cadence.Daemon.SyncLedger          (planned: GenServer, persistent state)
+└── Cadence.Daemon.SyncClient          (planned: HTTP client to cloud, retry)
 ```
+
+`Cadence.Shared.GitStore` is stateless and lives in `cadence_shared`; each
+project's `CommitQueue` holds a handle to its object store. The doc agent
+(planned) will run as a supervised `Task` so it can be cancelled if a new
+commit arrives.
 
 **Design notes:**
 
@@ -286,23 +295,32 @@ Cadence.Daemon.Application
   rapid saves don't race.
 - `AgentWorker` is a `Task.Supervisor` with a rate limiter (`Hammer`) because
   LLM calls are the most expensive resource.
-- The doc agent runs as a supervised `Task` inside `DocAgent`, not inline, so
-  it can be cancelled if a new commit arrives.
+- `ProjectSupervisor` uses `:rest_for_one`, so if the commit queue crashes the
+  watcher that feeds it restarts too; a watcher-only crash restarts just the
+  watcher.
 
 ### 5.3 Commit pipeline
 
 ```
 file event
   → debounce (2s idle)
-  → snapshot diff
+  → snapshot working tree into the Git object store
+      (build/dependency dirs and nested `.git` excluded; names via CAD_IGNORE)
   → if docs affected (per schema): run DocAgent (may defer if offline)
   → write revised docs to working tree
-  → generate commit message (LLM: code diff + doc diff)
-  → commit locally via Cadence.Shared.GitStore
+  → commit locally via Cadence.Shared.GitStore with a placeholder message
   → create Node record in local store
   → mark user's session_pointer = new node
+  → asynchronously generate the commit message (LLM: code diff + doc diff)
+      and update the node's message/flags; on failure retry with backoff while
+      the placeholder remains (MessageQueue). The commit path never blocks on
+      the LLM.
   → enqueue cloud sync
 ```
+
+The parent of a normal commit is the node the local user is currently editing
+from (their `session_pointer`), not the project's newest node — so switching to
+an older node and committing branches from there (spec §3.2).
 
 ### 5.4 Offline behavior
 
@@ -763,7 +781,7 @@ SyncMessage.Union
 | Markdown rendering | `MDEx` |
 | Auth | `AshAuthentication` + `Ash` |
 | Docker API | `ex_docker_api` |
-| Rate limiting | `Hammer` (lives in `cadence_shared`) |
+| Rate limiting | `Hammer` (declared in `cadence_shared`, used by the daemon's `LLMRateLimit`) |
 | Graph model | `libgraph` |
 | TUI (optional, daemon-side) | `ExRatatui` |
 | Neovim plugin | Lua + plenary.nvim |
@@ -980,6 +998,8 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_LLM_BASE_URL` | no | provider default | Same as server |
 | `CAD_WATCH_DEBOUNCE_MS` | no | `2000` | Idle before commit |
 | `CAD_SYNC_TIMEOUT_MS` | no | `500` | Picker sync attempt |
+| `CAD_IGNORE` | no | `_build,deps,node_modules,.venv,venv,__pycache__,.elixir_ls,target` | Comma-separated entry names skipped when snapshotting the working tree (`.git` is always skipped) |
+| `CAD_LLM_RETRY_INITIAL_MS` | no | `0` | Delay before the first background commit-message attempt |
 
 ### 12.7 First-boot sequence (server)
 

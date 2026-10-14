@@ -7,7 +7,7 @@ defmodule Cadence.Daemon.Session do
   `active_heads` are the nodes this user considers live (see spec §4.3).
   """
 
-  alias Cadence.Daemon.Repo
+  alias Cadence.Daemon.{Env, Repo}
   alias Cadence.Shared.{Membership, Node}
 
   @role :owner
@@ -18,7 +18,7 @@ defmodule Cadence.Daemon.Session do
   """
   @spec ensure_membership!(Ecto.UUID.t()) :: Membership.t()
   def ensure_membership!(project_id) do
-    user_id = local_user_id()
+    user_id = Env.local_user_id()
 
     case Repo.get_by(Membership, user_id: user_id, project_id: project_id) do
       nil ->
@@ -39,7 +39,7 @@ defmodule Cadence.Daemon.Session do
   @doc "Returns the current node (session pointer) for the local user, or `nil`."
   @spec current_node(Ecto.UUID.t()) :: Node.t() | nil
   def current_node(project_id) do
-    case Repo.get_by(Membership, user_id: local_user_id(), project_id: project_id) do
+    case Repo.get_by(Membership, user_id: Env.local_user_id(), project_id: project_id) do
       %{session_pointer: nil} -> nil
       %{session_pointer: node_id} -> Repo.get(Node, node_id)
       nil -> nil
@@ -56,7 +56,7 @@ defmodule Cadence.Daemon.Session do
           {:ok, Membership.t()} | {:error, :not_found}
   def switch(project_id, node_id) do
     with membership when not is_nil(membership) <-
-           Repo.get_by(Membership, user_id: local_user_id(), project_id: project_id),
+           Repo.get_by(Membership, user_id: Env.local_user_id(), project_id: project_id),
          node when not is_nil(node) <- Repo.get(Node, node_id),
          true <- node.project_id == project_id do
       {:ok, membership} =
@@ -105,9 +105,5 @@ defmodule Cadence.Daemon.Session do
       |> Repo.update()
 
     {:ok, membership}
-  end
-
-  defp local_user_id do
-    Application.get_env(:cadence_daemon, :local_user_id)
   end
 end

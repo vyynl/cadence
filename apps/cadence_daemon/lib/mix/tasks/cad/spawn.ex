@@ -12,13 +12,8 @@ defmodule Mix.Tasks.Cad.Spawn do
 
     body = %{"project_id" => project_id} |> maybe_put("name", name)
 
-    case Client.request("POST", "/spawn", body) do
-      %{status: status, body: %{"node" => node}} when status in 200..299 ->
-        Mix.shell().info("spawned #{String.slice(node["id"], 0, 8)}")
-
-      %{status: _, body: %{"error" => error}} ->
-        Mix.raise(error)
-    end
+    %{"node" => node} = Client.expect!("POST", "/spawn", body)
+    Mix.shell().info("spawned #{String.slice(node["id"], 0, 8)}")
   end
 
   def run(_), do: Mix.raise("usage: mix cad.spawn SLUG_OR_ID [NAME]")

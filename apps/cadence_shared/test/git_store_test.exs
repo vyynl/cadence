@@ -23,6 +23,14 @@ defmodule Cadence.Shared.GitStoreTest do
       repo = GitStore.init(dir)
       assert repo.home_dir == Path.expand(Path.join(dir, ".git"))
     end
+
+    test "open/2 resolves the same path without creating anything", %{dir: dir} do
+      missing = Path.join(dir, "absent")
+      repo = GitStore.open(missing, bare: true)
+
+      assert repo.home_dir == Path.expand(missing)
+      refute File.exists?(repo.home_dir)
+    end
   end
 
   describe "blob" do
@@ -97,6 +105,32 @@ defmodule Cadence.Shared.GitStoreTest do
       File.mkdir_p!(path)
       File.write!(Path.join(path, "a.txt"), "content")
       File.ln_s!("a.txt", Path.join(path, "link"))
+
+      sha = GitStore.build_tree(repo, path)
+      assert [%{name: "a.txt"}] = GitStore.read_tree(repo, sha)
+    end
+
+    test "skips ignored names at any depth", %{dir: dir, repo: repo} do
+      path = Path.join(dir, "src")
+      File.mkdir_p!(Path.join(path, "_build/keep_out"))
+      File.mkdir_p!(Path.join(path, "nested/_build"))
+      File.write!(Path.join(path, "a.txt"), "top\n")
+      File.write!(Path.join(path, "_build/keep_out/junk.beam"), "x")
+      File.write!(Path.join(path, "nested/_build/junk.beam"), "x")
+
+      sha = GitStore.build_tree(repo, path, ignore: ["_build"])
+      entries = GitStore.read_tree(repo, sha)
+
+      assert [%{name: "a.txt"}, %{name: "nested"}] = entries
+      nested = Enum.find(entries, &(&1.name == "nested"))
+      assert GitStore.read_tree(repo, nested.ref) == []
+    end
+
+    test "always skips .git directories", %{dir: dir, repo: repo} do
+      path = Path.join(dir, "src")
+      File.mkdir_p!(Path.join(path, ".git/objects"))
+      File.write!(Path.join(path, "a.txt"), "top\n")
+      File.write!(Path.join(path, ".git/HEAD"), "ref: refs/heads/main\n")
 
       sha = GitStore.build_tree(repo, path)
       assert [%{name: "a.txt"}] = GitStore.read_tree(repo, sha)

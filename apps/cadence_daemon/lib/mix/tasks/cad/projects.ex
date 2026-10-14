@@ -7,7 +7,7 @@ defmodule Mix.Tasks.Cad.Projects do
 
   @impl Mix.Task
   def run(_args) do
-    %{body: %{"projects" => projects}} = Client.request("GET", "/projects")
+    %{"projects" => projects} = Client.expect!("GET", "/projects")
 
     Enum.each(projects, fn p ->
       Mix.shell().info("#{p["slug"]}\t#{p["name"]}\t#{p["work_dir"]}")

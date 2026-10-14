@@ -8,7 +8,7 @@ defmodule Mix.Tasks.Cad.Nodes do
   @impl Mix.Task
   def run([slug_or_id]) do
     project_id = Client.resolve_project_id(slug_or_id)
-    %{body: %{"nodes" => nodes}} = Client.request("GET", "/nodes?project_id=#{project_id}")
+    %{"nodes" => nodes} = Client.expect!("GET", "/nodes?project_id=#{project_id}")
 
     Enum.each(nodes, fn n ->
       flags = Enum.join(n["flags"], ",")

@@ -9,6 +9,8 @@ defmodule Cadence.Shared.Project do
 
   import Ecto.Changeset
 
+  alias Cadence.Shared.Changeset, as: SharedChangeset
+
   @primary_key {:id, Ecto.UUID, autogenerate: true}
 
   schema "projects" do
@@ -41,16 +43,6 @@ defmodule Cadence.Shared.Project do
     ])
     |> validate_required([:name, :slug, :owner_id])
     |> validate_format(:slug, ~r/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
-    |> validate_uuid_field(:owner_id)
-  end
-
-  defp validate_uuid_field(changeset, field) do
-    validate_change(changeset, field, fn ^field, value ->
-      if is_binary(value) && match?({:ok, _}, Ecto.UUID.cast(value)) do
-        []
-      else
-        [{field, "is not a valid UUID"}]
-      end
-    end)
+    |> SharedChangeset.validate_uuid(:owner_id)
   end
 end

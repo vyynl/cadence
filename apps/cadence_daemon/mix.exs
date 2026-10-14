@@ -29,6 +29,7 @@ defmodule Cadence.Daemon.MixProject do
       {:req, "~> 0.7.5"},
       {:bandit, "~> 1.12"},
       {:plug, "~> 1.20"},
+      {:hammer, "~> 7.5"},
       {:jason, "~> 1.4"}
     ]
   end

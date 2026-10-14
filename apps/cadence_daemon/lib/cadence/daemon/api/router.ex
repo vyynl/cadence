@@ -97,7 +97,7 @@ defmodule Cadence.Daemon.API.Router do
   defp list_nodes(project_id) do
     Node
     |> where([n], n.project_id == ^project_id)
-    |> order_by([n], desc: n.created_at)
+    |> order_by([n], desc: n.created_at, desc: n.id)
     |> Repo.all()
     |> Enum.map(&node_json/1)
   end
