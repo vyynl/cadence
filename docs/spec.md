@@ -1193,6 +1193,14 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       (diff vs. tree vs. flags).
 - [ ] **Storage repack trigger:** when to run the Phase 7 lossless repack (size
       threshold vs. scheduled job), and the array→edges migration threshold.
+- [ ] **Daemon token issuance (Phase 2b):** how a personal access token is
+      minted — `mix` task, seeded token, or an endpoint guarded by OAuth. See
+      `docs/phase-2b-cloud-sync.md` §4/§13.
+- [ ] **Pull cursor representation (Phase 2b):** server-only `bigserial seq` vs.
+      `(inserted_at, id)` vs. a `sync_events` table. See phase-2b plan §5.
+- [ ] **Push batch semantics (Phase 2b):** fail-fast vs. per-item errors, and
+      whether parents must be pushed before children or forward references are
+      allowed. See phase-2b plan §8/§13.
 
 ---
 

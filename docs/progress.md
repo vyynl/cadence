@@ -247,13 +247,20 @@ Phase 1f complete → moving into Phase 2a (DAG picker)
   auto-open of the picker on `VimEnter` when cwd matches a registered project
   (`setup({ auto_open = false })` to disable). `graph.wrap_width` config added;
   new wrap tests + README/spec §6.2 notes.
+- [x] Phase 2b **plan** scaffolded (no code): `docs/phase-2b-cloud-sync.md` — the
+  cold-start brief for cloud sync (server scaffold, auth/tokens, object transfer,
+  endpoints, daemon ledger/client, conflict handling, env, tests, 4 milestones,
+  risks). New open decisions added to spec §16 (token issuance, cursor model,
+  push batch/parent semantics).
 
 ## Next
-- Deferred picker items: Telescope project picker (would add a dep to §11) and
-  cloud-sync default selection (Phase 2b). Optional diff-panel polish: colorscheme
-  line backgrounds and a `<C-d>/<C-u>` scroll hint.
-- Phase 2b (cloud sync) is the next phase per spec §13 — schedule its own
-  planning session: Phoenix scaffold, AshAuthentication, sync ledger, push/pull.
+- Start **Phase 2b milestone 2b-1** per `docs/phase-2b-cloud-sync.md` §12: manual
+  Phoenix scaffold for `cadence_server` (deps, `Repo`, `Endpoint`, `/health`,
+  Postgres migrations for `projects`/`nodes`/`memberships` + `users`/`tokens`),
+  the bearer `AuthPlug`, and the server test harness. Resolve the token-issuance
+  decision (§4/§13 of the plan) first.
+- Deferred picker items (can be picked up any time): Telescope project picker
+  (would add a dep to §11) and cloud-sync default selection (lands with 2b).
 - Remaining audit items (lower priority): derive service timeouts from config
   rather than literals; consider `.gitignore`-style patterns beyond `CAD_IGNORE`;
   `Membership.last_seen_at` is defined but unused; `CommitQueue` still inlines
@@ -294,7 +301,7 @@ Phase 1f complete → moving into Phase 2a (DAG picker)
   reuses the stdlib `List.myers_difference/2` rather than a new dependency.
 
 ## Last Updated
-2026-10-14 — Phase 2a complete: shipped the picker (Slices A/B/B2) plus polish
-(layer wrap + §6.3 auto-open). 137 Elixir tests green; `graph_spec` (incl. wrap),
-`diff_spec`, and the headless UI smoke all green. Next: Phase 2b (cloud sync) —
-schedule a dedicated planning session.
+2026-10-14 — Phase 2a complete and committed (picker + hover diff + wrap +
+auto-open). Phase 2b (cloud sync) planned only: `docs/phase-2b-cloud-sync.md`;
+spec §16 open decisions added. Next session starts 2b-1 (Phoenix scaffold +
+auth). 137 Elixir tests green; Lua specs + headless UI smoke green.
