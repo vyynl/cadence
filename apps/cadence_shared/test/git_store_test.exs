@@ -152,6 +152,23 @@ defmodule Cadence.Shared.GitStoreTest do
         GitStore.checkout(repo, String.duplicate("0", 40), Path.join(dir, "x"))
       end
     end
+
+    test "rejects path-traversal tree entry names", %{dir: dir, repo: repo} do
+      blob = GitStore.write_blob(repo, "evil")
+
+      tree =
+        GitStore.write_tree(repo, [
+          %{name: "../escape", mode: "100644", type: :blob, ref: blob}
+        ])
+
+      sha = GitStore.write_commit(repo, tree, [], %{name: "a", email: "a@b"}, "x")
+
+      assert_raise ArgumentError, fn ->
+        GitStore.checkout(repo, sha, Path.join(dir, "dest"))
+      end
+
+      refute File.exists?(Path.join(dir, "escape"))
+    end
   end
 
   test "full round-trip: build_tree -> commit -> checkout", %{dir: dir, repo: repo} do
@@ -167,5 +184,67 @@ defmodule Cadence.Shared.GitStoreTest do
     dest = Path.join(dir, "restored")
     :ok = GitStore.checkout(repo, commit, dest)
     assert File.read!(Path.join(dest, "README.md")) == "# Cadence\n"
+  end
+
+  describe "diff_trees/3" do
+    test "detects added, modified, deleted, and unchanged files", %{dir: dir, repo: repo} do
+      old_tree =
+        build_file_tree(repo, Path.join(dir, "old"), %{
+          "a.txt" => "one\n",
+          "b.txt" => "same\n",
+          "del.txt" => "x\n"
+        })
+
+      new_tree =
+        build_file_tree(repo, Path.join(dir, "new"), %{
+          "a.txt" => "changed\n",
+          "b.txt" => "same\n",
+          "new.txt" => "y\n"
+        })
+
+      changes = GitStore.diff_trees(repo, old_tree, new_tree)
+
+      assert %{path: "a.txt", status: :modified, new_content: "changed\n"} =
+               Enum.find(changes, &(&1.path == "a.txt"))
+
+      assert %{path: "new.txt", status: :added} = Enum.find(changes, &(&1.path == "new.txt"))
+
+      assert %{path: "del.txt", status: :deleted, old_content: "x\n"} =
+               Enum.find(changes, &(&1.path == "del.txt"))
+
+      refute Enum.find(changes, &(&1.path == "b.txt"))
+    end
+
+    test "treats a nil old tree as a root commit (all added)", %{dir: dir, repo: repo} do
+      new_tree = build_file_tree(repo, Path.join(dir, "new"), %{"a.txt" => "x\n"})
+      assert [%{path: "a.txt", status: :added}] = GitStore.diff_trees(repo, nil, new_tree)
+    end
+
+    test "handles nested directories", %{dir: dir, repo: repo} do
+      old_tree = build_file_tree(repo, Path.join(dir, "old"), %{"sub/a.txt" => "old\n"})
+
+      new_tree =
+        build_file_tree(repo, Path.join(dir, "new"), %{
+          "sub/a.txt" => "new\n",
+          "sub/b.txt" => "extra\n"
+        })
+
+      changes = GitStore.diff_trees(repo, old_tree, new_tree)
+      paths = changes |> Enum.map(& &1.path) |> Enum.sort()
+
+      assert paths == ["sub/a.txt", "sub/b.txt"]
+      assert %{status: :modified} = Enum.find(changes, &(&1.path == "sub/a.txt"))
+      assert %{status: :added} = Enum.find(changes, &(&1.path == "sub/b.txt"))
+    end
+  end
+
+  defp build_file_tree(repo, dir, files) do
+    Enum.each(files, fn {path, content} ->
+      full = Path.join(dir, path)
+      File.mkdir_p!(Path.dirname(full))
+      File.write!(full, content)
+    end)
+
+    GitStore.build_tree(repo, dir)
   end
 end

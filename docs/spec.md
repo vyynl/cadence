@@ -43,9 +43,10 @@ The system is:
 
 1. **Portfolio showcase.** A public, read-only web view of projects with
    rendered docs, DAG visualization, and optional interactive notebooks.
-2. **Personal workflow.** A Neovim plugin that makes committing, forking, and
+2. **Personal workflow.** A Neovim plugin that makes committing, spawning, and
    switching between work states frictionless.
-3. **Experimentation.** Sandbox forks that let the user explore large features
+3. **Experimentation.** Sandbox nodes spawned from the current node that let
+   the user explore large features
    without disturbing the current line of work.
 4. **Multi-machine continuity.** Work on machine A, resume on machine B, with
    session pointers synced through the server.
@@ -89,7 +90,7 @@ The system is:
 
 **Commits are local-first. Unions are server-first.**
 
-- Committing, forking, switching, and doc automation all happen locally and
+- Committing, spawning, switching, and doc automation all happen locally and
   work offline.
 - A union (meld) requires the server because it depends on the latest
   multi-user state and permission validation.
@@ -122,8 +123,8 @@ via `cadence_shared`. They do **not** share a runtime.
 | **Node** | An immutable snapshot = one Git commit + metadata. The atomic unit of the graph. |
 | **DAG** | The project's directed acyclic graph of nodes. |
 | **Session pointer** | Per-user, per-project cursor indicating which node that user is currently editing from. |
-| **Active head** | A node in a user's active heads set. Normally the most recent commit; forks add the parent to this set. |
-| **Fork / Sandbox** | A new child node created from the current node, where the parent remains an active head. |
+| **Active head** | A node in a user's active heads set. Normally the most recent commit; spawns add the parent to this set. |
+| **Spawn / Sandbox** | A new child node spawned from the current node, where the parent remains an active head. |
 | **Meld / Union** | The DAG's *merge*: a new node with 2+ parents, combining divergent lines of work, created server-side by an AI coding agent. |
 | **Flag** | Per-node lifecycle marker: `functioning`, `in-progress`, `broken`, `sandbox`. |
 | **Pinned** | A set of nodes explicitly surfaced by the owner for public preview. |
@@ -135,7 +136,7 @@ via `cadence_shared`. They do **not** share a runtime.
 - `functioning` — code is in a known-good state (tests pass, or user asserts).
 - `in-progress` — partial implementation, no known breakage.
 - `broken` — known failures, syntax errors, incomplete refactor.
-- `sandbox` — a fork explicitly marked as exploratory.
+- `sandbox` — a node explicitly spawned for exploration.
 
 Flags may be set manually, suggested by the AI commit-message pass, or
 inferred from heuristics (e.g., failing test detection).
@@ -143,11 +144,11 @@ inferred from heuristics (e.g., failing test detection).
 **Never auto-promote a meld to `functioning` without validation.** The AI's
 job is to produce the tree; the human's job is to verify it.
 
-### 3.2 Commit vs. fork
+### 3.2 Commit vs. spawn
 
 - **Normal commit** — pointer advances to the new child. The parent is
   implicitly superseded and removed from the user's active heads.
-- **Fork** — pointer advances to the new sandbox child. The parent **stays**
+- **Spawn** — pointer advances to the new sandbox child. The parent **stays**
   in the user's active heads, reachable with a single `:CadSwitch`.
 - **Switch** — moves the pointer to any active head without creating a node.
 
@@ -220,7 +221,7 @@ preview_node  = pinned_sorted.first
 
 ### 4.5 Roles & permissions
 
-| Role | Commit | Fork | Switch | Union | Approve | Pin | Delete | Manage members |
+| Role | Commit | Spawn | Switch | Union | Approve | Pin | Delete | Manage members |
 |---|---|---|---|---|---|---|---|---|
 | `owner` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `trusted` | ✓ | ✓ | ✓ | ✓ | ✓* | ✗ | ✗ | ✗ |
@@ -351,14 +352,14 @@ Diff:
 
 ---
 
-## 6. Phase 2 — DAG, Fork, Switch, Union
+## 6. Phase 2 — DAG, Spawn, Switch, Union
 
 ### 6.1 Neovim plugin commands
 
 | Command | Behavior |
 |---|---|
 | `:CadOpen` | Open the DAG picker. Default selection = most-recent node by current user (after attempting a short cloud sync; fall back to local). |
-| `:CadFork <name>` | Create a sandbox child from the current node. **Session pointer moves to the new fork.** Parent stays in active heads. |
+| `:CadSpawn <name>` | Spawn a sandbox child from the current node. **Session pointer moves to the new node.** Parent stays in active heads. |
 | `:CadSwitch <label>` | Move session pointer to another active head without creating a node. |
 | `:CadUnion` | Enter picker in union mode. CR toggles `✓`. `<C-s>` submits to server. |
 | `:CadDocDiff` | Show the doc diff attached to the current node. |
@@ -386,10 +387,10 @@ When `nvim` is opened **inside a project directory**, `:CadOpen`
 auto-triggers. When opened with no directory, the user sees a project picker
 first (Telescope integration), then the DAG picker.
 
-### 6.4 Fork semantics
+### 6.4 Spawn semantics
 
-- `:CadFork` creates a new child of the current node, flagged `sandbox`.
-- **Session pointer moves to the new fork immediately.**
+- `:CadSpawn` creates a new child of the current node, flagged `sandbox`.
+- **Session pointer moves to the new node immediately.**
 - The parent is added to the user's `active_heads` set.
 - The working tree is unchanged (same files), so no visual disruption.
 - Contrast with a normal commit, where the parent is implicitly superseded
@@ -1042,13 +1043,13 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 
 **Phase 1d — Daemon Unix socket API (week 5)**
 - `Plug` + `Bandit` on a Unix socket.
-- Endpoints: `GET /nodes`, `POST /fork`, `POST /switch`, `GET /projects`.
+- Endpoints: `GET /nodes`, `POST /spawn`, `POST /switch`, `GET /projects`.
 - Tiny CLI client to test.
 
 **Phase 1e — Neovim plugin, minimal (week 6)**
 - Single Lua file talking to the daemon socket.
 - `:CadOpen` lists nodes in a floating window.
-- `:CadFork` creates a fork.
+- `:CadSpawn` spawns a sandbox child node.
 - `:CadSwitch` moves between active heads.
 
 **Phase 1f — AI commit messages (week 7)**
@@ -1145,7 +1146,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       signed-URL / API key to avoid scraping.
 - [ ] **Backup strategy for the cloud server:** Postgres WAL archiving +
       object store for Git packfiles.
-- [ ] **Multi-user conflict UX:** when two trusted users fork from the same
+- [ ] **Multi-user conflict UX:** when two trusted users spawn from the same
       node, how does the picker display the divergence?
 - [ ] **Promotion target:** does approval promote to `pinned`, `functioning`,
       or a distinct "protected line" marker? (See §6.6.)

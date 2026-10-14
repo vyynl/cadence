@@ -1,0 +1,17 @@
+You are generating a commit message for a session-based version control
+system. Given the diff below, produce:
+
+1. A one-line summary (max 72 chars).
+2. A suggested flag: one of `functioning`, `in-progress`, `broken`.
+3. Optional: 2-4 bullet points of detail if the change is non-trivial.
+
+Respond in exactly this format:
+
+SUMMARY: <one line>
+FLAG: <functioning|in-progress|broken>
+DETAIL:
+- <bullet>
+- <bullet>
+
+Diff:
+{{diff}}

@@ -154,6 +154,39 @@ defmodule Cadence.Shared.GitStore do
     :ok
   end
 
+  @doc """
+  Compares two tree SHAs and returns the changed files between them.
+
+  `old_tree` may be `nil` (treated as an empty tree, i.e. a root commit).
+  Returns a list of change maps sorted by path:
+
+      %{path: "src/foo.ex", status: :added, old_content: nil, new_content: "..."}
+
+  `status` is `:added`, `:modified`, or `:deleted`; unmodified files are
+  omitted. `old_content`/`new_content` are the decoded blob contents (or `nil`
+  when the file is absent on that side). Content is compared by SHA, so
+  unchanged files are skipped cheaply.
+  """
+  @spec diff_trees(t(), sha() | nil, sha()) :: [
+          %{
+            path: String.t(),
+            status: :added | :modified | :deleted,
+            old_content: binary() | nil,
+            new_content: binary() | nil
+          }
+        ]
+  def diff_trees(repo, old_tree, new_tree) do
+    old = flatten_tree(repo, old_tree)
+    new = flatten_tree(repo, new_tree)
+
+    (Map.keys(old) ++ Map.keys(new))
+    |> Enum.uniq()
+    |> Enum.reduce([], fn path, acc ->
+      change(old, new, repo, path, acc)
+    end)
+    |> Enum.sort_by(& &1.path)
+  end
+
   ## Object storage
 
   defp write_object(repo, type, data) when is_binary(data) do
@@ -269,12 +302,84 @@ defmodule Cadence.Shared.GitStore do
   defp materialize(repo, entries, dir) do
     Enum.each(entries, fn
       %{type: :tree, name: name, ref: ref} ->
-        sub = Path.join(dir, name)
+        sub = join_safely(dir, name)
         File.mkdir_p!(sub)
         materialize(repo, read_tree(repo, ref) || [], sub)
 
       %{type: :blob, name: name, ref: ref} ->
-        File.write!(Path.join(dir, name), read_blob(repo, ref))
+        File.write!(join_safely(dir, name), read_blob(repo, ref))
     end)
+  end
+
+  # Rejects tree entry names that could escape `dir` (path traversal). Names
+  # produced by `build_tree/2` are always safe (single `File.ls!` components),
+  # but trees pulled from an untrusted source must be guarded before use.
+  defp join_safely(dir, name) do
+    if safe_name?(name) do
+      Path.join(dir, name)
+    else
+      raise ArgumentError, "unsafe tree entry name: #{inspect(name)}"
+    end
+  end
+
+  defp safe_name?(name) do
+    is_binary(name) and
+      name not in [".", ".."] and
+      not String.contains?(name, ["/", "\\"]) and
+      Path.type(name) != :absolute
+  end
+
+  ## Tree diff
+
+  defp change(old, new, repo, path, acc) do
+    old_ref = Map.get(old, path)
+    new_ref = Map.get(new, path)
+
+    cond do
+      old_ref == nil ->
+        [
+          %{path: path, status: :added, old_content: nil, new_content: read_blob(repo, new_ref)}
+          | acc
+        ]
+
+      new_ref == nil ->
+        [
+          %{path: path, status: :deleted, old_content: read_blob(repo, old_ref), new_content: nil}
+          | acc
+        ]
+
+      old_ref == new_ref ->
+        acc
+
+      true ->
+        [
+          %{
+            path: path,
+            status: :modified,
+            old_content: read_blob(repo, old_ref),
+            new_content: read_blob(repo, new_ref)
+          }
+          | acc
+        ]
+    end
+  end
+
+  defp flatten_tree(_repo, nil), do: %{}
+
+  defp flatten_tree(repo, sha) do
+    repo
+    |> read_tree(sha)
+    |> Enum.reduce(%{}, fn
+      %{type: :blob, name: name, ref: ref}, acc ->
+        Map.put(acc, name, ref)
+
+      %{type: :tree, name: name, ref: ref}, acc ->
+        sub = flatten_tree(repo, ref) |> prefix_keys(name)
+        Map.merge(acc, sub)
+    end)
+  end
+
+  defp prefix_keys(map, prefix) do
+    Map.new(map, fn {path, ref} -> {"#{prefix}/#{path}", ref} end)
   end
 end
