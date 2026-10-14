@@ -2,11 +2,16 @@ local M = {}
 
 M.config = {
   socket_path = nil,
+  -- Open the picker automatically when Neovim starts inside a project dir.
+  auto_open = true,
   graph = {
     -- Rail width = clamp(floor(columns * width_ratio), min_width, max_width).
     width_ratio = 0.2,
     min_width = 20,
     max_width = 60,
+    -- Wrap layers wider than this many columns into sub-rows (spec §7.3).
+    -- nil (default) leaves the grid unbounded and the rail scrolls instead.
+    wrap_width = nil,
   },
 }
 

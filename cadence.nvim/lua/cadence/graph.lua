@@ -5,8 +5,12 @@
 -- for a narrow, left-aligned rail. No `vim.*` here, so it can be unit-tested
 -- headlessly (`nvim --headless -l spec/graph_spec.lua` or `luajit`).
 --
--- Grid model: two rows per layer — a node row at `2 * depth` and an edge row at
--- `2 * depth + 1` between layers. A node is `●` (or `◉` when pinned).
+-- Grid: each layer gets a node row; an edge row sits between layers. When
+-- `max_cols` is given, a layer wider than that wraps into stacked sub-rows
+-- separated by a break-marker row (spec §7.3). By default (`max_cols` nil) the
+-- grid is left unbounded and the rail scrolls horizontally instead.
+--
+-- A node is `●` (or `◉` when pinned).
 
 local M = {}
 
@@ -15,6 +19,8 @@ local FLAG_PRIORITY = { "broken", "in-progress", "sandbox", "functioning" }
 
 -- For merging overlapping edge glyphs: keep the most "structural" one.
 local GLYPH_RANK = { ["|"] = 3, ["\\"] = 2, ["/"] = 2, ["-"] = 1 }
+
+local BREAK_MARKER = "╌"
 
 local function primary_flag(node)
   local present = {}
@@ -41,19 +47,29 @@ end
 
 --- Lay out `nodes` (from /graph) and `edges` into a character grid.
 ---
---- Returns a table with:
----   lines       - array of strings, row 0..height-1 (trailing spaces trimmed)
+--- Options:
+---   :step      horizontal spacing between nodes (default 3)
+---   :max_cols  wrap layers wider than this into sub-rows (default nil = no wrap)
+---
+--- Returns:
+---   lines       array of strings, row 0..height-1 (trailing spaces trimmed)
 ---   width/height
----   nodes       - id -> { row, col, flag, flags, pinned, message, created_at, created_by }
----   edge_cells  - array of { row, col, flag } (edge glyphs, tagged with the child's flag)
+---   nodes       id -> { row, col, flag, flags, pinned, message, created_at, created_by }
+---   edge_cells  array of { row, col, flag } (tagged with the child's flag)
 ---   max_depth
 function M.layout(nodes, edges, opts)
   opts = opts or {}
   local step = opts.step or 3
+  local max_cols = opts.max_cols
+  if max_cols and max_cols < step then
+    max_cols = nil
+  end
 
+  local by_id = {}
   local layers = {}
   local max_depth = 0
   for _, n in ipairs(nodes) do
+    by_id[n.id] = n
     local d = n.depth or 0
     layers[d] = layers[d] or {}
     table.insert(layers[d], n)
@@ -62,8 +78,46 @@ function M.layout(nodes, edges, opts)
     end
   end
 
-  local placed = {} -- id -> { row, col }
-  local cells = {} -- id -> cell
+  -- Pack a layer's nodes into one or more bands (each band fits within
+  -- max_cols). Without max_cols, a single band keeps the absolute columns.
+  local function pack(layer, desired)
+    local bands = {}
+    local band, prev = {}, -step
+
+    for _, n in ipairs(layer) do
+      local want = math.floor((desired[n.id] or 0) + 0.5)
+      if want < 0 then
+        want = 0
+      end
+      if max_cols and want > max_cols - step then
+        want = max_cols - step
+      end
+
+      local col = prev + step
+      if want > col then
+        col = want
+      end
+
+      if max_cols and col > max_cols - step and #band > 0 then
+        bands[#bands + 1] = band
+        band, prev = {}, -step
+        col = want
+      end
+
+      band[#band + 1] = { id = n.id, col = col }
+      prev = col
+    end
+
+    if #band > 0 then
+      bands[#bands + 1] = band
+    end
+    return bands
+  end
+
+  local placed = {}
+  local cells = {}
+  local break_rows = {}
+  local row = 0
   local placed_count = 0
 
   for d = 0, max_depth do
@@ -101,51 +155,53 @@ function M.layout(nodes, edges, opts)
       end)
     end
 
-    local prev = -step
-    for _, n in ipairs(layer) do
-      local col = math.floor(desired[n.id] + 0.5)
-      if col < prev + step then
-        col = prev + step
-      end
-      if col < 0 then
-        col = 0
+    for bi, band in ipairs(pack(layer, desired)) do
+      if bi > 1 then
+        break_rows[row] = true
+        row = row + 1
       end
 
-      placed[n.id] = { row = 2 * d, col = col }
-      cells[n.id] = {
-        id = n.id,
-        row = 2 * d,
-        col = col,
-        flag = primary_flag(n),
-        flags = n.flags or {},
-        pinned = n.pinned == true,
-        message = n.message,
-        created_at = n.created_at,
-        created_by = n.created_by,
-      }
-      prev = col
-      placed_count = placed_count + 1
+      for _, item in ipairs(band) do
+        local n = by_id[item.id]
+        placed[n.id] = { row = row, col = item.col }
+        cells[n.id] = {
+          id = n.id,
+          row = row,
+          col = item.col,
+          flag = primary_flag(n),
+          flags = n.flags or {},
+          pinned = n.pinned == true,
+          message = n.message,
+          created_at = n.created_at,
+          created_by = n.created_by,
+        }
+        placed_count = placed_count + 1
+      end
+
+      row = row + 1
+    end
+
+    -- Reserve an edge row between layers.
+    if d < max_depth then
+      row = row + 1
     end
   end
 
-  local grid = {} -- grid[row][col] = glyph
+  local grid = {}
   local edge_cells = {}
 
-  local function set(row, col, glyph, flag)
-    grid[row] = grid[row] or {}
-    local existing = grid[row][col]
+  local function set(r, c, glyph, flag)
+    grid[r] = grid[r] or {}
+    local existing = grid[r][c]
     if existing == nil then
-      grid[row][col] = glyph
-      table.insert(edge_cells, { row = row, col = col, flag = flag })
+      grid[r][c] = glyph
+      table.insert(edge_cells, { row = r, col = c, flag = flag })
     elseif (GLYPH_RANK[glyph] or 0) > (GLYPH_RANK[existing] or 0) then
-      grid[row][col] = glyph
-      table.insert(edge_cells, { row = row, col = col, flag = flag })
+      grid[r][c] = glyph
+      table.insert(edge_cells, { row = r, col = c, flag = flag })
     end
   end
 
-  -- Route each edge through the edge row directly above the child. (Local
-  -- commits/spawns always link adjacent layers; the server-side meld, which can
-  -- span layers, is Phase 4.)
   for _, e in ipairs(edges) do
     local parent = cells[e.from]
     local child = cells[e.to]
@@ -153,6 +209,11 @@ function M.layout(nodes, edges, opts)
     if parent and child and child.row > parent.row then
       local er = child.row - 1
       local flag = child.flag
+
+      -- Vertical connector for any gap (a wrapped parent spans rows).
+      for r = parent.row + 1, er - 1 do
+        set(r, parent.col, "|", flag)
+      end
 
       if parent.col == child.col then
         set(er, child.col, "|", flag)
@@ -162,8 +223,8 @@ function M.layout(nodes, edges, opts)
 
         local a, b = parent.col + s, child.col - s
         local lo, hi = math.min(a, b), math.max(a, b)
-        for cc = lo, hi do
-          set(er, cc, "-", flag)
+        for c = lo, hi do
+          set(er, c, "-", flag)
         end
 
         set(er, child.col, "|", flag)
@@ -171,7 +232,7 @@ function M.layout(nodes, edges, opts)
     end
   end
 
-  -- Overlay node dots (node rows never collide with edge rows).
+  -- Overlay node dots last.
   for _, cell in pairs(cells) do
     grid[cell.row] = grid[cell.row] or {}
     grid[cell.row][cell.col] = cell.pinned and "◉" or "●"
@@ -190,14 +251,17 @@ function M.layout(nodes, edges, opts)
   end
 
   local width = max_col + 1
-  local height = 2 * max_depth + 1
   local lines = {}
 
-  for r = 0, height - 1 do
-    local row = grid[r] or {}
+  for r = 0, row - 1 do
+    local grow = grid[r] or {}
     local parts = {}
     for c = 0, width - 1 do
-      parts[c + 1] = row[c] or " "
+      local glyph = grow[c]
+      if glyph == nil and break_rows[r] then
+        glyph = BREAK_MARKER
+      end
+      parts[c + 1] = glyph or " "
     end
     lines[r + 1] = (table.concat(parts, ""):gsub("%s+$", ""))
   end
@@ -205,7 +269,7 @@ function M.layout(nodes, edges, opts)
   return {
     lines = lines,
     width = width,
-    height = height,
+    height = row,
     nodes = cells,
     edge_cells = edge_cells,
     max_depth = max_depth,
@@ -224,8 +288,8 @@ function M.node_at(nodes, row, col)
 end
 
 --- The nearest node in `dir` ("up" | "down" | "left" | "right") from `from_id`.
---- Up/down cross layers (nearest row, then nearest column); left/right stay
---- within the same layer. Returns a node id or nil.
+--- Up/down cross rows (nearest row, then nearest column); left/right stay within
+--- the same row. Returns a node id or nil.
 function M.nearest(nodes, from_id, dir)
   local from = nodes[from_id]
   if not from then

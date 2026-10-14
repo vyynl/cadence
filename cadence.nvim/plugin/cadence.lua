@@ -55,7 +55,8 @@ local function open_picker(project, opts)
   end
 
   local payload = res.body
-  local layout = graph.layout(payload.nodes or {}, payload.edges or {}, {})
+  local wrap_width = (cadence.config.graph or {}).wrap_width
+  local layout = graph.layout(payload.nodes or {}, payload.edges or {}, { max_cols = wrap_width })
 
   ui.open_graph(layout, {
     title = opts.title or project.slug,
@@ -112,3 +113,21 @@ vim.api.nvim_create_user_command("CadSpawn", function(args)
     end
   end)
 end, { nargs = "?" })
+
+-- Auto-open the picker when Neovim starts inside a registered project (spec
+-- §6.3). Best-effort: silently skipped if the daemon is unreachable or the
+-- project isn't registered. Disable with `setup({ auto_open = false })`.
+vim.api.nvim_create_autocmd("VimEnter", {
+  callback = function()
+    if cadence.config.auto_open == false then
+      return
+    end
+
+    local project = current_project()
+    if project then
+      vim.schedule(function()
+        open_picker(project, { title = project.slug })
+      end)
+    end
+  end,
+})

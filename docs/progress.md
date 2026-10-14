@@ -241,11 +241,19 @@ Phase 1f complete → moving into Phase 2a (DAG picker)
 - [x] Author display: kept a single committer identity (`created_by`) since the
   git author and node author are the same locally; no separate git-author field.
 
+- [x] Phase 2a polish (Neovim): layer wrap + break marker in `graph.lua`
+  (`max_cols` packs a wide layer into stacked sub-rows separated by a `╌` marker;
+  default `nil` keeps the bounding-free horizontal-scroll rail), plus §6.3
+  auto-open of the picker on `VimEnter` when cwd matches a registered project
+  (`setup({ auto_open = false })` to disable). `graph.wrap_width` config added;
+  new wrap tests + README/spec §6.2 notes.
+
 ## Next
-- Phase 2a follow-ups (deferred picker items): layer wrap + break marker, §6.3
-  auto-open on VimEnter, Telescope project picker, and cloud-sync default
-  selection (Phase 2b). Optional polish for the diff panel: line backgrounds
-  tuned per colorscheme and `<C-d>/<C-u>` hint in the footer.
+- Deferred picker items: Telescope project picker (would add a dep to §11) and
+  cloud-sync default selection (Phase 2b). Optional diff-panel polish: colorscheme
+  line backgrounds and a `<C-d>/<C-u>` scroll hint.
+- Phase 2b (cloud sync) is the next phase per spec §13 — schedule its own
+  planning session: Phoenix scaffold, AshAuthentication, sync ledger, push/pull.
 - Remaining audit items (lower priority): derive service timeouts from config
   rather than literals; consider `.gitignore`-style patterns beyond `CAD_IGNORE`;
   `Membership.last_seen_at` is defined but unused; `CommitQueue` still inlines
@@ -286,6 +294,7 @@ Phase 1f complete → moving into Phase 2a (DAG picker)
   reuses the stdlib `List.myers_difference/2` rather than a new dependency.
 
 ## Last Updated
-2026-10-14 — Phase 2a Slice B2 complete (B2a backend + B2b colored hover diff);
-137 Elixir tests green, `graph_spec`/`diff_spec` + headless UI smoke green.
-Next: deferred picker items (layer wrap, auto-open, Telescope, cloud sync).
+2026-10-14 — Phase 2a complete: shipped the picker (Slices A/B/B2) plus polish
+(layer wrap + §6.3 auto-open). 137 Elixir tests green; `graph_spec` (incl. wrap),
+`diff_spec`, and the headless UI smoke all green. Next: Phase 2b (cloud sync) —
+schedule a dedicated planning session.

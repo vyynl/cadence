@@ -135,6 +135,25 @@ do
   eq("empty count", empty.count, 0)
 end
 
+-- wrap ---------------------------------------------------------------------
+do
+  io.write("wrap\n")
+  local nodes = {}
+  for i = 1, 4 do
+    nodes[i] = node("n" .. i, 0, {}, { created_at = string.format("2026-01-0%dT00:00:00Z", i) })
+  end
+
+  local flat = graph.layout(nodes, {})
+  eq("no wrap -> single row", flat.height, 1)
+  eq("no wrap -> all placed", flat.count, 4)
+
+  local g = graph.layout(nodes, {}, { max_cols = 6 })
+  eq("wrapped: all placed", g.count, 4)
+  eq("wrapped height", g.height, 5)
+  eq("break row", g.lines[2]:find("╌", 1, true) ~= nil, true)
+  eq("nav crosses wrap", graph.nearest(g.nodes, "n1", "down") ~= nil, true)
+end
+
 io.write("\n")
 if failures > 0 then
   io.write(failures, " failure(s)\n")

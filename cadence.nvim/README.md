@@ -49,9 +49,26 @@ configurable via `require("cadence").setup({ graph = { ... } })`).
 - `<Tab>` enters/leaves the hover panel (e.g. to scroll a long message/diff).
 - `q`/`<Esc>` close.
 
+When Neovim starts inside a registered project directory, the picker opens
+automatically (spec §6.3). Disable with `setup({ auto_open = false })`.
+
 The "current project" is determined by matching `vim.fn.getcwd()` against the
 `work_dir` of registered projects (`GET /projects`). Open Neovim from inside the
 project's working directory.
+
+### Configuration
+
+```lua
+require("cadence").setup({
+  auto_open = true,
+  graph = {
+    width_ratio = 0.2, -- rail width = clamp(cols * ratio, min_width, max_width)
+    min_width = 20,
+    max_width = 60,
+    wrap_width = nil, -- wrap wide layers into sub-rows; nil = scroll instead
+  },
+})
+```
 
 ## Manual smoke test
 

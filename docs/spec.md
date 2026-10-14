@@ -387,15 +387,17 @@ Diff:
 
 - Left-aligned floating **rail**, width `clamp(floor(terminal_cols * 0.2), 20, 60)`
   (configurable); `nowrap`, so wider layers scroll horizontally as the cursor
-  moves.
+  moves. Optionally (`graph.wrap_width`) wide layers wrap into stacked sub-rows
+  separated by a break marker instead.
 - Nodes rendered as filled dots (`●`, or `◉` when pinned) with a highlight group
   per flag.
 - Edges rendered with `│ ╲ ╱ ─` composed into a grid; each edge inherits its
   **child's** flag color.
 - Full navigation: up/down/left/right between nodes.
-- Hover (`CursorMoved`) → a side panel with committer, date/time, flag(s), and
-  the commit message. A color-coded diff preview is planned (a later slice);
-  layer-wrapping and auto-open are follow-ups.
+- Hover (`CursorMoved`) → a side panel with committer, date/time, flag(s), the
+  commit message, and a color-coded line diff against the parent.
+- Auto-open: when `nvim` starts inside a registered project directory, the
+  picker opens automatically.
 - In union mode: CR toggles `✓`; footer shows selection count and submit hint.
 
 ### 6.3 Default selection logic
