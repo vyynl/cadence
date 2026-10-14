@@ -61,6 +61,13 @@ local function open_picker(project, opts)
     title = opts.title or project.slug,
     default_node_id = payload.default_node_id,
     union = opts.union,
+    diff_fetcher = function(node_id)
+      local diff = client.get("/diff?project_id=" .. project.id .. "&node_id=" .. node_id, socket())
+      if diff and diff.status == 200 then
+        return diff.body
+      end
+      return nil
+    end,
     on_switch = function(node_id)
       local switch = client.post("/switch", { project_id = project.id, node_id = node_id }, socket())
       if switch and switch.status == 200 then

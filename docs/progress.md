@@ -232,14 +232,20 @@ Phase 1f complete → moving into Phase 2a (DAG picker)
   (20) and `CAD_DIFF_MAX_LINES_PER_FILE` (400), read in `runtime.exs`; §12.6/§13.
 - [x] 13 new tests (6 `Diff`, 4 `NodeDiff`, 3 router `/diff`). 137 tests total
   (89 shared + 48 daemon), green; format/`--warnings-as-errors` clean. No migration.
+- [x] Phase 2a Slice B2b — colored diff in the Neovim hover panel: pure
+  `cadence.nvim/lua/cadence/diff.lua` formatter (file headers, `+`/`-`/space
+  prefixes, `…` markers, truncation/binary notes), per-line highlights
+  (`CadenceDiffAdd/Delete/Header/Meta`), and `/diff` fetched on node change with
+  a per-node cache injected from the plugin (`diff_fetcher`). `spec/diff_spec.lua`
+  + an extended headless UI smoke (metadata + diff + union) pass.
+- [x] Author display: kept a single committer identity (`created_by`) since the
+  git author and node author are the same locally; no separate git-author field.
 
 ## Next
-- Phase 2a Slice B2b — render the diff in the Neovim hover panel: pure
-  `cadence.nvim/lua/cadence/diff.lua` formatter (file headers, `+`/`-`/space
-  prefixes, `…` markers), per-line groups (`CadenceDiffAdd/Delete/Header/Meta`),
-  fetch `/diff` on node change with a per-node cache, and show the git author.
-  Then the deferred picker items: layer wrap + break marker, §6.3 auto-open on
-  VimEnter, Telescope project picker, and cloud-sync default selection (Phase 2b).
+- Phase 2a follow-ups (deferred picker items): layer wrap + break marker, §6.3
+  auto-open on VimEnter, Telescope project picker, and cloud-sync default
+  selection (Phase 2b). Optional polish for the diff panel: line backgrounds
+  tuned per colorscheme and `<C-d>/<C-u>` hint in the footer.
 - Remaining audit items (lower priority): derive service timeouts from config
   rather than literals; consider `.gitignore`-style patterns beyond `CAD_IGNORE`;
   `Membership.last_seen_at` is defined but unused; `CommitQueue` still inlines
@@ -274,12 +280,12 @@ Phase 1f complete → moving into Phase 2a (DAG picker)
 - Picker rail width deviates from the original §6.2 bound (`min(cols, 80)`): it
   is now `clamp(floor(cols*0.2), 20, 60)`. §6.2 was updated to match.
 - Hover is richer than §6.2's "date, message, flag": it now shows committer +
-  date/time + flag(s) + message, with a color-coded diff preview planned (B2).
+  date/time + flag(s) + message + a color-coded diff (B2b).
 - `GET /diff` is another new daemon endpoint (node vs. first parent) serving the
   line diff for the hover preview; documented in §13 Phase 2a. The line diff
   reuses the stdlib `List.myers_difference/2` rather than a new dependency.
 
 ## Last Updated
-2026-10-14 — Phase 2a Slice B2a (diff backend: `Cadence.Shared.Diff` +
-`Cadence.Daemon.NodeDiff` + `GET /diff`); 137 tests green. Next: Slice B2b
-(render the diff in the Neovim hover panel).
+2026-10-14 — Phase 2a Slice B2 complete (B2a backend + B2b colored hover diff);
+137 Elixir tests green, `graph_spec`/`diff_spec` + headless UI smoke green.
+Next: deferred picker items (layer wrap, auto-open, Telescope, cloud sync).

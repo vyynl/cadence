@@ -43,8 +43,10 @@ configurable via `require("cadence").setup({ graph = { ... } })`).
 
 - `h`/`j`/`k`/`l` (and arrows) move between nodes.
 - `<CR>` switches the session pointer to the highlighted node.
-- Hovering a node opens a panel with committer, date/time, flags, and message.
-- `<Tab>` enters/leaves the hover panel (e.g. to scroll a long message).
+- Hovering a node opens a panel with committer, date/time, flags, the commit
+  message, and a GitHub-style color-coded diff of the node against its parent
+  (added/removed lines, file headers, `…` for collapsed context).
+- `<Tab>` enters/leaves the hover panel (e.g. to scroll a long message/diff).
 - `q`/`<Esc>` close.
 
 The "current project" is determined by matching `vim.fn.getcwd()` against the
@@ -68,10 +70,11 @@ nvim
 #   :CadUnion      -> picker in union mode (CR toggles ✓)
 ```
 
-Run the layout unit tests (pure Lua, no daemon needed):
+Run the layout and diff unit tests (pure Lua, no daemon needed):
 
 ```bash
 nvim --headless -l cadence.nvim/spec/graph_spec.lua
+nvim --headless -l cadence.nvim/spec/diff_spec.lua
 ```
 
 Note: a normal commit advances the session pointer automatically (spec §5.3), so

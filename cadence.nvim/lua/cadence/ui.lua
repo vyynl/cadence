@@ -20,6 +20,10 @@ M.setup_highlights = function()
   set_hl("CadenceSandbox", "#61afef")
   set_hl("CadencePinned", "#c678dd", { bold = true, underline = true })
   set_hl("CadenceEdge", "#5c6370")
+  set_hl("CadenceDiffHeader", "#61afef", { bold = true })
+  set_hl("CadenceDiffAdd", "#98c379", { bg = "#22331f" })
+  set_hl("CadenceDiffDelete", "#e06c75", { bg = "#3a2426" })
+  set_hl("CadenceDiffMeta", "#5c6370", { italic = true })
 end
 
 -- Backwards-compatible simple list (kept for any non-graph caller).
@@ -139,6 +143,8 @@ M.open_graph = function(layout, opts)
   local selected = {}
   local ns = vim.api.nvim_create_namespace("cadence_graph")
   local union_ns = vim.api.nvim_create_namespace("cadence_union")
+  local diff_ns = vim.api.nvim_create_namespace("cadence_diff_panel")
+  local diff_cache = {}
 
   local lines = {}
   for i, l in ipairs(graph_lines) do
@@ -218,17 +224,47 @@ M.open_graph = function(layout, opts)
     return id and layout.nodes[id] or nil
   end
 
-  local function panel_lines(cell, width)
-    local out = {
-      "committer  " .. short_id(cell.created_by),
-      "date       " .. (cell.created_at or "-"),
-      "flags      " .. flags_text(cell.flags) .. (cell.pinned and "  ★" or ""),
-      "",
-    }
-    for _, l in ipairs(wrap(cell.message or "(no message)", width)) do
-      out[#out + 1] = l
+  -- A node's diff block, fetched on demand and cached. `false` means "no diff
+  -- available" (so we don't refetch on every cursor move).
+  local function diff_block(node_id)
+    if diff_cache[node_id] ~= nil then
+      return diff_cache[node_id]
     end
-    return out
+
+    local payload = opts.diff_fetcher and opts.diff_fetcher(node_id) or nil
+    local formatted = payload and require("cadence.diff").format(payload) or false
+    diff_cache[node_id] = formatted
+    return formatted
+  end
+
+  local function panel_lines(cell, width)
+    local out, hl = {}, {}
+
+    local function push(text, group)
+      out[#out + 1] = text
+      if group then
+        hl[#out] = group
+      end
+    end
+
+    push("committer  " .. short_id(cell.created_by))
+    push("date       " .. (cell.created_at or "-"))
+    push("flags      " .. flags_text(cell.flags) .. (cell.pinned and "  ★" or ""))
+    push("")
+
+    for _, l in ipairs(wrap(cell.message or "(no message)", width)) do
+      push(l)
+    end
+
+    local block = diff_block(cell.id)
+    if block then
+      push("")
+      for i, l in ipairs(block.lines) do
+        push(l, block.hl[i])
+      end
+    end
+
+    return out, hl
   end
 
   local update_panel
@@ -243,7 +279,7 @@ M.open_graph = function(layout, opts)
     if pw < 20 then
       pw = math.max(vim.o.columns - rail_w - 3, 10)
     end
-    local plines = panel_lines(cell, pw)
+    local plines, phl = panel_lines(cell, pw)
     local ph = math.min(#plines, vim.o.lines - 4)
 
     if panel.win and vim.api.nvim_win_is_valid(panel.win) then
@@ -272,6 +308,16 @@ M.open_graph = function(layout, opts)
     vim.bo[panel.buf].modifiable = true
     vim.api.nvim_buf_set_lines(panel.buf, 0, -1, false, plines)
     vim.bo[panel.buf].modifiable = false
+
+    vim.api.nvim_buf_clear_namespace(panel.buf, diff_ns, 0, -1)
+    for i, group in pairs(phl) do
+      vim.api.nvim_buf_set_extmark(panel.buf, diff_ns, i - 1, 0, {
+        end_row = i,
+        end_col = 0,
+        hl_group = group,
+        hl_eol = true,
+      })
+    end
   end
 
   local function move(dir)
