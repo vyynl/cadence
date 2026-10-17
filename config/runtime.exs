@@ -36,6 +36,60 @@ if config_env() != :test do
     diff_max_files: String.to_integer(System.get_env("CAD_DIFF_MAX_FILES", "20")),
     diff_max_lines_per_file:
       String.to_integer(System.get_env("CAD_DIFF_MAX_LINES_PER_FILE", "400"))
+
+  # -- Server ---------------------------------------------------------------
+
+  listen_port = String.to_integer(System.get_env("CAD_HTTP_PORT", "4000"))
+
+  database_url =
+    case {config_env(), System.get_env("CAD_DATABASE_URL")} do
+      {:prod, nil} -> System.fetch_env!("CAD_DATABASE_URL")
+      {_, nil} -> "ecto://postgres:postgres@localhost:5432/cadence_dev"
+      {_, url} -> url
+    end
+
+  secret_key_base = System.fetch_env!("CAD_SECRET_KEY_BASE")
+
+  public_url =
+    case {config_env(), System.get_env("CAD_PUBLIC_URL")} do
+      {:prod, nil} -> System.fetch_env!("CAD_PUBLIC_URL")
+      {_, nil} -> "http://localhost:#{listen_port}"
+      {_, url} -> url
+    end
+    |> String.trim_trailing("/")
+
+  public_uri = URI.parse(public_url)
+  phx_host = System.get_env("CAD_PHX_HOST") || public_uri.host
+
+  config :cadence_server, Cadence.Server.Repo,
+    url: database_url,
+    pool_size: String.to_integer(System.get_env("CAD_DB_POOL_SIZE", "10"))
+
+  config :cadence_server, Cadence.ServerWeb.Endpoint,
+    server: true,
+    http: [ip: {0, 0, 0, 0}, port: listen_port],
+    url: [
+      host: phx_host,
+      port: public_uri.port,
+      scheme: public_uri.scheme
+    ],
+    secret_key_base: secret_key_base
+
+  config :cadence_server,
+    public_url: public_url,
+    token_signing_secret: System.get_env("CAD_TOKEN_SIGNING_SECRET") || secret_key_base,
+    oauth: [
+      github: [
+        client_id: System.get_env("CAD_OAUTH_GITHUB_CLIENT_ID"),
+        client_secret: System.get_env("CAD_OAUTH_GITHUB_CLIENT_SECRET"),
+        redirect_uri: public_url <> "/auth/user/github/callback"
+      ],
+      google: [
+        client_id: System.get_env("CAD_OAUTH_GOOGLE_CLIENT_ID"),
+        client_secret: System.get_env("CAD_OAUTH_GOOGLE_CLIENT_SECRET"),
+        redirect_uri: public_url <> "/auth/user/google/callback"
+      ]
+    ]
 end
 
 config :cadence_shared, Cadence.Shared.LLM,

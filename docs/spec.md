@@ -184,6 +184,10 @@ table — the documented migration path. `session_metadata` must stay small:
 diffs and doc-diffs are stored as Git objects (referenced by SHA), never
 inlined into the row.
 
+The **server** additionally stores a server-only `nodes.seq bigserial` column
+(indexed) as the stable pull cursor. It is not part of the shared `Node`
+schema, so the daemon's SQLite store is unaffected.
+
 ### 4.2 Project
 
 ```
@@ -557,8 +561,14 @@ In union mode, click toggles `✓`.
 
 ### 7.4 Auth
 
-`AshAuthentication` with OAuth strategies. Roles per project as defined in
-§4.5.
+Humans sign in through `AshAuthentication` OAuth strategies (GitHub and
+Google); roles per project are defined in §4.5. Daemons authenticate with a
+personal access token modelled as an `AshAuthentication` **API key** (§10.1).
+
+A signed-in human visits `/auth/tokens/new` and creates a daemon key with
+`POST /auth/tokens`. The plaintext key is shown exactly once; only its hash is
+stored. OAuth credentials are supplied through `CAD_OAUTH_*` env vars, so the
+server can boot without OAuth configured (that provider's sign-in then fails).
 
 Public visitors are unauthenticated and see the preview node only. Optionally,
 the deployment can require a lightweight signed URL or API key to reduce
@@ -725,8 +735,10 @@ limiter shared across the daemon.
 ### 10.1 Authentication
 
 The daemon authenticates to the server with a bearer token (personal access
-token) issued by the server. Stored in `~/.config/cadence/env` (chmod 600),
-never in source or `config/`.
+token) issued by the server. The token is an `AshAuthentication` API key: the
+server stores only its SHA-256 hash, and the plaintext is shown once at
+issuance. It is stored in `~/.config/cadence/env` (chmod 600), never in source
+or `config/`.
 
 ### 10.2 Local → Cloud
 
@@ -787,7 +799,10 @@ SyncMessage.Union
 | File watching | `file_system` |
 | LLM client | `axiom_ai` (DeepSeek via OpenAI-compatible base URL) |
 | Markdown rendering | `MDEx` |
-| Auth | `AshAuthentication` + `Ash` |
+| Auth | `AshAuthentication` + `Ash` (daemon PATs use the API-key strategy) |
+| Ash data layer | `ash_postgres` |
+| Phoenix auth routes | `ash_authentication_phoenix` |
+| Ash DSL formatting / codegen | `sourceror` (dev/test only) |
 | Docker API | `ex_docker_api` |
 | Rate limiting | `Hammer` (declared in `cadence_shared`, used by the daemon's `LLMRateLimit`) |
 | Graph model | `libgraph` |
@@ -952,6 +967,10 @@ if config_env() == :prod do
     url: System.fetch_env!("CAD_DATABASE_URL"),
     pool_size: String.to_integer(System.get_env("CAD_DB_POOL_SIZE", "10"))
 
+  config :cadence_server,
+    token_signing_secret:
+      System.get_env("CAD_TOKEN_SIGNING_SECRET", System.fetch_env!("CAD_SECRET_KEY_BASE"))
+
   config :cadence_shared, Cadence.Shared.LLM,
     provider: System.fetch_env!("CAD_LLM_PROVIDER"),
     api_key: System.fetch_env!("CAD_LLM_API_KEY"),
@@ -974,6 +993,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 |---|---|---|---|
 | `CAD_PHX_HOST` | yes | — | Public hostname |
 | `CAD_SECRET_KEY_BASE` | yes | — | Phoenix secret |
+| `CAD_TOKEN_SIGNING_SECRET` | no | `CAD_SECRET_KEY_BASE` | JWT/AshAuthentication signing secret |
 | `CAD_DATABASE_URL` | yes | — | Postgres connection |
 | `CAD_DB_POOL_SIZE` | no | `10` | Ecto pool |
 | `CAD_GIT_STORE_PATH` | no | `/data/git` | Git object storage |
@@ -1098,8 +1118,13 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - `:CadUnion` picker mode (UI only, no server yet).
 
 **Phase 2b — Cloud sync (week 10–11)**
-- Phoenix server scaffold.
-- Auth with `AshAuthentication`.
+- Phoenix server scaffold (manual, no `mix phx.new`).
+- Auth with `AshAuthentication`: GitHub/Google OAuth for humans; API keys for
+  daemons, issued via the OAuth-session-guarded `POST /auth/tokens`.
+- Server migrations: shared project/DAG tables (`parents uuid[]` + GIN) plus
+  accounts, and a server-only `nodes.seq bigserial` pull cursor.
+- `GET /sync/me` bearer-check diagnostic (temporary; replaced by real sync
+  routes in 2b-2).
 - Push/pull endpoints.
 - Sync ledger on daemon side.
 
@@ -1193,11 +1218,15 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       (diff vs. tree vs. flags).
 - [ ] **Storage repack trigger:** when to run the Phase 7 lossless repack (size
       threshold vs. scheduled job), and the array→edges migration threshold.
-- [ ] **Daemon token issuance (Phase 2b):** how a personal access token is
-      minted — `mix` task, seeded token, or an endpoint guarded by OAuth. See
-      `docs/phase-2b-cloud-sync.md` §4/§13.
-- [ ] **Pull cursor representation (Phase 2b):** server-only `bigserial seq` vs.
-      `(inserted_at, id)` vs. a `sync_events` table. See phase-2b plan §5.
+- [x] **Daemon token issuance (Phase 2b):** resolved in 2b-1 — an
+      OAuth-session-guarded `POST /auth/tokens` endpoint mints an
+      `AshAuthentication` API key. No `mix` task or seeded token.
+- [x] **Pull cursor representation (Phase 2b):** resolved in 2b-1 — server-only
+      `nodes.seq bigserial` plus an index. See phase-2b plan §5.
+- [ ] **Ash policy authorizer / SAT solver:** server Ash resources currently
+      rely on controller-level checks rather than `Ash.Policy.Authorizer`.
+      Revisit when the web UI exposes Ash actions directly; enabling policies
+      requires adding `picosat_elixir` or `simple_sat` to spec §11.
 - [ ] **Push batch semantics (Phase 2b):** fail-fast vs. per-item errors, and
       whether parents must be pushed before children or forward references are
       allowed. See phase-2b plan §8/§13.

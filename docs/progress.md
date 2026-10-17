@@ -1,7 +1,7 @@
 # Cadence — Progress
 
 ## Current Phase
-Phase 1f complete → moving into Phase 2a (DAG picker)
+Phase 2b-1 complete → moving into 2b-2 (object transfer + node push/pull)
 
 ## Done
 - [x] Read spec + AGENTS.md; audited and resolved all scaffold blockers.
@@ -253,18 +253,47 @@ Phase 1f complete → moving into Phase 2a (DAG picker)
   risks). New open decisions added to spec §16 (token issuance, cursor model,
   push batch/parent semantics).
 
+- [x] Phase 2b-1 — server scaffold + Ash authentication. Added server deps
+  (`phoenix`, `phoenix_pubsub`, `bandit`, `plug`, `ecto_sql`, `postgrex`,
+  `ash`, `ash_postgres`, `ash_authentication`, `ash_authentication_phoenix`,
+  `sourceror` dev/test). Added `Cadence.Server.Repo` (`AshPostgres.Repo`),
+  `Endpoint`, `Application` supervision, `Router`, `AuthPlug`, `AuthController`,
+  `TokenController`, `HealthController`, `SyncController`, and JSON helpers.
+- [x] Ash accounts: `Cadence.Server.Accounts` domain + `User`, `Token`,
+  `UserIdentity`, `ApiKey` resources. Humans use GitHub/Google OAuth; daemons
+  use AshAuthentication API keys. `POST /auth/tokens` is OAuth-session-guarded
+  and returns the plaintext key once; only the hash is stored.
+- [x] Postgres migrations: `projects`/`nodes`/`memberships` (mirroring shared
+  schemas), `parents uuid[]` + GIN index, server-only `nodes.seq bigserial` +
+  index; Ash codegen accounts migration (`users`, `tokens`, `user_identities`,
+  `api_keys`, `citext`/Ash functions).
+- [x] Config: server runtime section (`CAD_PHX_HOST`, `CAD_PUBLIC_URL`,
+  `CAD_HTTP_PORT`, `CAD_SECRET_KEY_BASE`, `CAD_TOKEN_SIGNING_SECRET`,
+  `CAD_DATABASE_URL`, `CAD_DB_POOL_SIZE`, `CAD_OAUTH_*`); test Postgres via
+  `CAD_TEST_DATABASE_URL` with ephemeral Docker; no secrets in source.
+- [x] Server tests (15): account/key hashing, valid/revoked/expired API keys,
+  OAuth registration action, `/health`, `/sync/me` 401/200 auth paths, token
+  controller issuance, session guard, and a shared-schema Postgres round-trip
+  (`Project`/`Node`/composite-key `Membership`).
+- [x] 152 tests total (89 shared + 48 daemon + 15 server), all green.
+  `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
+  `MIX_ENV=prod mix compile --warnings-as-errors` all clean.
+- [x] Docs updated: spec §4.1/§7.4/§10.1/§11/§12.6/§13/§16 and the Phase 2b
+  plan. Token issuance and pull-cursor decisions marked resolved.
+
 ## Next
-- Start **Phase 2b milestone 2b-1** per `docs/phase-2b-cloud-sync.md` §12: manual
-  Phoenix scaffold for `cadence_server` (deps, `Repo`, `Endpoint`, `/health`,
-  Postgres migrations for `projects`/`nodes`/`memberships` + `users`/`tokens`),
-  the bearer `AuthPlug`, and the server test harness. Resolve the token-issuance
-  decision (§4/§13 of the plan) first.
+- Start **Phase 2b milestone 2b-2** per `docs/phase-2b-cloud-sync.md` §12:
+  add `GitStore.objects_from/2` + `import_objects/2` (+ `write_raw/3`), then
+  `POST /sync/nodes` (membership check, import objects, insert nodes, resolve
+  parents via local→cloud mapping, broadcast) and `GET /sync/nodes?since=`
+  (use the `nodes.seq` cursor, GIN-indexed parent lookups, membership-scoped
+  reads). Tests: object round-trip, push/pull round-trip, sibling/conflict.
 - Deferred picker items (can be picked up any time): Telescope project picker
   (would add a dep to §11) and cloud-sync default selection (lands with 2b).
 - Remaining audit items (lower priority): derive service timeouts from config
   rather than literals; consider `.gitignore`-style patterns beyond `CAD_IGNORE`;
   `Membership.last_seen_at` is defined but unused; `CommitQueue` still inlines
-  `@default_author`; `cadence_server` is still an empty scaffold (Phase 2b).
+  `@default_author`.
 
 ## Blocked
 - (none)
@@ -299,9 +328,26 @@ Phase 1f complete → moving into Phase 2a (DAG picker)
 - `GET /diff` is another new daemon endpoint (node vs. first parent) serving the
   line diff for the hover preview; documented in §13 Phase 2a. The line diff
   reuses the stdlib `List.myers_difference/2` rather than a new dependency.
+- `GET /sync/me` is a temporary 2b-1 diagnostic route (bearer-key check). It is
+  not part of the final sync surface and should be removed or replaced when real
+  `/sync/nodes` routes land in 2b-2.
+- The server's Ash resources currently omit `Ash.Policy.Authorizer` (and its
+  SAT-solver dependency); authorization is enforced by controllers. Recorded as
+  an open decision in spec §16. Revisit before the web UI calls Ash actions
+  directly.
+- `ash_authentication_phoenix` pulls `phoenix_live_view` transitively. 2b-1
+  defines no LiveView UI, but the dependency is now present ahead of Phase 3.
+- Server tests require a Postgres test database; `CAD_TEST_DATABASE_URL` is a
+  test-only override (default `ecto://postgres:postgres@localhost:55432/cadence_test`)
+  and is intentionally not part of the deployment env contract.
+- New server auth endpoints `/auth/tokens/new` (GET form) and `/auth/tokens`
+  (POST issue) are additions beyond the original Phase 2b endpoint list; spec
+  §7.4/§13 now document them.
 
 ## Last Updated
-2026-10-14 — Phase 2a complete and committed (picker + hover diff + wrap +
-auto-open). Phase 2b (cloud sync) planned only: `docs/phase-2b-cloud-sync.md`;
-spec §16 open decisions added. Next session starts 2b-1 (Phoenix scaffold +
-auth). 137 Elixir tests green; Lua specs + headless UI smoke green.
+2026-10-16 — Phase 2b-1 complete: Phoenix server scaffold, Ash/AshAuthentication
+accounts, GitHub/Google OAuth, OAuth-session-guarded API-key issuance,
+Postgres migrations (including `nodes.seq` cursor and `parents` GIN index),
+`/health` + temporary `/sync/me`, and the server test harness. 152 Elixir tests
+green (89 shared + 48 daemon + 15 server); format and compile clean in
+dev/test/prod. Next session starts 2b-2 (object transfer + node push/pull).

@@ -7,6 +7,7 @@ defmodule Cadence.Server.MixProject do
       version: "0.1.0",
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
+      elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps()
     ]
   end
@@ -20,7 +21,22 @@ defmodule Cadence.Server.MixProject do
 
   defp deps do
     [
-      {:cadence_shared, in_umbrella: true}
+      {:cadence_shared, in_umbrella: true},
+      {:phoenix, "~> 1.8"},
+      {:phoenix_pubsub, "~> 2.4"},
+      {:bandit, "~> 1.13"},
+      {:plug, "~> 1.20"},
+      {:ecto_sql, "~> 3.14"},
+      {:postgrex, "~> 0.22"},
+      {:jason, "~> 1.4"},
+      {:ash, "~> 3.36"},
+      {:ash_postgres, "~> 2.14"},
+      {:ash_authentication, "~> 4.15"},
+      {:ash_authentication_phoenix, "~> 2.17"},
+      {:sourceror, "~> 1.7", only: [:dev, :test]}
     ]
   end
+
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
 end
