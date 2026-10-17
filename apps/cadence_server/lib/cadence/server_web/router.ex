@@ -38,6 +38,8 @@ defmodule Cadence.ServerWeb.Router do
   scope "/", Cadence.ServerWeb do
     pipe_through(:api)
 
+    post("/sync/nodes", SyncController, :push_nodes)
+    get("/sync/nodes", SyncController, :pull_nodes)
     get("/sync/me", SyncController, :me)
   end
 end

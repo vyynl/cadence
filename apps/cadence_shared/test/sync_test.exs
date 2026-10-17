@@ -30,8 +30,10 @@ defmodule Cadence.Shared.SyncTest do
   end
 
   describe "PullNodes" do
-    test "has a nil cursor by default" do
-      assert %PullNodes{since: nil} = %PullNodes{since: nil}
+    test "carries the project and an optional cursor" do
+      msg = %PullNodes{project_id: "p1", since: nil}
+
+      assert decode(msg) == %{"project_id" => "p1", "since" => nil}
     end
   end
 

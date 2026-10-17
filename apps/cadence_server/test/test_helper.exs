@@ -18,3 +18,9 @@ Ecto.Migrator.run(
 )
 
 Ecto.Adapters.SQL.Sandbox.mode(Cadence.Server.Repo, :manual)
+
+git_store_path = Application.get_env(:cadence_server, :git_store_path)
+
+if git_store_path do
+  System.at_exit(fn _ -> File.rm_rf!(git_store_path) end)
+end

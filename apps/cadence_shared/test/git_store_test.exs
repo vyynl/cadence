@@ -272,6 +272,120 @@ defmodule Cadence.Shared.GitStoreTest do
     end
   end
 
+  describe "object transfer" do
+    test "objects_from/2 returns the commit, tree, and reachable blobs", %{dir: dir, repo: repo} do
+      tree =
+        build_file_tree(repo, Path.join(dir, "src"), %{
+          "a.txt" => "a\n",
+          "sub/b.txt" => "b\n"
+        })
+
+      commit = GitStore.write_commit(repo, tree, [], %{name: "a", email: "a@b"}, "root")
+
+      assert {:ok, objects} = GitStore.objects_from(repo, commit)
+      assert [%{sha: ^commit, type: :commit}] = Enum.take(objects, 1)
+
+      shas = Enum.map(objects, & &1.sha)
+      assert Enum.uniq(shas) == shas
+      assert Enum.any?(objects, &(&1.sha == tree and &1.type == :tree))
+      assert Enum.count(objects, &(&1.type == :blob)) == 2
+    end
+
+    test "objects_from/2 deduplicates shared blobs", %{dir: dir, repo: repo} do
+      tree =
+        build_file_tree(repo, Path.join(dir, "src"), %{
+          "a.txt" => "same\n",
+          "b.txt" => "same\n"
+        })
+
+      commit = GitStore.write_commit(repo, tree, [], %{name: "a", email: "a@b"}, "root")
+
+      assert {:ok, objects} = GitStore.objects_from(repo, commit)
+      assert Enum.count(objects, &(&1.type == :blob)) == 1
+    end
+
+    test "objects_from/2 rejects missing objects and non-commits", %{repo: repo} do
+      assert {:error, :missing_object} =
+               GitStore.objects_from(repo, String.duplicate("0", 40))
+
+      blob = GitStore.write_blob(repo, "not a commit")
+      assert {:error, :not_a_commit} = GitStore.objects_from(repo, blob)
+    end
+
+    test "import_objects/2 round-trips into an empty store", %{dir: dir, repo: repo} do
+      tree =
+        build_file_tree(repo, Path.join(dir, "src"), %{
+          "README.md" => "# Cadence\n",
+          "sub/a.txt" => "nested\n"
+        })
+
+      commit = GitStore.write_commit(repo, tree, [], %{name: "a", email: "a@b"}, "root")
+      assert {:ok, objects} = GitStore.objects_from(repo, commit)
+
+      target = GitStore.init(Path.join(dir, "target"), bare: true)
+      assert :ok = GitStore.import_objects(target, objects)
+
+      assert GitStore.read_commit(target, commit).tree == tree
+
+      dest = Path.join(dir, "restored")
+      :ok = GitStore.checkout(target, commit, dest)
+      assert File.read!(Path.join(dest, "README.md")) == "# Cadence\n"
+      assert File.read!(Path.join(dest, "sub/a.txt")) == "nested\n"
+    end
+
+    test "import_objects/2 is idempotent", %{dir: dir, repo: repo} do
+      tree = build_file_tree(repo, Path.join(dir, "src"), %{"a.txt" => "a\n"})
+      commit = GitStore.write_commit(repo, tree, [], %{name: "a", email: "a@b"}, "root")
+      assert {:ok, objects} = GitStore.objects_from(repo, commit)
+
+      target = GitStore.init(Path.join(dir, "target"), bare: true)
+      assert :ok = GitStore.import_objects(target, objects)
+      assert :ok = GitStore.import_objects(target, objects)
+    end
+
+    test "import_objects/2 rejects a SHA mismatch", %{dir: dir, repo: repo} do
+      tree = build_file_tree(repo, Path.join(dir, "src"), %{"a.txt" => "a\n"})
+      commit = GitStore.write_commit(repo, tree, [], %{name: "a", email: "a@b"}, "root")
+      assert {:ok, [object | _]} = GitStore.objects_from(repo, commit)
+
+      assert {:error, {:sha_mismatch, _}} =
+               GitStore.import_objects(GitStore.init(Path.join(dir, "bad"), bare: true), [
+                 %{object | data: object.data <> "tampered"}
+               ])
+    end
+
+    test "import_objects/2 rejects unknown types and malformed payloads", %{dir: dir, repo: repo} do
+      target = GitStore.init(Path.join(dir, "target"), bare: true)
+      sha = String.duplicate("a", 40)
+
+      assert {:error, {:invalid_type, :wat}} =
+               GitStore.import_objects(target, [%{sha: sha, type: :wat, data: "x"}])
+
+      bad_tree_sha = GitStore.write_raw(repo, :tree, "not a tree")
+
+      assert {:error, {:invalid_payload, ^bad_tree_sha, :malformed_tree}} =
+               GitStore.import_objects(target, [
+                 %{sha: bad_tree_sha, type: :tree, data: "not a tree"}
+               ])
+
+      bad_commit_sha = GitStore.write_raw(repo, :commit, "not a commit")
+
+      assert {:error, {:invalid_payload, ^bad_commit_sha, :malformed_commit}} =
+               GitStore.import_objects(target, [
+                 %{sha: bad_commit_sha, type: :commit, data: "not a commit"}
+               ])
+    end
+
+    test "write_raw/3 and has_object?/2", %{repo: repo} do
+      sha = GitStore.write_raw(repo, :blob, "hello world\n")
+
+      assert sha == "3b18e512dba79e4c8300dd08aeb37f8e728b8dad"
+      assert GitStore.has_object?(repo, sha)
+      refute GitStore.has_object?(repo, String.duplicate("0", 40))
+      refute GitStore.has_object?(repo, "short")
+    end
+  end
+
   defp build_file_tree(repo, dir, files) do
     Enum.each(files, fn {path, content} ->
       full = Path.join(dir, path)

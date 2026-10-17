@@ -1,7 +1,7 @@
 # Cadence — Progress
 
 ## Current Phase
-Phase 2b-1 complete → moving into 2b-2 (object transfer + node push/pull)
+Phase 2b-2 complete → moving into 2b-3 (daemon ledger + sync client)
 
 ## Done
 - [x] Read spec + AGENTS.md; audited and resolved all scaffold blockers.
@@ -278,16 +278,39 @@ Phase 2b-1 complete → moving into 2b-2 (object transfer + node push/pull)
 - [x] 152 tests total (89 shared + 48 daemon + 15 server), all green.
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` all clean.
-- [x] Docs updated: spec §4.1/§7.4/§10.1/§11/§12.6/§13/§16 and the Phase 2b
-  plan. Token issuance and pull-cursor decisions marked resolved.
+- [x] Phase 2b-2 — object transfer + node push/pull. `Cadence.Shared.GitStore`
+  gained `objects_from/2` (reachable commit/tree/blob walk, deduped),
+  `import_objects/2` (SHA/type/payload validation, idempotent), `write_raw/3`,
+  and `has_object?/2`; 8 new shared tests.
+- [x] Server sync: `Cadence.Server.ProjectGit` (per-project bare stores under
+  `CAD_GIT_STORE_PATH`), `Cadence.Server.Sync` (membership checks,
+  single-project/parents-first/fail-fast batches, identity node IDs,
+  idempotent retries, sibling support, `nodes.seq` cursor pulls, PubSub
+  broadcast), and `POST`/`GET /sync/nodes` controller actions.
+- [x] Protocol/config: `PullNodes` now carries `project_id`; server env adds
+  `CAD_SYNC_PULL_LIMIT` (default 100); `CAD_GIT_STORE_PATH` is wired at runtime.
+- [x] 24 server tests (9 new sync tests + prior auth/core tests) covering
+  push→pull round-trip into a clean store with matching tree SHAs,
+  idempotency, sibling DAGs, cursor pagination, viewer/non-member denial,
+  unknown projects/cursors, mixed projects, unknown parents, conflicts,
+  tampered objects, broadcast, and missing server objects.
+- [x] 169 tests total (97 shared + 48 daemon + 24 server), all green.
+  `mix format --check-formatted` and compile clean in dev/test/prod.
+- [x] Docs updated: spec §10.2/§10.3/§10.6/§12.6/§16 and the Phase 2b plan.
+  Push batch semantics resolved; project-provisioning gap recorded.
+- [x] Added `docs/phase-2b-3-prep.md`: ledger schema options, worker shape,
+  push/pull flows, `created_by` mapping, config, `Req.Test` testing, and
+  acceptance for the next session.
 
 ## Next
-- Start **Phase 2b milestone 2b-2** per `docs/phase-2b-cloud-sync.md` §12:
-  add `GitStore.objects_from/2` + `import_objects/2` (+ `write_raw/3`), then
-  `POST /sync/nodes` (membership check, import objects, insert nodes, resolve
-  parents via local→cloud mapping, broadcast) and `GET /sync/nodes?since=`
-  (use the `nodes.seq` cursor, GIN-indexed parent lookups, membership-scoped
-  reads). Tests: object round-trip, push/pull round-trip, sibling/conflict.
+- Start **Phase 2b milestone 2b-3** per `docs/phase-2b-3-prep.md` (cold-start
+  brief with the proposed ledger schema, worker shape, push/pull flows,
+  `created_by` mapping, config, and tests). Summary: daemon `SyncLedger`
+  (per-project cursor + pending queue, persistent SQLite), `SyncClient` (Req,
+  bearer token, timeouts), and `Cadence.Daemon.Sync`; enqueue after local
+  commits, import pulled objects/nodes, rehydrate on boot. Use `Req.Test`
+  rather than adding Bypass. Before live end-to-end sync, resolve the
+  server-side project-provisioning gap (spec §16).
 - Deferred picker items (can be picked up any time): Telescope project picker
   (would add a dep to §11) and cloud-sync default selection (lands with 2b).
 - Remaining audit items (lower priority): derive service timeouts from config
@@ -328,9 +351,9 @@ Phase 2b-1 complete → moving into 2b-2 (object transfer + node push/pull)
 - `GET /diff` is another new daemon endpoint (node vs. first parent) serving the
   line diff for the hover preview; documented in §13 Phase 2a. The line diff
   reuses the stdlib `List.myers_difference/2` rather than a new dependency.
-- `GET /sync/me` is a temporary 2b-1 diagnostic route (bearer-key check). It is
-  not part of the final sync surface and should be removed or replaced when real
-  `/sync/nodes` routes land in 2b-2.
+- `GET /sync/me` is a temporary 2b-1 diagnostic route (bearer-key check). Real
+  `/sync/nodes` routes landed in 2b-2; keep or remove `/sync/me` in a later
+  cleanup once it is no longer useful for daemon setup checks.
 - The server's Ash resources currently omit `Ash.Policy.Authorizer` (and its
   SAT-solver dependency); authorization is enforced by controllers. Recorded as
   an open decision in spec §16. Revisit before the web UI calls Ash actions
@@ -343,11 +366,20 @@ Phase 2b-1 complete → moving into 2b-2 (object transfer + node push/pull)
 - New server auth endpoints `/auth/tokens/new` (GET form) and `/auth/tokens`
   (POST issue) are additions beyond the original Phase 2b endpoint list; spec
   §7.4/§13 now document them.
+- Node identity is now identity-mapped (`local_id == cloud_id`), overriding the
+  original plan's server-assigned cloud IDs. Spec §10.2/§10.6 updated; retries
+  are idempotent by construction.
+- **Server-side project provisioning is still missing.** 2b-2 tests seed
+  `Project`/`Membership` rows and assume project IDs match the daemon. Live
+  end-to-end sync needs a registration path; tracked in spec §16.
+- Sync payload size is still unbounded beyond `CAD_SYNC_PULL_LIMIT` node count.
+  Object/body caps and Phase 7 negotiation remain.
 
 ## Last Updated
-2026-10-16 — Phase 2b-1 complete: Phoenix server scaffold, Ash/AshAuthentication
-accounts, GitHub/Google OAuth, OAuth-session-guarded API-key issuance,
-Postgres migrations (including `nodes.seq` cursor and `parents` GIN index),
-`/health` + temporary `/sync/me`, and the server test harness. 152 Elixir tests
-green (89 shared + 48 daemon + 15 server); format and compile clean in
-dev/test/prod. Next session starts 2b-2 (object transfer + node push/pull).
+2026-10-16 — Phase 2b-2 complete: shared Git object export/import, per-project
+server object stores, fail-fast/parents-first node push with identity IDs,
+`nodes.seq` cursor pulls, PubSub broadcast, and 9 new sync tests. Phase 2b-2
+acceptance passes (push→pull into a clean store with identical tree SHAs).
+169 Elixir tests green (97 shared + 48 daemon + 24 server). Next session starts
+2b-3 (daemon ledger + sync client) from `docs/phase-2b-3-prep.md`; server project
+provisioning is the known pre-live-sync gap.

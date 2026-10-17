@@ -75,9 +75,20 @@ if config_env() != :test do
     ],
     secret_key_base: secret_key_base
 
+  git_store_path =
+    System.get_env(
+      "CAD_GIT_STORE_PATH",
+      if(config_env() == :prod,
+        do: "/data/git",
+        else: Path.join(System.user_home!(), ".local/state/cadence/server-git")
+      )
+    )
+
   config :cadence_server,
     public_url: public_url,
     token_signing_secret: System.get_env("CAD_TOKEN_SIGNING_SECRET") || secret_key_base,
+    git_store_path: git_store_path,
+    sync_pull_limit: String.to_integer(System.get_env("CAD_SYNC_PULL_LIMIT", "100")),
     oauth: [
       github: [
         client_id: System.get_env("CAD_OAUTH_GITHUB_CLIENT_ID"),

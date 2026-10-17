@@ -1,10 +1,9 @@
 # Phase 2b — Cloud Sync (implementation plan)
 
-> **Status: 2b-1 implemented; 2b-2 next.** The server scaffold, Ash/Postgres
-> accounts, OAuth routes, API-key issuance, and `/health` + `/sync/me` are in
-> place. This document remains the cold-start brief for the remaining
-> milestones. The canonical contract is `docs/spec.md` (especially §5, §10,
-> §12, §13).
+> **Status: 2b-2 implemented; 2b-3 next.** Server scaffold, auth, Git object
+> transfer, node push/pull, and cursor pulls are in place. This document remains
+> the cold-start brief for the remaining milestones. The canonical contract is
+> `docs/spec.md` (especially §5, §10, §12, §13).
 
 Phase 2b delivers the local↔cloud sync path: a Phoenix server that stores a
 project's DAG, token-authenticated push/pull endpoints, and the daemon's sync
@@ -46,12 +45,12 @@ ledger + client. It is what makes "work on machine A, resume on machine B"
   `GitStore`, `DAG`, `Diff`, and the LLM client.
 - `cadence_daemon` is a working local daemon (watcher → commit queue → SQLite →
   Unix-socket API) with `Session`/`DAG` and an async message queue.
-- `cadence_server` has the 2b-1 scaffold: Postgres `Repo` (AshPostgres),
+- `cadence_server` has the 2b-1/2b-2 scaffold: Postgres `Repo` (AshPostgres),
   `Endpoint`, `Application`, migrations, Ash accounts, OAuth routes, API-key
-  `AuthPlug`, `/health`, and the temporary `/sync/me`. Sync push/pull endpoints
-  and the daemon ledger/client are still pending.
-- `GitStore` still has **no public raw-object read/write or reachability walk** —
-  this is the first thing 2b-2 must add.
+  `AuthPlug`, `/health`, `/sync/me`, per-project object stores, and
+  `POST`/`GET /sync/nodes`. The daemon ledger/client remain pending (2b-3).
+- `GitStore` now exposes `objects_from/2`, `import_objects/2`, `write_raw/3`,
+  and `has_object?/2` (2b-2).
 
 ---
 
@@ -112,30 +111,31 @@ keys are per-user. Project scoping is enforced per request in 2b-2.
   **Resolved:** option 1 — a `nodes.seq bigserial` column (indexed). It is
   Postgres-specific, so it stays out of the shared `Node` schema. The other
   options (`(inserted_at, id)` tuples, `sync_events`) are not used.
-- Optional: `cloud_id`/`local_id` correspondence is tracked daemon-side (§7), so
-  the server stores no local ids.
+- Resolved in 2b-2: the daemon's node UUID **is** the cloud ID (identity
+  mapping), so no separate local→cloud table is needed and retries are
+  idempotent.
 
 ---
 
-## 6. Git object transfer (shared)
+## 6. Git object transfer (shared) — implemented in 2b-2
 
-Add to `Cadence.Shared.GitStore`:
-- `objects_from/2` (`GitStore, commit_sha`) → a map/list of
-  `%{sha, type, data}` for the commit plus every reachable tree/blob (depth-first
-  over `read_tree`).
-- `import_objects/2` (repo, objects) → writes raw objects (validating that each
-  `sha` equals the content hash) — idempotent, content-addressed.
-- Optionally `has_object?/2`.
+Added to `Cadence.Shared.GitStore`:
+- `objects_from/2` → `{:ok, [%{sha, type, data}]}` for the commit plus every
+  reachable tree/blob (depth-first, deduplicated by SHA).
+- `import_objects/2` → validates SHA/type/payload (including tree-entry safety
+  and commit structure) before writing; idempotent and content-addressed.
+- `write_raw/3` (raw payload writer) and `has_object?/2`.
 
-Wire format on the sync channel: `data` is `Base.encode64(raw_object_bytes)`
-(the on-disk zlib form is reconstructed by `GitStore.write_object/3`, which is
-currently private — expose a `write_raw/3`). Phase 7 adds an existence handshake
-so clients stop re-pushing; for 2b, send all objects per node (dedup by the
-content-addressed store).
+Wire format: `%{sha, type, data}` where `data` is `Base.encode64(payload)` and
+`payload` excludes Git's `<type> <size>\0` header. The receiver reconstructs
+the header and verifies the SHA. Phase 7 adds an existence handshake so clients
+stop re-pushing; for 2b, send all objects per node (dedup by the store).
 
 ---
 
 ## 7. Daemon: ledger + client
+
+> Detailed cold-start notes for 2b-3 live in `docs/phase-2b-3-prep.md`.
 
 New modules (spec §5.2):
 - `Cadence.Daemon.SyncLedger` (GenServer, persistent): per-project pull cursor and
@@ -161,19 +161,21 @@ Integration:
 All JSON, matching the existing `Cadence.Shared.Sync.*` structs (§10.6).
 
 - `POST /sync/nodes` — body `%{nodes: [%{local_id, git_objects, metadata}]}`
-  (`PushNodes`). Server: verify membership, import objects, insert nodes
-  (parents resolved via the request's `local_id → cloud_id` map plus already-known
-  nodes), broadcast, respond `PushNodesResponse` with `mappings`.
-- `GET /sync/nodes?since=<cursor>` — (`PullNodes`/`PullNodesResponse`) returns
-  nodes created after the cursor **that the user can see**, plus a new cursor.
+  (`PushNodes`). Server: verify `owner`/`trusted` membership, enforce one
+  project per batch, import/validate objects, insert nodes (local UUID = cloud
+  ID), broadcast, respond with identity `mappings`.
+- `GET /sync/nodes?project_id=<uuid>&since=<cursor>` —
+  (`PullNodes`/`PullNodesResponse`) returns project nodes after the `nodes.seq`
+  cursor, plus a new cursor; capped by `CAD_SYNC_PULL_LIMIT`.
 - `POST /sync/preferences` — `%{project_id, active_heads, session_pointer}`
   (`PushPreferences`); upserts the caller's `Membership`. Pulled as part of the
   node pull response or a companion endpoint (open decision).
 - `GET /health`.
 
-Error semantics: 401 unauthenticated; 403 not a member; 422 malformed/unknown
-parent; 200 with per-node errors inside the response for partial batches
-(open decision: fail-fast vs per-item).
+Error semantics: 401 unauthenticated; 403 not an `owner`/`trusted` member; 404
+unknown project; 400 malformed cursor; 409 node-ID conflict/duplicate; 422
+malformed metadata, mixed projects, unknown/out-of-order parent, or invalid
+objects. Batches are fail-fast (no partial node inserts).
 
 **Conflict handling (§10.4):** if the cloud already has a child of the same
 parent, the pushed node simply becomes a sibling — no merge, no rejection.
@@ -239,11 +241,13 @@ source (`~/.config/cadence/env`).
    harness. *Acceptance met:* `GET /health` 200; `GET /sync/me` 401 without a
    key or with a bad/revoked key, 200 with a valid key; OAuth registration and
    issuance covered by tests.
-2. **2b-2 — Object transfer + node push/pull.** `GitStore` object API;
-   `POST /sync/nodes` (import + insert + map) and `GET /sync/nodes?since=`
-   (`nodes.seq` cursor + GIN-indexed parent queries); server tests for
-   round-trip and siblings. *Acceptance:* push a daemon-built DAG, pull it back
-   on a clean repo, trees identical.
+2. **2b-2 — Object transfer + node push/pull. ✅ Done.** `GitStore`
+   `objects_from/2` + `import_objects/2` + `write_raw/3` + `has_object?/2`;
+   `POST /sync/nodes` (import + insert + identity mapping) and
+   `GET /sync/nodes?project_id=&since=` (`nodes.seq` cursor, `CAD_SYNC_PULL_LIMIT`);
+   PubSub broadcast, auth/membership checks, and server/shared tests.
+   *Acceptance met:* a daemon-built DAG pushes, pulls back into a clean store,
+   and the tree SHAs match; sibling/idempotency/pagination/malformed tests pass.
 3. **2b-3 — Daemon ledger + client.** `SyncLedger`, `SyncClient`, enqueue-on-
    commit, pull-into-local, boot rehydrate; Bypass tests. *Acceptance:* two
    daemon instances converge via a stub server; offline commits flush on
@@ -266,15 +270,17 @@ source (`~/.config/cadence/env`).
 - **LiveView dependency:** `ash_authentication_phoenix` pulls
   `phoenix_live_view` transitively, although 2b-1 defines no LiveViews. No UI
   scope creep intended; Phase 3 still owns the web UI.
-- **Batch semantics**: fail-fast vs. per-item errors in `PushNodesResponse`.
+- ~~**Batch semantics / parent resolution**~~ — resolved in 2b-2: fail-fast,
+  single-project, parents-first, at most one parent per pushed node (melds stay
+  server-side). Unknown/out-of-order parents return 422.
+- **Project provisioning gap:** 2b-2 assumes server `Project`/`Membership` rows
+  already exist and that project IDs match the daemon. A real registration path
+  (web UI, CLI, or sync endpoint) is still needed before live end-to-end sync.
 - **Preferences transport**: folded into the node pull response vs. its own
   endpoint/cursor.
-- **Object payload size**: base64 inflates by ~33%; consider batch limits and
-  (later) negotiation. Not a blocker for 2b.
-- **Parent resolution on push**: a node's parent may not exist server-side yet
-  (e.g., pushed out of order). Decide: require parents first (topological batch
-  order) or accept forward references resolved on a later push.
-- **Auth scope**: per-user vs. per-project tokens.
+- **Object payload size**: base64 inflates by ~33%; `CAD_SYNC_PULL_LIMIT` bounds
+  node count, not bytes. Consider object/body caps and Phase 7 negotiation.
+- **Auth scope**: per-user tokens; project scoping is enforced per request.
 
 Update spec §16 with the durable ones once decided.
 
@@ -282,8 +288,8 @@ Update spec §16 with the durable ones once decided.
 
 ## 14. Spec touch-ups needed
 
-- §10.6: document the Git-object wire format (`Base.encode64` raw) and the
-  preferences transport choice (still pending 2b-2/2b-4).
+- §10.6: Git-object wire format and per-project pull documented in 2b-2;
+  preferences transport still pending 2b-4.
 - §12.6: server set updated in 2b-1 (`CAD_TOKEN_SIGNING_SECRET`); add the new
   daemon sync tunables with 2b-3.
 - §5.2: flip `SyncLedger`/`SyncClient` from “planned” to actual once 2b-3 lands.

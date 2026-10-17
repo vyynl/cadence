@@ -743,13 +743,19 @@ or `config/`.
 ### 10.2 Local → Cloud
 
 - Push: `POST /sync/nodes` with a batch of new local nodes (Git objects +
-  metadata).
-- Server verifies, stores, broadcasts, responds with cloud IDs.
+  metadata). A batch is scoped to one project and must be parents-first.
+- The daemon's local node UUID is the cloud node ID; `PushNodesResponse`
+  returns identity `{local_id, cloud_id}` mappings. This makes retries
+  idempotent.
+- Server verifies membership (`owner`/`trusted`), imports/validates Git
+  objects, inserts nodes, broadcasts, and responds.
 - Local ledger updated.
 
 ### 10.3 Cloud → Local
 
-- Pull: `GET /sync/nodes?since=<cursor>`.
+- Pull: `GET /sync/nodes?project_id=<uuid>&since=<cursor>`.
+- The cursor is the server-only monotonic `nodes.seq` value; pulls are ordered
+  by it and capped by `CAD_SYNC_PULL_LIMIT`.
 - Local daemon fetches and merges into its local Git repo.
 - Updates active heads and session pointer from the user's synced prefs.
 
@@ -768,16 +774,35 @@ This means opening a project on machine B resumes your session from machine A.
 
 ### 10.6 Message formats
 
+Every Git object is transferred as:
+
+```
+%{sha: "40hex", type: "commit" | "tree" | "blob", data: base64(payload)}
+```
+
+`payload` is the raw object data without Git's `<type> <size>\0` header; the
+receiver reconstructs the header and validates that `sha` matches the content.
+
 ```
 SyncMessage.PushNodes
   nodes: [%{local_id, git_objects, metadata}]
 
 SyncMessage.PushNodesResponse
-  mappings: [%{local_id, cloud_id}]
+  mappings: [%{local_id, cloud_id}]          # identity: cloud_id == local_id
 
 SyncMessage.PullNodes
+  project_id: uuid
   since: cursor
   response: %{nodes: [...], cursor: new_cursor}
+
+SyncMessage.PullNodesResponse nodes[]
+  id, project_id, git_commit_sha, parents, flags, pinned, message,
+  session_metadata, created_by, created_at, docs_state, git_objects
+
+SyncMessage.PushNodes metadata
+  project_id, git_commit_sha, parents, flags, message, session_metadata,
+  created_at, docs_state, pinned
+  # created_by is server-owned (the authenticated user)
 
 SyncMessage.PushPreferences
   membership: %{project_id, active_heads, session_pointer}
@@ -997,6 +1022,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_DATABASE_URL` | yes | — | Postgres connection |
 | `CAD_DB_POOL_SIZE` | no | `10` | Ecto pool |
 | `CAD_GIT_STORE_PATH` | no | `/data/git` | Git object storage |
+| `CAD_SYNC_PULL_LIMIT` | no | `100` | Max nodes returned per pull batch |
 | `CAD_ARTIFACT_PATH` | no | `/data/artifacts` | Action outputs |
 | `CAD_OAUTH_GITHUB_CLIENT_ID` | no | — | GitHub OAuth |
 | `CAD_OAUTH_GITHUB_CLIENT_SECRET` | no | — | GitHub OAuth |
@@ -1227,9 +1253,13 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       rely on controller-level checks rather than `Ash.Policy.Authorizer`.
       Revisit when the web UI exposes Ash actions directly; enabling policies
       requires adding `picosat_elixir` or `simple_sat` to spec §11.
-- [ ] **Push batch semantics (Phase 2b):** fail-fast vs. per-item errors, and
-      whether parents must be pushed before children or forward references are
-      allowed. See phase-2b plan §8/§13.
+- [x] **Push batch semantics (Phase 2b):** resolved in 2b-2 — fail-fast,
+      single-project batches, parents-first ordering, and at most one parent per
+      pushed node (melds stay server-side).
+- [ ] **Server-side project provisioning:** how a daemon's local project is
+      registered on the server. 2b-2 assumes the `Project`/`Membership` rows
+      already exist and that IDs match; live end-to-end sync needs a
+      registration path (web UI, CLI, or sync endpoint).
 
 ---
 

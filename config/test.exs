@@ -30,4 +30,7 @@ config :cadence_server, Cadence.ServerWeb.Endpoint,
 config :cadence_server,
   token_signing_secret: String.duplicate("test-token-signing-secret-", 4),
   public_url: "http://localhost:4000",
+  git_store_path:
+    Path.join(System.tmp_dir!(), "cadence_test_git_#{System.unique_integer([:positive])}"),
+  sync_pull_limit: 100,
   oauth: []

@@ -18,6 +18,7 @@ defmodule Cadence.Shared.GitStore do
   @type sha :: String.t()
   @type author :: %{name: String.t(), email: String.t()}
   @type entry :: %{name: String.t(), mode: String.t(), type: :blob | :tree, ref: sha()}
+  @type object :: %{sha: sha(), type: :blob | :tree | :commit, data: binary()}
   @type commit :: %{
           hash: sha(),
           tree: sha(),
@@ -170,6 +171,66 @@ defmodule Cadence.Shared.GitStore do
   end
 
   @doc """
+  Collect a commit and every tree/blob reachable from it.
+
+  Returns the commit object first, followed by its tree and blobs in
+  depth-first order. Objects shared between trees are emitted once. `data` is
+  the raw object payload without Git's `<type> <size>\\0` header.
+  """
+  @spec objects_from(t(), sha()) :: {:ok, [object()]} | {:error, :missing_object | :not_a_commit}
+  def objects_from(repo, commit_sha) do
+    case read_object(repo, commit_sha) do
+      {:commit, _data} ->
+        case collect_objects(repo, commit_sha, MapSet.new()) do
+          {:ok, objects, _visited} -> {:ok, objects}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {_other, _data} ->
+        {:error, :not_a_commit}
+
+      nil ->
+        {:error, :missing_object}
+    end
+  end
+
+  @doc """
+  Import raw objects into `repo`.
+
+  Every object is validated before anything is written: the SHA must match the
+  reconstructed Git object, the type must be known, and trees/commits must be
+  structurally valid. Import is idempotent because the store is
+  content-addressed.
+  """
+  @spec import_objects(t(), [object()]) :: :ok | {:error, term()}
+  def import_objects(repo, objects) when is_list(objects) do
+    with :ok <- validate_objects(objects) do
+      Enum.each(objects, fn %{type: type, data: data} -> write_raw(repo, type, data) end)
+      :ok
+    end
+  end
+
+  def import_objects(_repo, other), do: {:error, {:invalid_objects, other}}
+
+  @doc """
+  Write a raw object payload (`data` excludes the Git header) and return its
+  SHA. This is the low-level primitive used by sync imports.
+  """
+  @spec write_raw(t(), :blob | :tree | :commit, binary()) :: sha()
+  def write_raw(repo, type, data) when type in [:blob, :tree, :commit] and is_binary(data) do
+    write_object(repo, Atom.to_string(type), data)
+  end
+
+  @doc "Return whether an object exists in the store."
+  @spec has_object?(t(), sha()) :: boolean()
+  def has_object?(repo, sha) when is_binary(sha) and byte_size(sha) == 40 do
+    <<dir::binary-size(2)>> <> rest = sha
+    File.exists?(Path.join([repo.home_dir, "objects", dir, rest]))
+  end
+
+  def has_object?(_repo, _sha), do: false
+
+  @doc """
   Materialize the tree referenced by `sha` into `dest` (created if needed).
 
   Files and directories present in the tree are written; files not present in
@@ -215,6 +276,154 @@ defmodule Cadence.Shared.GitStore do
     end)
     |> Enum.sort_by(& &1.path)
   end
+
+  ## Object traversal / import validation
+
+  defp collect_objects(repo, sha, visited) do
+    if MapSet.member?(visited, sha) do
+      {:ok, [], visited}
+    else
+      case read_object(repo, sha) do
+        nil ->
+          {:error, :missing_object}
+
+        {type, data} ->
+          visited = MapSet.put(visited, sha)
+          object = %{sha: sha, type: type, data: data}
+
+          children =
+            case type do
+              :commit -> [%{ref: decode_commit(data, sha).tree}]
+              :tree -> decode_tree(data)
+              :blob -> []
+            end
+
+          case collect_children(repo, children, visited) do
+            {:ok, children, visited} -> {:ok, [object | children], visited}
+            {:error, reason} -> {:error, reason}
+          end
+      end
+    end
+  end
+
+  defp collect_children(repo, entries, visited) do
+    Enum.reduce_while(entries, {:ok, [], visited}, fn
+      %{ref: ref}, {:ok, acc, visited} ->
+        case collect_objects(repo, ref, visited) do
+          {:ok, objects, visited} -> {:cont, {:ok, acc ++ objects, visited}}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+    end)
+  end
+
+  defp validate_objects(objects) do
+    Enum.reduce_while(objects, :ok, fn object, :ok ->
+      case validate_object(object) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp validate_object(%{sha: sha, type: type, data: data})
+       when is_binary(sha) and is_binary(data) do
+    cond do
+      not Regex.match?(~r/^[0-9a-f]{40}$/, sha) ->
+        {:error, {:invalid_sha, sha}}
+
+      true ->
+        case normalize_type(type) do
+          {:ok, normalized} ->
+            cond do
+              object_sha(normalized, data) != sha ->
+                {:error, {:sha_mismatch, sha}}
+
+              true ->
+                case validate_payload(normalized, data) do
+                  :ok -> :ok
+                  {:error, reason} -> {:error, {:invalid_payload, sha, reason}}
+                end
+            end
+
+          :error ->
+            {:error, {:invalid_type, type}}
+        end
+    end
+  end
+
+  defp validate_object(other), do: {:error, {:invalid_object, other}}
+
+  defp normalize_type(type) when type in [:blob, :tree, :commit], do: {:ok, type}
+
+  defp normalize_type(type) when type in ["blob", "tree", "commit"],
+    do: {:ok, String.to_existing_atom(type)}
+
+  defp normalize_type(_type), do: :error
+
+  defp object_sha(type, data) do
+    header = [Atom.to_string(type), " ", Integer.to_string(byte_size(data)), <<0>>]
+
+    :crypto.hash(:sha, IO.iodata_to_binary([header, data]))
+    |> Base.encode16(case: :lower)
+  end
+
+  defp validate_payload(:blob, _data), do: :ok
+
+  defp validate_payload(:tree, data) do
+    try do
+      Enum.reduce_while(decode_tree(data), :ok, fn entry, :ok ->
+        cond do
+          not safe_name?(entry.name) ->
+            {:halt, {:error, :unsafe_tree_entry}}
+
+          entry.mode not in [@dir_mode, @file_mode] ->
+            {:halt, {:error, {:invalid_tree_mode, entry.mode}}}
+
+          entry.type == :tree and entry.mode != @dir_mode ->
+            {:halt, {:error, :invalid_tree_entry}}
+
+          entry.type == :blob and entry.mode != @file_mode ->
+            {:halt, {:error, :invalid_tree_entry}}
+
+          true ->
+            {:cont, :ok}
+        end
+      end)
+    rescue
+      _ -> {:error, :malformed_tree}
+    catch
+      _, _ -> {:error, :malformed_tree}
+    end
+  end
+
+  defp validate_payload(:commit, data) do
+    try do
+      commit = decode_commit(data, String.duplicate("0", 40))
+
+      cond do
+        not sha?(commit.tree) ->
+          {:error, :malformed_commit}
+
+        not is_list(commit.parent) or not Enum.all?(commit.parent, &sha?/1) ->
+          {:error, :malformed_commit}
+
+        not is_map(commit.author) or not is_map(commit.committer) ->
+          {:error, :malformed_commit}
+
+        not is_binary(commit.message) ->
+          {:error, :malformed_commit}
+
+        true ->
+          :ok
+      end
+    rescue
+      _ -> {:error, :malformed_commit}
+    catch
+      _, _ -> {:error, :malformed_commit}
+    end
+  end
+
+  defp sha?(sha), do: is_binary(sha) and Regex.match?(~r/^[0-9a-f]{40}$/, sha)
 
   ## Object storage
 
