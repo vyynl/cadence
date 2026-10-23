@@ -213,6 +213,7 @@ Membership
   role              :atom            # :owner | :trusted | :viewer
   active_heads      :[uuid]          # nodes this user considers active
   session_pointer   :uuid | nil      # node this user is currently editing from
+  preferences_updated_at :utc_datetime_usec  # LWW version (nil = never synced)
   last_seen_at      :utc_datetime
 ```
 
@@ -785,6 +786,14 @@ Active heads and session pointer are stored per-user, per-project. They sync
 with the same pull/push protocol but in a separate `preferences` channel.
 This means opening a project on machine B resumes your session from machine A.
 
+Preference writes are versioned by `preferences_updated_at`; a write wins only
+when its timestamp is strictly newer than the stored value (last-write-wins).
+Reads return the caller’s current preferences alongside the node pull. The
+server also broadcasts a notification when preferences change. The daemon’s
+optional Phoenix Channels connection (Phase 2b-4) is a **latency accelerator
+only**: it carries a `sync_available` hint, never DAG/preference state, and
+polling remains the correctness fallback.
+
 ### 10.6 Message formats
 
 Every Git object is transferred as:
@@ -808,6 +817,11 @@ SyncMessage.PullNodes
   since: cursor
   response: %{nodes: [...], cursor: new_cursor}
 
+SyncMessage.PullNodesResponse
+  nodes: [...]
+  cursor: new_cursor
+  preferences: %{active_heads, session_pointer, updated_at} | nil
+
 SyncMessage.PullNodesResponse nodes[]
   id, project_id, git_commit_sha, parents, flags, pinned, message,
   session_metadata, created_by, created_at, docs_state, git_objects
@@ -818,7 +832,7 @@ SyncMessage.PushNodes metadata
   # created_by is server-owned (the authenticated user)
 
 SyncMessage.PushPreferences
-  membership: %{project_id, active_heads, session_pointer}
+  membership: %{project_id, active_heads, session_pointer, updated_at}
 
 SyncMessage.Union
   project_id, parent_node_ids: [uuid]
@@ -847,6 +861,7 @@ SyncMessage.Union
 | TUI (optional, daemon-side) | `ExRatatui` |
 | Neovim plugin | Lua + plenary.nvim |
 | HTTP client (daemon → cloud) | `Req` |
+| Notification channel (daemon → server) | Phoenix Channels + `slipstream` |
 | ORM / schemas | Ecto (`ecto`, `ecto_sql`) |
 | JSON codec | `Jason` |
 | HTTP server | `Bandit` |
@@ -905,7 +920,9 @@ schemas, with different adapters (SQLite vs Postgres). Name them explicitly:
 - Unix socket API at `~/.local/state/cadence/daemon.sock`.
 - Configuration: environment variables only (see §12.6), supplied via `.env`
   or the process environment; secrets in `~/.config/cadence/env` (chmod 600).
-- Communicates with the server **only** via the HTTP sync protocol (§10).
+- Communicates with the server via the HTTP sync protocol (§10) plus an optional
+  notification-only Phoenix Channels connection (Phase 2b-4). The socket never
+  carries DAG or preference state.
 - No distributed Erlang. No shared process tree with the server.
 
 ### 12.3 Server
@@ -1185,6 +1202,9 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - Push/pull endpoints.
 - Sync ledger, HTTP client, orchestrator, and background worker on the daemon
   side; commit/spawn enqueue hooks and boot rehydrate.
+- `POST /sync/preferences` with LWW versioning; preferences included in node
+  pulls; optional Phoenix Channels `sync_available` notifications; partial-batch
+  failure isolation.
 
 **Phase 3 — Web UI (week 12–13)**
 - LiveView DAG renderer (SVG).

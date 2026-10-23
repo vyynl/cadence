@@ -7,12 +7,13 @@ defmodule Cadence.Shared.Sync.PushPreferences do
   """
 
   @enforce_keys [:project_id]
-  @derive {Jason.Encoder, only: [:project_id, :active_heads, :session_pointer]}
-  defstruct project_id: nil, active_heads: [], session_pointer: nil
+  @derive {Jason.Encoder, only: [:project_id, :active_heads, :session_pointer, :updated_at]}
+  defstruct project_id: nil, active_heads: [], session_pointer: nil, updated_at: nil
 
   @type t :: %__MODULE__{
           project_id: String.t(),
           active_heads: [String.t()],
-          session_pointer: String.t() | nil
+          session_pointer: String.t() | nil,
+          updated_at: String.t() | nil
         }
 end

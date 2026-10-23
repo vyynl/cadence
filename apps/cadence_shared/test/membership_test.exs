@@ -62,6 +62,14 @@ defmodule Cadence.Shared.MembershipTest do
       assert changeset.valid?
     end
 
+    test "casts the preferences version" do
+      version = DateTime.utc_now()
+      changeset = Membership.changeset(Map.put(@valid_attrs, :preferences_updated_at, version))
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_field(changeset, :preferences_updated_at) == version
+    end
+
     test "rejects a malformed supervisor uuid" do
       changeset = Membership.changeset(Map.put(@valid_attrs, :supervisor, "nope"))
 

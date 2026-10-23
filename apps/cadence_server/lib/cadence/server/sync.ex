@@ -41,14 +41,16 @@ defmodule Cadence.Server.Sync do
   @doc """
   Pull nodes for a project after an integer cursor.
 
-  Returns `%{nodes: [...], cursor: next_cursor}`. Nodes include their reachable
-  Git objects, base64-encoded for transport.
+  Returns `%{nodes: [...], cursor: next_cursor, preferences: ...}`. Nodes include
+  their reachable Git objects, base64-encoded for transport. Preferences are
+  the caller's current per-project session state.
   """
   @spec pull_nodes(user(), String.t(), String.t() | nil) ::
-          {:ok, %{nodes: [map()], cursor: String.t()}} | {:error, term()}
+          {:ok, %{nodes: [map()], cursor: String.t(), preferences: map()}}
+          | {:error, term()}
   def pull_nodes(user, project_id, cursor) do
     with {:ok, project_id} <- uuid(project_id),
-         {:ok, _role} <- authorize(user, project_id),
+         {:ok, membership} <- authorize_membership(user, project_id),
          {:ok, since} <- parse_cursor(cursor) do
       limit = Application.get_env(:cadence_server, :sync_pull_limit, 100)
       store = ProjectGit.open(project_id)
@@ -68,10 +70,45 @@ defmodule Cadence.Server.Sync do
             _ -> rows |> Enum.map(& &1.seq) |> Enum.max() |> Integer.to_string()
           end
 
-        {:ok, %{nodes: nodes, cursor: next_cursor}}
+        {:ok,
+         %{
+           nodes: nodes,
+           cursor: next_cursor,
+           preferences: preferences_json(membership)
+         }}
       end
     end
   end
+
+  @doc """
+  Pushes the caller's versioned per-project preferences.
+
+  A write wins only when `updated_at` is strictly newer than the stored
+  `preferences_updated_at`. Stale writes return the current preferences without
+  changing the row. Accepted writes broadcast on the project topic.
+  """
+  @spec push_preferences(user(), map()) ::
+          {:ok, %{preferences: map()}} | {:error, term()}
+  def push_preferences(user, %{"project_id" => project_id} = params) do
+    with {:ok, project_id} <- uuid(project_id),
+         {:ok, membership} <- authorize_membership(user, project_id),
+         {:ok, active_heads} <- uuid_list(params["active_heads"] || []),
+         {:ok, session_pointer} <- optional_uuid(params["session_pointer"]),
+         {:ok, updated_at} <- parse_updated_at(params["updated_at"]) do
+      if newer_preferences?(updated_at, membership.preferences_updated_at) do
+        update_preferences(membership, project_id, user, %{
+          active_heads: active_heads,
+          session_pointer: session_pointer,
+          preferences_updated_at: updated_at,
+          last_seen_at: DateTime.utc_now() |> DateTime.truncate(:second)
+        })
+      else
+        {:ok, %{preferences: preferences_json(membership)}}
+      end
+    end
+  end
+
+  def push_preferences(_user, _params), do: {:error, :invalid_payload}
 
   ## Push
 
@@ -92,13 +129,19 @@ defmodule Cadence.Server.Sync do
   defp single_project(_nodes), do: {:error, :invalid_payload}
 
   defp authorize(user, project_id) do
+    with {:ok, membership} <- authorize_membership(user, project_id) do
+      {:ok, membership.role}
+    end
+  end
+
+  defp authorize_membership(user, project_id) do
     case Repo.get(Project, project_id) do
       nil ->
         {:error, :not_found}
 
       _project ->
         case Repo.get_by(Membership, user_id: user.id, project_id: project_id) do
-          %{role: role} when role in @writable_roles -> {:ok, role}
+          %{role: role} = membership when role in @writable_roles -> {:ok, membership}
           _ -> {:error, :forbidden}
         end
     end
@@ -331,6 +374,67 @@ defmodule Cadence.Server.Sync do
       {:ok, nodes} -> {:ok, Enum.reverse(nodes)}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp update_preferences(membership, project_id, user, attrs) do
+    case membership |> Membership.changeset(attrs) |> Repo.update() do
+      {:ok, membership} ->
+        broadcast_preferences(project_id, user.id)
+        {:ok, %{preferences: preferences_json(membership)}}
+
+      {:error, _changeset} ->
+        {:error, :invalid_preferences}
+    end
+  end
+
+  defp preferences_json(membership) do
+    %{
+      active_heads: membership.active_heads || [],
+      session_pointer: membership.session_pointer,
+      updated_at: NodeCodec.encode_datetime(membership.preferences_updated_at)
+    }
+  end
+
+  defp newer_preferences?(_incoming, nil), do: true
+
+  defp newer_preferences?(incoming, stored) do
+    DateTime.compare(incoming, stored) == :gt
+  end
+
+  defp uuid_list(values) when is_list(values) do
+    values
+    |> Enum.reduce_while({:ok, []}, fn value, {:ok, acc} ->
+      case uuid(value) do
+        {:ok, uuid} -> {:cont, {:ok, [uuid | acc]}}
+        {:error, _reason} -> {:halt, {:error, :invalid_active_heads}}
+      end
+    end)
+    |> case do
+      {:ok, values} -> {:ok, Enum.reverse(values)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp uuid_list(_values), do: {:error, :invalid_active_heads}
+
+  defp optional_uuid(nil), do: {:ok, nil}
+  defp optional_uuid(value), do: uuid(value)
+
+  defp parse_updated_at(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> {:ok, DateTime.shift_zone!(datetime, "Etc/UTC")}
+      _ -> {:error, :invalid_updated_at}
+    end
+  end
+
+  defp parse_updated_at(_value), do: {:error, :invalid_updated_at}
+
+  defp broadcast_preferences(project_id, user_id) do
+    Phoenix.PubSub.broadcast(
+      Cadence.Server.PubSub,
+      "project:#{project_id}",
+      {:preferences_updated, project_id, user_id}
+    )
   end
 
   ## Shared

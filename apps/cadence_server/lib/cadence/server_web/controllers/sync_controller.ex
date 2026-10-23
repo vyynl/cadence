@@ -38,6 +38,13 @@ defmodule Cadence.ServerWeb.SyncController do
     end
   end
 
+  def push_preferences(conn, _params) do
+    case Sync.push_preferences(conn.assigns.current_user, conn.body_params) do
+      {:ok, response} -> json(conn, 200, response)
+      {:error, reason} -> error(conn, reason)
+    end
+  end
+
   def pull_nodes(conn, params) do
     project_id = params["project_id"]
 
@@ -102,5 +109,8 @@ defmodule Cadence.ServerWeb.SyncController do
   defp message(:invalid_session_metadata), do: "invalid session_metadata"
   defp message(:invalid_parent), do: "invalid parent"
   defp message(:invalid_commit_sha), do: "invalid git_commit_sha"
+  defp message(:invalid_active_heads), do: "invalid active_heads"
+  defp message(:invalid_preferences), do: "invalid preferences"
+  defp message(:invalid_updated_at), do: "invalid updated_at"
   defp message(_reason), do: "sync failed"
 end

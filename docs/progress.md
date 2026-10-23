@@ -395,20 +395,37 @@ Phase 2b-2 complete → moving into 2b-3 (daemon ledger + sync client)
       (107 shared + 84 daemon + 30 server), all green. Format and
       `mix compile --warnings-as-errors` clean.
 
+- [x] Phase 2b-4 planning: added `docs/phase-2b-4-prep.md` with LWW preference
+      versioning, partial-batch strategy, and the Phoenix Channels
+      notification-only design. Chose `slipstream` as the daemon channel client
+      (dependency lands in 2b-4d).
+- [x] 2b-4a versioned preferences + server transport: `Membership`
+      `preferences_updated_at` (nullable usec LWW version) + daemon/server
+      migrations; `PushPreferences.updated_at` and
+      `PullNodesResponse.preferences`; `POST /sync/preferences`; pull responses
+      include the caller's preferences; accepted writes set `last_seen_at` and
+      broadcast `{:preferences_updated, project_id, user_id}`; stale writes
+      return current state without touching the row.
+- [x] 7 new tests (1 shared membership; 6 server preference). 228 tests total
+      (108 shared + 84 daemon + 36 server), all green. Format and
+      `mix compile --warnings-as-errors` clean.
+
 ## Next
-- Start **Phase 2b-4 — preferences + broadcast + resilience**:
-  implement `POST /sync/preferences` and pull-side membership preference
-  transport (`PushPreferences`), sync `active_heads`/`session_pointer` A→B,
-  consume server `Phoenix.PubSub` pushes (or a poll trigger) in the daemon, and
-  add partial-batch/retry coverage for the remaining resilience gaps.
-  Then run a two-daemon convergence acceptance test.
+- Start **2b-4b — daemon preferences**:
+  add preference dirty/version state to `SyncLedger`, mark dirty from `Session`
+  switch/commit/spawn, implement `Sync.push_preferences/1`, and apply remote
+  preferences only when newer (filtering `active_heads` to local nodes, without
+  re-marking dirty). Add fake-server push/apply/stale tests.
+- Then **2b-4c** partial-batch `failed_local_id` isolation, **2b-4d** the
+  `slipstream` Phoenix Channels accelerator, and **2b-4e** two-daemon
+  convergence/docs.
 - Deferred picker items: Telescope project picker (would add a dep to §11) and
   the `:CadOpen` short-sync attempt (can call `Sync.sync/1` with a short
   timeout now that orchestration exists).
 - Remaining audit items (lower priority): derive service timeouts from config
   rather than literals; consider `.gitignore`-style patterns beyond `CAD_IGNORE`;
-  `Membership.last_seen_at` is defined but unused; add a unique DB constraint
-  for `project_locations.work_dir` (currently enforced in app code only).
+  add a unique DB constraint for `project_locations.work_dir` (currently
+  enforced in app code only).
 
 ## Blocked
 - (none)
@@ -508,11 +525,24 @@ Phase 2b-2 complete → moving into 2b-3 (daemon ledger + sync client)
   deferred until 2b-4/picker polish.
 - Provisioning is cached per project in `sync_state`; a 404 from push/pull
   clears the marker so the next cycle re-provisions.
+- 2b-4a preference semantics: `preferences_updated_at` is nullable (nil means
+  never synced), and only strictly newer writes are accepted. Stale pushes
+  return 200 with the current server preferences rather than an error, so the
+  daemon can reconcile in 2b-4b.
+- `POST /sync/preferences` is a new endpoint beyond the earlier sync list; spec
+  §10.5/§10.6/§13 now document it. The pull response carries `preferences`
+  alongside nodes/cursor.
+- Preference `active_heads`/`session_pointer` are accepted without verifying
+  that the referenced nodes exist; the daemon will filter `active_heads` when
+  applying remote preferences in 2b-4b.
+- Spec §11 now names `slipstream` as the notification-channel client, but the
+  dependency is not added until 2b-4d. The channel carries only
+  `sync_available` hints; polling remains the correctness fallback.
+- `last_seen_at` is now set on accepted preference writes (previously unused).
 
 ## Last Updated
-2026-10-23 — Slice 4 orchestration + integration complete: `Sync` push/pull
-orchestration, `SyncWorker`/`SyncTasks`, commit/spawn enqueue hooks, boot
-rehydrate/wake, backoff/conflict policy, and end-to-end push/pull/worker tests.
-221 Elixir tests green (107 shared + 84 daemon + 30 server); format and
-`mix compile --warnings-as-errors` clean. Next is Phase 2b-4 (preferences +
-broadcast + two-daemon convergence).
+2026-10-23 — Phase 2b-4a complete: LWW preference versioning, migrations,
+updated sync structs, server preference endpoint/pull transport, broadcast, and
+versioning/auth tests. 228 Elixir tests green (108 shared + 84 daemon + 36
+server); format and `mix compile --warnings-as-errors` clean. Next is 2b-4b
+(daemon preference push/apply).

@@ -1,10 +1,11 @@
 # Phase 2b — Cloud Sync (implementation plan)
 
-> **Status: 2b-2 and 2b-3 implemented; 2b-4 next.** Server scaffold, auth,
+> **Status: 2b-2/2b-3 implemented; 2b-4a complete; 2b-4b next.** Server scaffold, auth,
 > Git object transfer, node push/pull, cursor pulls, the shared `NodeCodec`,
 > the daemon `SyncLedger`/`SyncClient`/`Sync`/`SyncWorker`, and
-> `POST /sync/projects` are in place. Next is preferences + broadcast +
-> resilience. This document remains the cold-start brief for the remaining
+> `POST /sync/projects` are in place. Remaining 2b-4 work: daemon preference
+> push/apply, partial batches, and the Phoenix Channels notification
+> accelerator. This document remains the cold-start brief for the remaining
 > milestones. The canonical contract is `docs/spec.md` (especially §5, §10,
 > §12, §13).
 
@@ -258,9 +259,16 @@ source (`~/.config/cadence/env`).
    *Acceptance met:* push clears pending, a clean store pulls and checks out the
    same DAG, offline commits remain queued, and `Req.Test` covers the paths.
    Full two-instance preferences convergence remains in 2b-4.
-4. **2b-4 — Preferences + broadcast + resilience.** `PushPreferences` both ways,
-   PubSub broadcast on write, retry/backoff, partial-batch semantics.
-   *Acceptance:* session pointer/active heads travel A→B; broadcast fires.
+4. **2b-4 — Preferences + notification channel + resilience.**
+   *2b-4a done:* versioned `Membership.preferences_updated_at`,
+   `PushPreferences`/`PullNodesResponse` updates, `POST /sync/preferences`, and
+   preferences in node pulls. Next: daemon dirty/apply behavior, partial-batch
+   failure isolation, and a notification-only Phoenix Channels socket
+   (`slipstream` in the daemon, `sync:user:<id>` topic, `sync_available`
+   hints) with polling as fallback. See `docs/phase-2b-4-prep.md`.
+   *Acceptance:* session pointer/active heads travel A→B without stale writes
+   clobbering newer state; channel notifications wake the right project;
+   polling still converges when the socket is down.
 
 ---
 

@@ -38,21 +38,35 @@ defmodule Cadence.Shared.SyncTest do
   end
 
   describe "PullNodesResponse" do
-    test "carries nodes and a cursor" do
-      msg = %PullNodesResponse{nodes: [%{id: "n1"}], cursor: "abc"}
+    test "carries nodes, a cursor, and optional preferences" do
+      msg = %PullNodesResponse{
+        nodes: [%{id: "n1"}],
+        cursor: "abc",
+        preferences: %{active_heads: ["n1"], session_pointer: "n1"}
+      }
 
-      assert decode(msg) == %{"nodes" => [%{"id" => "n1"}], "cursor" => "abc"}
+      assert decode(msg) == %{
+               "nodes" => [%{"id" => "n1"}],
+               "cursor" => "abc",
+               "preferences" => %{"active_heads" => ["n1"], "session_pointer" => "n1"}
+             }
     end
   end
 
   describe "PushPreferences" do
-    test "carries active_heads and session_pointer" do
-      msg = %PushPreferences{project_id: "p1", active_heads: ["n1"], session_pointer: "n1"}
+    test "carries active_heads, session_pointer, and version" do
+      msg = %PushPreferences{
+        project_id: "p1",
+        active_heads: ["n1"],
+        session_pointer: "n1",
+        updated_at: "2026-10-23T12:00:00Z"
+      }
 
       assert decode(msg) == %{
                "project_id" => "p1",
                "active_heads" => ["n1"],
-               "session_pointer" => "n1"
+               "session_pointer" => "n1",
+               "updated_at" => "2026-10-23T12:00:00Z"
              }
     end
   end

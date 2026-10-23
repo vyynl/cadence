@@ -27,6 +27,7 @@ defmodule Cadence.Shared.Membership do
     field(:supervisor, Ecto.UUID)
     field(:active_heads, {:array, Ecto.UUID}, default: [])
     field(:session_pointer, Ecto.UUID)
+    field(:preferences_updated_at, :utc_datetime_usec)
     field(:last_seen_at, :utc_datetime)
   end
 
@@ -47,6 +48,7 @@ defmodule Cadence.Shared.Membership do
       :supervisor,
       :active_heads,
       :session_pointer,
+      :preferences_updated_at,
       :last_seen_at
     ])
     |> validate_required([:user_id, :project_id, :role])

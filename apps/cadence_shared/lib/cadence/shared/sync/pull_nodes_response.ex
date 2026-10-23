@@ -7,8 +7,12 @@ defmodule Cadence.Shared.Sync.PullNodesResponse do
   """
 
   @enforce_keys [:nodes, :cursor]
-  @derive {Jason.Encoder, only: [:nodes, :cursor]}
-  defstruct nodes: [], cursor: nil
+  @derive {Jason.Encoder, only: [:nodes, :cursor, :preferences]}
+  defstruct nodes: [], cursor: nil, preferences: nil
 
-  @type t :: %__MODULE__{nodes: [map()], cursor: String.t() | nil}
+  @type t :: %__MODULE__{
+          nodes: [map()],
+          cursor: String.t() | nil,
+          preferences: map() | nil
+        }
 end
