@@ -1,7 +1,7 @@
 # Cadence — Progress
 
 ## Current Phase
-Phase 2b-2 complete → moving into 2b-3 (daemon ledger + sync client)
+Phase 2b-4a complete/committed → 2b-4b (daemon preference push/apply)
 
 ## Done
 - [x] Read spec + AGENTS.md; audited and resolved all scaffold blockers.
@@ -409,13 +409,17 @@ Phase 2b-2 complete → moving into 2b-3 (daemon ledger + sync client)
 - [x] 7 new tests (1 shared membership; 6 server preference). 228 tests total
       (108 shared + 84 daemon + 36 server), all green. Format and
       `mix compile --warnings-as-errors` clean.
+- [x] Committed 2b-4a as `25d6dfb`; added
+      `docs/phase-2b-4b-prep.md` with the cold-start daemon-preference brief.
 
 ## Next
+- **Read `docs/phase-2b-4b-prep.md` first.**
 - Start **2b-4b — daemon preferences**:
-  add preference dirty/version state to `SyncLedger`, mark dirty from `Session`
-  switch/commit/spawn, implement `Sync.push_preferences/1`, and apply remote
-  preferences only when newer (filtering `active_heads` to local nodes, without
-  re-marking dirty). Add fake-server push/apply/stale tests.
+  add `sync_preferences` state to `SyncLedger`, set
+  `Membership.preferences_updated_at` in `Session` switch/commit/spawn, extend
+  `SyncClient.pull` to retain preferences, add `SyncClient.push_preferences`,
+  and implement `Sync.push_preferences`/remote apply-if-newer. Do not add
+  `slipstream` yet.
 - Then **2b-4c** partial-batch `failed_local_id` isolation, **2b-4d** the
   `slipstream` Phoenix Channels accelerator, and **2b-4e** two-daemon
   convergence/docs.
@@ -541,8 +545,7 @@ Phase 2b-2 complete → moving into 2b-3 (daemon ledger + sync client)
 - `last_seen_at` is now set on accepted preference writes (previously unused).
 
 ## Last Updated
-2026-10-23 — Phase 2b-4a complete: LWW preference versioning, migrations,
-updated sync structs, server preference endpoint/pull transport, broadcast, and
-versioning/auth tests. 228 Elixir tests green (108 shared + 84 daemon + 36
-server); format and `mix compile --warnings-as-errors` clean. Next is 2b-4b
-(daemon preference push/apply).
+2026-10-23 — 2b-4a committed as `25d6dfb`; cold-start handoff written in
+`docs/phase-2b-4b-prep.md`. 228 Elixir tests green (108 shared + 84 daemon + 36
+server); format and `mix compile --warnings-as-errors` clean. Next session
+starts 2b-4b (daemon preference push/apply).

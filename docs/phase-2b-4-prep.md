@@ -1,7 +1,8 @@
 # Phase 2b-4 prep — Preferences, notification channel, resilience
 
-> Status: **2b-4a complete** (versioned preferences + server preference
-> transport); 2b-4b next. Canonical contract: `docs/spec.md` §4.3, §10.5,
+> Status: **2b-4a complete/committed** (versioned preferences + server
+> preference transport); 2b-4b next. Cold-start brief for the next session:
+> `docs/phase-2b-4b-prep.md`. Canonical contract: `docs/spec.md` §4.3, §10.5,
 > §10.6, §11, §13.
 
 Phase 2b-4 makes multi-machine continuity real and tightens sync failure
