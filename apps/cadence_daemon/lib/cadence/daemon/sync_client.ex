@@ -1,0 +1,140 @@
+defmodule Cadence.Daemon.SyncClient do
+  @moduledoc """
+  Thin `Req` client for the cloud sync protocol (spec §10).
+
+  Every function returns tagged tuples and performs exactly one HTTP request;
+  retry/backoff policy belongs to the caller (`Cadence.Daemon.Sync`). The client
+  reads `CAD_SERVER_URL`/`CAD_AUTH_TOKEN` through `Cadence.Daemon.Env` and is
+  injectable with `Req.Test` via `Env.sync_req_options/0`.
+  """
+
+  alias Cadence.Daemon.Env
+  alias Cadence.Shared.Project
+
+  @doc "Whether a server URL and bearer token are configured."
+  @spec configured?() :: boolean()
+  def configured? do
+    present?(Env.server_url()) and present?(Env.auth_token())
+  end
+
+  @doc "Returns the authenticated server user ID."
+  @spec me() :: {:ok, Ecto.UUID.t()} | {:error, term()}
+  def me do
+    with {:ok, body} <- request(:get, "/sync/me") do
+      case body do
+        %{"user_id" => user_id} when is_binary(user_id) -> {:ok, user_id}
+        _ -> {:error, {:invalid_response, body}}
+      end
+    end
+  end
+
+  @doc """
+  Pushes a batch of encoded nodes.
+
+  `nodes` are the wire maps produced by `Cadence.Shared.Sync.NodeCodec`.
+  Returns `%{mappings: [%{"local_id" => ..., "cloud_id" => ...}]}`.
+  """
+  @spec push([map()] | %{nodes: [map()]}) ::
+          {:ok, %{mappings: [map()]}} | {:error, term()}
+  def push(%{nodes: nodes}), do: push(nodes)
+
+  def push(nodes) when is_list(nodes) do
+    with {:ok, body} <- request(:post, "/sync/nodes", json: %{nodes: nodes}) do
+      case body do
+        %{"mappings" => mappings} when is_list(mappings) ->
+          {:ok, %{mappings: mappings}}
+
+        _ ->
+          {:error, {:invalid_response, body}}
+      end
+    end
+  end
+
+  @doc """
+  Pulls nodes for `project_id` after `cursor` (`nil` starts from the beginning).
+
+  Returns `%{nodes: [...], cursor: next_cursor}`.
+  """
+  @spec pull(Ecto.UUID.t(), String.t() | nil) ::
+          {:ok, %{nodes: [map()], cursor: String.t()}} | {:error, term()}
+  def pull(project_id, cursor \\ nil) do
+    params =
+      [project_id: project_id]
+      |> maybe_put(:since, cursor)
+
+    with {:ok, body} <- request(:get, "/sync/nodes", params: params) do
+      case body do
+        %{"nodes" => nodes, "cursor" => next_cursor}
+        when is_list(nodes) and is_binary(next_cursor) ->
+          {:ok, %{nodes: nodes, cursor: next_cursor}}
+
+        _ ->
+          {:error, {:invalid_response, body}}
+      end
+    end
+  end
+
+  @doc """
+  Provisions the local project on the server.
+
+  The server uses the same project ID and makes the authenticated user the
+  owner. Repeat calls are idempotent.
+  """
+  @spec provision(Project.t()) :: {:ok, map()} | {:error, term()}
+  def provision(%Project{} = project) do
+    payload = %{
+      project: %{
+        id: project.id,
+        name: project.name,
+        slug: project.slug
+      }
+    }
+
+    with {:ok, body} <- request(:post, "/sync/projects", json: payload) do
+      case body do
+        %{"project" => project} when is_map(project) -> {:ok, project}
+        _ -> {:error, {:invalid_response, body}}
+      end
+    end
+  end
+
+  defp request(method, path, opts \\ []) do
+    with {:ok, server_url} <- required_config(Env.server_url()),
+         {:ok, token} <- required_config(Env.auth_token()) do
+      request_opts =
+        [
+          method: method,
+          url: path,
+          headers: [
+            {"authorization", "Bearer #{token}"},
+            {"accept", "application/json"}
+          ],
+          receive_timeout: Env.sync_request_timeout_ms(),
+          retry: false
+        ]
+        |> Keyword.merge(opts)
+        |> Keyword.merge(Env.sync_req_options())
+
+      req = Req.new(base_url: String.trim_trailing(server_url, "/"))
+
+      case Req.request(req, request_opts) do
+        {:ok, %Req.Response{status: status, body: body}} when status in 200..299 ->
+          {:ok, body}
+
+        {:ok, %Req.Response{status: status, body: body}} ->
+          {:error, {:http, status, body}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp required_config(value) when is_binary(value) and value != "", do: {:ok, value}
+  defp required_config(_value), do: {:error, :not_configured}
+
+  defp present?(value), do: is_binary(value) and value != ""
+
+  defp maybe_put(params, _key, nil), do: params
+  defp maybe_put(params, key, value), do: Keyword.put(params, key, value)
+end

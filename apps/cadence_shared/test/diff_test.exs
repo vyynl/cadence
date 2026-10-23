@@ -75,6 +75,20 @@ defmodule Cadence.Shared.DiffTest do
     assert file.lines == []
   end
 
+  test "marks oversized text diffs truncated without running Myers" do
+    change = %{
+      path: "big.txt",
+      status: :modified,
+      old_content: String.duplicate("a", 100),
+      new_content: String.duplicate("b", 100)
+    }
+
+    %{files: [file]} = Diff.files([change], max_bytes: 10)
+    assert file.truncated
+    assert file.lines == []
+    refute file.binary
+  end
+
   defp kinds(file), do: Enum.map(file.lines, & &1.kind)
   defp texts(file), do: Enum.map(file.lines, & &1.text)
 end

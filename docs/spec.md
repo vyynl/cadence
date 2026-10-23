@@ -150,7 +150,9 @@ job is to produce the tree; the human's job is to verify it.
   implicitly superseded and removed from the user's active heads.
 - **Spawn** — pointer advances to the new sandbox child. The parent **stays**
   in the user's active heads, reachable with a single `:CadSwitch`.
-- **Switch** — moves the pointer to any active head without creating a node.
+- **Switch** — moves the pointer to any node in the project's DAG without
+  creating a node. Active heads are the usual targets and what the picker
+  normally surfaces.
 
 ---
 
@@ -266,7 +268,8 @@ and how credit is displayed.
 - Queue commits when offline; flush on reconnect.
 - Run the doc-automation sub-process before final commit.
 - Serve a Unix socket / local HTTP API to the Neovim plugin.
-- Maintain a sync ledger mapping local nodes ↔ cloud nodes.
+- Maintain a sync ledger for pending pushes, per-project pull cursors, and
+  small sync metadata (server user ID, provisioning/backfill markers).
 
 ### 5.2 Supervision tree
 
@@ -280,15 +283,17 @@ Cadence.Daemon.Application
 │   └── Cadence.Daemon.ProjectSupervisor  (per project, :rest_for_one)
 │       ├── Cadence.Daemon.CommitQueue (serialized commits per project)
 │       └── Cadence.Daemon.Watcher     (file_system + debounce)
-├── Cadence.Daemon.API                 (Bandit/Plug, Unix socket)
-├── Cadence.Daemon.SyncLedger          (planned: GenServer, persistent state)
-└── Cadence.Daemon.SyncClient          (planned: HTTP client to cloud, retry)
+├── Cadence.Daemon.SyncLedger          (persistent pending queue + cursors)
+├── Cadence.Daemon.SyncTasks           (Task.Supervisor for network cycles)
+├── Cadence.Daemon.SyncWorker          (scheduler: one task per project)
+└── Cadence.Daemon.API                 (Bandit/Plug, Unix socket)
 ```
 
-`Cadence.Shared.GitStore` is stateless and lives in `cadence_shared`; each
-project's `CommitQueue` holds a handle to its object store. The doc agent
-(planned) will run as a supervised `Task` so it can be cancelled if a new
-commit arrives.
+`Cadence.Daemon.SyncClient` is a stateless Req wrapper used by sync tasks (it
+is not a supervised child). `Cadence.Shared.GitStore` is stateless and lives in
+`cadence_shared`; each project's `CommitQueue` holds a handle to its object
+store. The doc agent (planned) will run as a supervised `Task` so it can be
+cancelled if a new commit arrives.
 
 **Design notes:**
 
@@ -302,6 +307,10 @@ commit arrives.
 - `ProjectSupervisor` uses `:rest_for_one`, so if the commit queue crashes the
   watcher that feeds it restarts too; a watcher-only crash restarts just the
   watcher.
+- `SyncWorker` is a single scheduler; each project's push/pull cycle runs in a
+  `SyncTasks` task. Network failures never block commits or the daemon API.
+  Commits enqueue asynchronously, the worker retries with backoff, and boot
+  rehydrate flushes pending work when sync is configured.
 
 ### 5.3 Commit pipeline
 
@@ -382,7 +391,7 @@ Diff:
 |---|---|
 | `:CadOpen` | Open the DAG picker. Default selection = most-recent node by current user (after attempting a short cloud sync; fall back to local). |
 | `:CadSpawn <name>` | Spawn a sandbox child from the current node. **Session pointer moves to the new node.** Parent stays in active heads. |
-| `:CadSwitch <label>` | Move session pointer to another active head without creating a node. |
+| `:CadSwitch <label>` | Move the session pointer to another node in the project (active heads are the usual targets) without creating a node. |
 | `:CadUnion` | Enter picker in union mode. CR toggles `✓`. `<C-s>` submits to server. |
 | `:CadDocDiff` | Show the doc diff attached to the current node. |
 | `:CadDocSync` | Manually trigger doc automation. |
@@ -742,6 +751,10 @@ or `config/`.
 
 ### 10.2 Local → Cloud
 
+- Provision: before the first push, a daemon ensures the project exists via
+  `POST /sync/projects` with its local project ID and metadata. The endpoint is
+  idempotent by project ID; the first caller becomes the owner and repeat calls
+  from an owner/trusted member succeed.
 - Push: `POST /sync/nodes` with a batch of new local nodes (Git objects +
   metadata). A batch is scoped to one project and must be parents-first.
 - The daemon's local node UUID is the cloud node ID; `PushNodesResponse`
@@ -1041,8 +1054,8 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `CAD_SERVER_URL` | yes | — | Cloud sync target |
-| `CAD_AUTH_TOKEN` | yes | — | Personal access token |
+| `CAD_SERVER_URL` | no | — | Cloud sync target (absence ⇒ offline mode) |
+| `CAD_AUTH_TOKEN` | no | — | Personal access token (absence ⇒ offline mode) |
 | `CAD_PROJECTS_ROOT` | no | `~/code` | Where projects live |
 | `CAD_STATE_DIR` | no | `~/.local/state/cadence` | Socket, cache |
 | `CAD_CONFIG_DIR` | no | `~/.config/cadence` | TOML + env |
@@ -1051,11 +1064,28 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_LLM_MODEL` | no | provider default | Same as server |
 | `CAD_LLM_BASE_URL` | no | provider default | Same as server |
 | `CAD_WATCH_DEBOUNCE_MS` | no | `2000` | Idle before commit |
+| `CAD_WATCH_BACKEND` | no | `fs_inotify` | `file_system` backend (`fs_poll` in tests) |
+| `CAD_LOCAL_USER_ID` | no | `00000000-0000-0000-0000-000000000000` | Local user UUID used for `created_by` and membership |
+| `CAD_GIT_AUTHOR_NAME` | no | `cadence` | Author name written into local Git commits |
+| `CAD_GIT_AUTHOR_EMAIL` | no | `cadence@local` | Author email written into local Git commits |
+| `CAD_SYNC_ENABLED` | no | `true` | Enable automatic background sync |
 | `CAD_SYNC_TIMEOUT_MS` | no | `500` | Picker sync attempt |
+| `CAD_SYNC_REQUEST_TIMEOUT_MS` | no | `5000` | Background sync HTTP request timeout |
+| `CAD_SYNC_INTERVAL_MS` | no | `30000` | Delay between background sync passes |
+| `CAD_SYNC_RETRY_BACKOFF_MS` | no | `30000` | Base retry delay for failed sync operations |
+| `CAD_SYNC_MAX_ATTEMPTS` | no | `10` | Max automatic retries for a pending node |
+| `CAD_SYNC_PUSH_LIMIT` | no | `100` | Max nodes per push batch |
 | `CAD_IGNORE` | no | `_build,deps,node_modules,.venv,venv,__pycache__,.elixir_ls,target` | Comma-separated entry names skipped when snapshotting the working tree (`.git` is always skipped) |
+| `CAD_LLM_TIMEOUT_MS` | no | `5000` | LLM request timeout |
+| `CAD_LLM_RATE_LIMIT` | no | `10` | LLM calls per rate window |
+| `CAD_LLM_RATE_SCALE` | no | `60000` | Rate window in milliseconds |
+| `CAD_LLM_DIFF_MAX_BYTES` | no | `32768` | Max diff bytes sent to the LLM |
+| `CAD_LLM_RETRY_ATTEMPTS` | no | `3` | Max background commit-message attempts |
 | `CAD_LLM_RETRY_INITIAL_MS` | no | `0` | Delay before the first background commit-message attempt |
+| `CAD_LLM_RETRY_BACKOFF_MS` | no | `5000` | Linear retry backoff unit |
 | `CAD_DIFF_MAX_FILES` | no | `20` | Max files in a node diff (hover preview) |
 | `CAD_DIFF_MAX_LINES_PER_FILE` | no | `400` | Max diff lines per file |
+| `CAD_DIFF_MAX_BYTES` | no | `262144` | Max combined file size diffed for a hover preview; larger files are marked truncated without running Myers |
 
 ### 12.7 First-boot sequence (server)
 
@@ -1151,8 +1181,10 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   accounts, and a server-only `nodes.seq bigserial` pull cursor.
 - `GET /sync/me` bearer-check diagnostic (temporary; replaced by real sync
   routes in 2b-2).
+- Project provisioning endpoint (`POST /sync/projects`).
 - Push/pull endpoints.
-- Sync ledger on daemon side.
+- Sync ledger, HTTP client, orchestrator, and background worker on the daemon
+  side; commit/spawn enqueue hooks and boot rehydrate.
 
 **Phase 3 — Web UI (week 12–13)**
 - LiveView DAG renderer (SVG).
@@ -1256,10 +1288,11 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - [x] **Push batch semantics (Phase 2b):** resolved in 2b-2 — fail-fast,
       single-project batches, parents-first ordering, and at most one parent per
       pushed node (melds stay server-side).
-- [ ] **Server-side project provisioning:** how a daemon's local project is
-      registered on the server. 2b-2 assumes the `Project`/`Membership` rows
-      already exist and that IDs match; live end-to-end sync needs a
-      registration path (web UI, CLI, or sync endpoint).
+- [x] **Server-side project provisioning:** resolved in 2b-3 — the daemon
+      ensures its local project exists via the idempotent
+      `POST /sync/projects` endpoint (`Cadence.Server.Projects.provision/2`).
+      The first caller becomes the owner; existing owners/trusted members can
+      re-provision.
 
 ---
 

@@ -1,9 +1,12 @@
 # Phase 2b — Cloud Sync (implementation plan)
 
-> **Status: 2b-2 implemented; 2b-3 next.** Server scaffold, auth, Git object
-> transfer, node push/pull, and cursor pulls are in place. This document remains
-> the cold-start brief for the remaining milestones. The canonical contract is
-> `docs/spec.md` (especially §5, §10, §12, §13).
+> **Status: 2b-2 and 2b-3 implemented; 2b-4 next.** Server scaffold, auth,
+> Git object transfer, node push/pull, cursor pulls, the shared `NodeCodec`,
+> the daemon `SyncLedger`/`SyncClient`/`Sync`/`SyncWorker`, and
+> `POST /sync/projects` are in place. Next is preferences + broadcast +
+> resilience. This document remains the cold-start brief for the remaining
+> milestones. The canonical contract is `docs/spec.md` (especially §5, §10,
+> §12, §13).
 
 Phase 2b delivers the local↔cloud sync path: a Phoenix server that stores a
 project's DAG, token-authenticated push/pull endpoints, and the daemon's sync
@@ -248,10 +251,13 @@ source (`~/.config/cadence/env`).
    PubSub broadcast, auth/membership checks, and server/shared tests.
    *Acceptance met:* a daemon-built DAG pushes, pulls back into a clean store,
    and the tree SHAs match; sibling/idempotency/pagination/malformed tests pass.
-3. **2b-3 — Daemon ledger + client.** `SyncLedger`, `SyncClient`, enqueue-on-
-   commit, pull-into-local, boot rehydrate; Bypass tests. *Acceptance:* two
-   daemon instances converge via a stub server; offline commits flush on
-   reconnect.
+3. **2b-3 — Daemon ledger + client. ✅ Done.** Shared `NodeCodec`, daemon sync
+   config, `create_sync_tables` migration, `SyncLedger`, `SyncClient`, `Sync`
+   orchestration, `SyncWorker`/`SyncTasks`, idempotent `POST /sync/projects`,
+   commit/spawn enqueue hooks, boot rehydrate, and backoff/conflict policy.
+   *Acceptance met:* push clears pending, a clean store pulls and checks out the
+   same DAG, offline commits remain queued, and `Req.Test` covers the paths.
+   Full two-instance preferences convergence remains in 2b-4.
 4. **2b-4 — Preferences + broadcast + resilience.** `PushPreferences` both ways,
    PubSub broadcast on write, retry/backoff, partial-batch semantics.
    *Acceptance:* session pointer/active heads travel A→B; broadcast fires.

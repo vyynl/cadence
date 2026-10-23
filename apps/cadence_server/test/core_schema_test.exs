@@ -29,6 +29,7 @@ defmodule Cadence.Server.CoreSchemaTest do
         git_commit_sha: String.duplicate("a", 40),
         flags: [:"in-progress"],
         created_by: user_id,
+        created_at: DateTime.utc_now(),
         docs_state: :pending
       })
       |> Repo.insert!()

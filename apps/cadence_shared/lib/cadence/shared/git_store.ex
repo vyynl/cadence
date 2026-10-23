@@ -108,33 +108,34 @@ defmodule Cadence.Shared.GitStore do
       dir
       |> File.ls!()
       |> Enum.sort()
-      |> Enum.flat_map(fn name ->
-        path = Path.join(dir, name)
-
-        if ignored?(name, ignore) do
-          []
-        else
-          case File.lstat!(path).type do
-            :directory ->
-              [%{name: name, mode: @dir_mode, type: :tree, ref: build_tree(repo, path, opts)}]
-
-            :regular ->
-              [
-                %{
-                  name: name,
-                  mode: @file_mode,
-                  type: :blob,
-                  ref: write_blob(repo, File.read!(path))
-                }
-              ]
-
-            _ ->
-              []
-          end
-        end
-      end)
+      |> Enum.flat_map(&tree_entry(repo, dir, &1, ignore, opts))
 
     write_tree(repo, entries)
+  end
+
+  defp tree_entry(repo, dir, name, ignore, opts) do
+    if ignored?(name, ignore) do
+      []
+    else
+      path = Path.join(dir, name)
+
+      case File.lstat(path) do
+        {:ok, %File.Stat{type: :directory}} ->
+          [%{name: name, mode: @dir_mode, type: :tree, ref: build_tree(repo, path, opts)}]
+
+        {:ok, %File.Stat{type: :regular}} ->
+          case File.read(path) do
+            {:ok, data} ->
+              [%{name: name, mode: @file_mode, type: :blob, ref: write_blob(repo, data)}]
+
+            {:error, :enoent} ->
+              []
+          end
+
+        _ ->
+          []
+      end
+    end
   end
 
   defp ignored?(name, ignore), do: name in @always_ignored or name in ignore
@@ -181,8 +182,8 @@ defmodule Cadence.Shared.GitStore do
   def objects_from(repo, commit_sha) do
     case read_object(repo, commit_sha) do
       {:commit, _data} ->
-        case collect_objects(repo, commit_sha, MapSet.new()) do
-          {:ok, objects, _visited} -> {:ok, objects}
+        case collect_objects(repo, commit_sha, MapSet.new(), []) do
+          {:ok, objects, _visited} -> {:ok, Enum.reverse(objects)}
           {:error, reason} -> {:error, reason}
         end
 
@@ -279,9 +280,9 @@ defmodule Cadence.Shared.GitStore do
 
   ## Object traversal / import validation
 
-  defp collect_objects(repo, sha, visited) do
+  defp collect_objects(repo, sha, visited, acc) do
     if MapSet.member?(visited, sha) do
-      {:ok, [], visited}
+      {:ok, acc, visited}
     else
       case read_object(repo, sha) do
         nil ->
@@ -289,7 +290,7 @@ defmodule Cadence.Shared.GitStore do
 
         {type, data} ->
           visited = MapSet.put(visited, sha)
-          object = %{sha: sha, type: type, data: data}
+          acc = [%{sha: sha, type: type, data: data} | acc]
 
           children =
             case type do
@@ -298,19 +299,16 @@ defmodule Cadence.Shared.GitStore do
               :blob -> []
             end
 
-          case collect_children(repo, children, visited) do
-            {:ok, children, visited} -> {:ok, [object | children], visited}
-            {:error, reason} -> {:error, reason}
-          end
+          collect_children(repo, children, visited, acc)
       end
     end
   end
 
-  defp collect_children(repo, entries, visited) do
-    Enum.reduce_while(entries, {:ok, [], visited}, fn
+  defp collect_children(repo, entries, visited, acc) do
+    Enum.reduce_while(entries, {:ok, acc, visited}, fn
       %{ref: ref}, {:ok, acc, visited} ->
-        case collect_objects(repo, ref, visited) do
-          {:ok, objects, visited} -> {:cont, {:ok, acc ++ objects, visited}}
+        case collect_objects(repo, ref, visited, acc) do
+          {:ok, acc, visited} -> {:cont, {:ok, acc, visited}}
           {:error, reason} -> {:halt, {:error, reason}}
         end
     end)
@@ -445,15 +443,48 @@ defmodule Cadence.Shared.GitStore do
 
     case File.read(path) do
       {:ok, compressed} ->
-        bin = :zlib.uncompress(compressed)
-        [header, data] = String.split(bin, <<0>>, parts: 2)
-        [type, _size] = String.split(header, " ", parts: 2)
-        {String.to_atom(type), data}
+        decode_object_file(compressed)
 
-      {:error, :enoent} ->
+      {:error, _reason} ->
         nil
     end
   end
+
+  defp decode_object_file(compressed) do
+    try do
+      bin = :zlib.uncompress(compressed)
+
+      case :binary.split(bin, <<0>>) do
+        [header, data] -> decode_object_header(header, data)
+        _ -> nil
+      end
+    rescue
+      _ -> nil
+    catch
+      _, _ -> nil
+    end
+  end
+
+  defp decode_object_header(header, data) do
+    case String.split(header, " ", parts: 2) do
+      [type, size] ->
+        with {:ok, type} <- existing_object_type(type),
+             {size, ""} <- Integer.parse(size),
+             true <- size == byte_size(data) do
+          {type, data}
+        else
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp existing_object_type("blob"), do: {:ok, :blob}
+  defp existing_object_type("tree"), do: {:ok, :tree}
+  defp existing_object_type("commit"), do: {:ok, :commit}
+  defp existing_object_type(_type), do: :error
 
   ## Tree encoding
 
@@ -605,16 +636,20 @@ defmodule Cadence.Shared.GitStore do
   defp flatten_tree(_repo, nil), do: %{}
 
   defp flatten_tree(repo, sha) do
-    repo
-    |> read_tree(sha)
-    |> Enum.reduce(%{}, fn
-      %{type: :blob, name: name, ref: ref}, acc ->
-        Map.put(acc, name, ref)
+    case read_tree(repo, sha) do
+      nil ->
+        raise ArgumentError, "missing tree object #{sha}"
 
-      %{type: :tree, name: name, ref: ref}, acc ->
-        sub = flatten_tree(repo, ref) |> prefix_keys(name)
-        Map.merge(acc, sub)
-    end)
+      entries ->
+        Enum.reduce(entries, %{}, fn
+          %{type: :blob, name: name, ref: ref}, acc ->
+            Map.put(acc, name, ref)
+
+          %{type: :tree, name: name, ref: ref}, acc ->
+            sub = flatten_tree(repo, ref) |> prefix_keys(name)
+            Map.merge(acc, sub)
+        end)
+    end
   end
 
   defp prefix_keys(map, prefix) do

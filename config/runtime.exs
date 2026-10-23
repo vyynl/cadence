@@ -21,7 +21,11 @@ if config_env() != :test do
          "fs_poll" -> :fs_poll
          _ -> :fs_inotify
        end),
-    local_user_id: System.get_env("CAD_LOCAL_USER_ID", "00000000-0000-0000-0000-000000000000")
+    local_user_id: System.get_env("CAD_LOCAL_USER_ID", "00000000-0000-0000-0000-000000000000"),
+    git_author: %{
+      name: System.get_env("CAD_GIT_AUTHOR_NAME", "cadence"),
+      email: System.get_env("CAD_GIT_AUTHOR_EMAIL", "cadence@local")
+    }
 
   config :cadence_daemon,
     llm_timeout_ms: String.to_integer(System.get_env("CAD_LLM_TIMEOUT_MS", "5000")),
@@ -35,7 +39,20 @@ if config_env() != :test do
   config :cadence_daemon,
     diff_max_files: String.to_integer(System.get_env("CAD_DIFF_MAX_FILES", "20")),
     diff_max_lines_per_file:
-      String.to_integer(System.get_env("CAD_DIFF_MAX_LINES_PER_FILE", "400"))
+      String.to_integer(System.get_env("CAD_DIFF_MAX_LINES_PER_FILE", "400")),
+    diff_max_bytes: String.to_integer(System.get_env("CAD_DIFF_MAX_BYTES", "262144"))
+
+  config :cadence_daemon,
+    server_url: System.get_env("CAD_SERVER_URL"),
+    auth_token: System.get_env("CAD_AUTH_TOKEN"),
+    sync_enabled: System.get_env("CAD_SYNC_ENABLED", "true") == "true",
+    sync_request_timeout_ms:
+      String.to_integer(System.get_env("CAD_SYNC_REQUEST_TIMEOUT_MS", "5000")),
+    sync_interval_ms: String.to_integer(System.get_env("CAD_SYNC_INTERVAL_MS", "30000")),
+    sync_retry_backoff_ms:
+      String.to_integer(System.get_env("CAD_SYNC_RETRY_BACKOFF_MS", "30000")),
+    sync_max_attempts: String.to_integer(System.get_env("CAD_SYNC_MAX_ATTEMPTS", "10")),
+    sync_push_limit: String.to_integer(System.get_env("CAD_SYNC_PUSH_LIMIT", "100"))
 
   # -- Server ---------------------------------------------------------------
 
@@ -48,7 +65,12 @@ if config_env() != :test do
       {_, url} -> url
     end
 
-  secret_key_base = System.fetch_env!("CAD_SECRET_KEY_BASE")
+  secret_key_base =
+    case {config_env(), System.get_env("CAD_SECRET_KEY_BASE")} do
+      {:prod, nil} -> System.fetch_env!("CAD_SECRET_KEY_BASE")
+      {_, nil} -> String.duplicate("cadence-dev-secret-", 4)
+      {_, value} -> value
+    end
 
   public_url =
     case {config_env(), System.get_env("CAD_PUBLIC_URL")} do

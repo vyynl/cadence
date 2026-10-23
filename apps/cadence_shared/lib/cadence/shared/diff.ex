@@ -11,6 +11,7 @@ defmodule Cadence.Shared.Diff do
   @default_context 3
   @default_max_files 20
   @default_max_lines 400
+  @default_max_bytes 262_144
 
   @type kind :: :ctx | :add | :del | :skip
 
@@ -29,6 +30,9 @@ defmodule Cadence.Shared.Diff do
     * `:context` — unchanged lines kept around each change (default `3`)
     * `:max_files` — cap on the number of files (default `20`)
     * `:max_lines_per_file` — cap on lines per file (default `400`)
+    * `:max_bytes` — skip line diffing for files larger than this (default
+      `262_144`), marking them truncated. This bounds CPU/memory before the
+      line cap is applied.
 
   Returns `%{files: [file], truncated: boolean}` where `truncated` indicates a
   file was dropped by `:max_files`.
@@ -46,11 +50,12 @@ defmodule Cadence.Shared.Diff do
 
   defp file(change, opts) do
     max_lines = Keyword.get(opts, :max_lines_per_file, @default_max_lines)
+    max_bytes = Keyword.get(opts, :max_bytes, @default_max_bytes)
     context = Keyword.get(opts, :context, @default_context)
 
-    {binary, lines} = diff_lines(change, context)
+    {binary, lines, oversized} = diff_lines(change, context, max_bytes)
 
-    {lines, truncated} =
+    {lines, line_truncated} =
       if length(lines) > max_lines do
         {Enum.take(lines, max_lines), true}
       else
@@ -61,10 +66,35 @@ defmodule Cadence.Shared.Diff do
       path: change.path,
       status: change.status,
       binary: binary,
-      truncated: truncated,
+      truncated: oversized or line_truncated,
       lines: lines
     }
   end
+
+  defp diff_lines(change, context, max_bytes) do
+    if oversized?(change, max_bytes) do
+      {false, [], true}
+    else
+      {binary, lines} = diff_lines(change, context)
+      {binary, lines, false}
+    end
+  end
+
+  defp oversized?(%{status: :modified, old_content: old, new_content: new}, max_bytes)
+       when is_integer(max_bytes) do
+    not binary?(old) and not binary?(new) and
+      byte_size(old || "") + byte_size(new || "") > max_bytes
+  end
+
+  defp oversized?(%{status: :added, new_content: new}, max_bytes) when is_integer(max_bytes) do
+    not binary?(new) and byte_size(new || "") > max_bytes
+  end
+
+  defp oversized?(%{status: :deleted, old_content: old}, max_bytes) when is_integer(max_bytes) do
+    not binary?(old) and byte_size(old || "") > max_bytes
+  end
+
+  defp oversized?(_change, _max_bytes), do: false
 
   defp diff_lines(%{status: :modified, old_content: old, new_content: new}, context) do
     if binary?(old) or binary?(new) do

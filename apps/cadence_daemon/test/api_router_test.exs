@@ -107,8 +107,28 @@ defmodule Cadence.Daemon.API.RouterTest do
     assert conn.status == 404
   end
 
+  test "POST /switch rejects a malformed node_id" do
+    project = insert_project(Ecto.UUID.generate())
+
+    conn =
+      Plug.Test.conn(
+        :post,
+        "/switch",
+        Jason.encode!(%{"project_id" => project.id, "node_id" => "not-a-uuid"})
+      )
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> call()
+
+    assert conn.status == 404
+  end
+
   test "GET /nodes returns 404 for an unknown project" do
     conn = Plug.Test.conn(:get, "/nodes?project_id=#{Ecto.UUID.generate()}") |> call()
+    assert conn.status == 404
+  end
+
+  test "GET /nodes returns 404 for a malformed project_id" do
+    conn = Plug.Test.conn(:get, "/nodes?project_id=not-a-uuid") |> call()
     assert conn.status == 404
   end
 
@@ -174,6 +194,19 @@ defmodule Cadence.Daemon.API.RouterTest do
       Plug.Test.conn(
         :get,
         "/diff?project_id=#{project.id}&node_id=#{Ecto.UUID.generate()}"
+      )
+      |> call()
+
+    assert conn.status == 404
+  end
+
+  test "GET /diff returns 404 for a malformed node_id" do
+    project = insert_project(Ecto.UUID.generate())
+
+    conn =
+      Plug.Test.conn(
+        :get,
+        "/diff?project_id=#{project.id}&node_id=not-a-uuid"
       )
       |> call()
 

@@ -7,10 +7,8 @@ defmodule Cadence.Daemon.Session do
   `active_heads` are the nodes this user considers live (see spec §4.3).
   """
 
-  import Ecto.Query
-
-  alias Cadence.Daemon.{Env, Repo}
-  alias Cadence.Shared.{DAG, Membership, Node}
+  alias Cadence.Daemon.{Env, Nodes, Repo}
+  alias Cadence.Shared.{Membership, Node, UUID}
 
   @role :owner
 
@@ -41,10 +39,13 @@ defmodule Cadence.Daemon.Session do
   @doc "Returns the current node (session pointer) for the local user, or `nil`."
   @spec current_node(Ecto.UUID.t()) :: Node.t() | nil
   def current_node(project_id) do
-    case Repo.get_by(Membership, user_id: Env.local_user_id(), project_id: project_id) do
-      %{session_pointer: nil} -> nil
-      %{session_pointer: node_id} -> Repo.get(Node, node_id)
-      nil -> nil
+    with {:ok, project_id} <- UUID.cast(project_id),
+         %{session_pointer: node_id} when not is_nil(node_id) <-
+           Repo.get_by(Membership, user_id: Env.local_user_id(), project_id: project_id),
+         {:ok, node_id} <- UUID.cast(node_id) do
+      Repo.get(Node, node_id)
+    else
+      _ -> nil
     end
   end
 
@@ -60,16 +61,16 @@ defmodule Cadence.Daemon.Session do
   def state(project_id) do
     user_id = Env.local_user_id()
 
-    case Repo.get_by(Membership, user_id: user_id, project_id: project_id) do
-      nil ->
-        %{user_id: user_id, session_pointer: nil, active_heads: []}
-
-      membership ->
-        %{
-          user_id: user_id,
-          session_pointer: membership.session_pointer,
-          active_heads: membership.active_heads || []
-        }
+    with {:ok, project_id} <- UUID.cast(project_id),
+         membership when not is_nil(membership) <-
+           Repo.get_by(Membership, user_id: user_id, project_id: project_id) do
+      %{
+        user_id: user_id,
+        session_pointer: membership.session_pointer,
+        active_heads: membership.active_heads || []
+      }
+    else
+      _ -> %{user_id: user_id, session_pointer: nil, active_heads: []}
     end
   end
 
@@ -83,18 +84,9 @@ defmodule Cadence.Daemon.Session do
   """
   @spec anchor_node(Ecto.UUID.t()) :: Node.t() | nil
   def anchor_node(project_id) do
-    current_node(project_id) || fallback_anchor(project_id)
-  end
-
-  defp fallback_anchor(project_id) do
-    DAG.default_node(project_nodes(project_id), user_id: Env.local_user_id())
-  end
-
-  defp project_nodes(project_id) do
-    Node
-    |> where([n], n.project_id == ^project_id)
-    |> order_by([n], desc: n.created_at, desc: n.id)
-    |> Repo.all()
+    current_node(project_id) ||
+      Nodes.most_recent_by_user(project_id, Env.local_user_id()) ||
+      Nodes.preview(project_id)
   end
 
   @doc """
@@ -106,7 +98,9 @@ defmodule Cadence.Daemon.Session do
   @spec switch(Ecto.UUID.t(), Ecto.UUID.t()) ::
           {:ok, Membership.t()} | {:error, :not_found}
   def switch(project_id, node_id) do
-    with membership when not is_nil(membership) <-
+    with {:ok, project_id} <- UUID.cast(project_id),
+         {:ok, node_id} <- UUID.cast(node_id),
+         membership when not is_nil(membership) <-
            Repo.get_by(Membership, user_id: Env.local_user_id(), project_id: project_id),
          node when not is_nil(node) <- Repo.get(Node, node_id),
          true <- node.project_id == project_id do

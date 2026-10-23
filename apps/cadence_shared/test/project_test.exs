@@ -10,8 +10,11 @@ defmodule Cadence.Shared.ProjectTest do
   }
 
   describe "changeset/2" do
-    test "accepts valid attributes" do
-      assert Project.changeset(@valid_attrs).valid?
+    test "accepts valid attributes and fills created_at" do
+      changeset = Project.changeset(@valid_attrs)
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_field(changeset, :created_at)
     end
 
     test "requires name, slug, and owner_id" do

@@ -59,6 +59,7 @@ defmodule Cadence.Daemon.NodeDiffTest do
   test "returns :not_found for an unknown node or a node in another project",
        %{project: project, child_node: child} do
     assert {:error, :not_found} = NodeDiff.build(project.id, Ecto.UUID.generate())
+    assert {:error, :not_found} = NodeDiff.build(project.id, "not-a-uuid")
 
     {:ok, other} = insert_project()
     assert {:error, :not_found} = NodeDiff.build(other.id, child.id)

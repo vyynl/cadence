@@ -302,21 +302,113 @@ Phase 2b-2 complete → moving into 2b-3 (daemon ledger + sync client)
   push/pull flows, `created_by` mapping, config, `Req.Test` testing, and
   acceptance for the next session.
 
+- [x] Slice 1 audit/hardening (pre-2b-3): added `Cadence.Shared.UUID` (shared
+      cast helper used by schemas/server sync/daemon contexts); `Project` now
+      defaults/truncates/requires `created_at`; `Node.created_at` is required;
+      `ProjectLocation.created_at` truncates to second precision.
+- [x] `Projects.register_project/1` is transactional, rejects duplicate
+      `work_dir` values, verifies `ProjectRegistry.start_project/1`, and cleans
+      up rows if the project fails to boot. `rehydrate/0` logs per-project
+      failures and only skips before migrations (no blanket rescue).
+      `MessageQueue.rehydrate/0` has the same narrow pre-migration handling.
+- [x] `CommitQueue` node insert + `Session.commit_after`/`spawn_after` are
+      transactional; Git author comes from `CAD_GIT_AUTHOR_NAME`/
+      `CAD_GIT_AUTHOR_EMAIL` via `Env.git_author/0` (no hardcoded author).
+- [x] New `Cadence.Daemon.Nodes` (`latest/list/most_recent_by_user/preview`) and
+      `Cadence.Daemon.NodeStore` (`open/read_commit/parent_tree`). Reused by
+      `CommitQueue`, `Session`, `MessageQueue`, `NodeDiff`, and `API.Router`.
+      `Session.anchor_node/1` now uses bounded queries instead of loading the
+      entire project DAG on each commit.
+- [x] Daemon API UUID hardening: malformed project/node IDs return 400/404
+      instead of raising `Ecto.Query.CastError`.
+- [x] `GitStore` hardening: object reads no longer create atoms from arbitrary
+      file content, malformed/unknown/mismatched-size objects read as missing,
+      `build_tree` tolerates files disappearing mid-snapshot, tree collection
+      avoids quadratic list concatenation, and `diff_trees` raises a clear
+      error for missing trees.
+- [x] `Cadence.Shared.Diff` has a `CAD_DIFF_MAX_BYTES` guard so oversized files
+      are marked truncated before Myers is run.
+- [x] Added daemon migration `backfill_project_created_at` for projects created
+      before the registration fix.
+- [x] `config/runtime.exs` no longer requires `CAD_SECRET_KEY_BASE` outside
+      prod; `.env.example` documents the missing daemon vars.
+- [x] 17 new tests (shared UUID/malformed objects/diff guard; daemon Nodes/
+      NodeStore/project registration/UUID rejection). 186 tests total
+      (103 shared + 59 daemon + 24 server), all green. Format and
+      `mix compile --warnings-as-errors` clean.
+
+- [x] Slice 2 sync foundation: added `Cadence.Shared.Sync.NodeCodec` (shared
+      node/flags/docs-state/timestamp/base64 object codec) with `Node.flags/0`
+      and `Node.docs_states/0`. Server push decoding and pull encoding now use
+      the shared codec; no wire-format change.
+- [x] Daemon sync config in `Env` + `runtime.exs`: `CAD_SERVER_URL`,
+      `CAD_AUTH_TOKEN`, `CAD_SYNC_ENABLED`, `CAD_SYNC_REQUEST_TIMEOUT_MS`,
+      `CAD_SYNC_INTERVAL_MS`, `CAD_SYNC_RETRY_BACKOFF_MS`,
+      `CAD_SYNC_MAX_ATTEMPTS`, `CAD_SYNC_PUSH_LIMIT`, plus injectable
+      `sync_req_options/0` for `Req.Test` in Slice 3.
+- [x] Daemon migration `create_sync_tables`: `sync_pending`, `sync_cursors`,
+      `sync_state` (+ indexes) and a one-time seed of pre-sync local nodes into
+      `sync_pending`.
+- [x] `Cadence.Daemon.SyncLedger` (supervised GenServer + Repo): idempotent
+      `enqueue/2`, parents-first `pending/1`, backoff-aware `due_pending/2`,
+      `pending_projects/1`, `mark_pushed/1`, `mark_failed/3`, cursor
+      round-trip, `server_user_id/0`, and forced/one-time `rehydrate/1`
+      backfill. `SyncPending`, `SyncCursor`, and `SyncState` schemas added.
+- [x] 13 new tests (4 shared codec; 8 ledger; 1 Env). 199 tests total
+      (107 shared + 68 daemon + 24 server), all green. Format and
+      `mix compile --warnings-as-errors` clean.
+
+- [x] Slice 3 client + provisioning: `Cadence.Server.Projects.provision/2` and
+      `POST /sync/projects` (idempotent by local project ID, first caller owner,
+      owner/trusted repeat allowed, viewer forbidden, slug/foreign-owner
+      conflicts). `Project.changeset` now maps the unique slug constraint.
+- [x] `Cadence.Daemon.SyncClient` (`Req`): `configured?/0`, `me/0`, `push/1`,
+      `pull/2`, `provision/1`; bearer auth, background request timeout, no
+      internal retries, and injectable `sync_req_options/0` for `Req.Test`.
+- [x] Server provisioning and daemon client tests: creation/idempotency,
+      foreign user conflict, viewer rejection, slug conflict, malformed payload,
+      auth requirement, bearer/header/body/query construction, HTTP and
+      transport errors, and offline mode. No new dependency.
+- [x] 13 new tests (6 server provisioning; 7 daemon client). 212 tests total
+      (107 shared + 75 daemon + 30 server), all green. Format and
+      `mix compile --warnings-as-errors` clean.
+
+- [x] Slice 4 orchestration + integration: `Cadence.Daemon.Sync`
+      (`ensure_server_user/0`, `ensure_project/1`, `push_pending/1`, `pull/2`,
+      `sync/1`) with idempotent provisioning, parents-first push batches,
+      `NodeCodec` payloads, mark-pushed/no-progress guards, object import +
+      node insert + cursor advancement, and current-server-user `created_by`
+      mapping. Pull conflicts abort before the cursor moves.
+- [x] `Cadence.Daemon.SyncWorker` + `Cadence.Daemon.SyncTasks`: one scheduler,
+      per-project network tasks, in-flight tracking, periodic and wake-on-
+      enqueue passes. `Application` supervises both and performs boot
+      `SyncLedger.rehydrate/0` + `wake_all/0` only when sync is enabled and
+      configured.
+- [x] `CommitQueue.do_commit/2` and `do_spawn/2` enqueue pending sync rows after
+      the local transaction; `SyncLedger` wakes the worker only when sync is
+      configured. Offline commits accumulate and flush later.
+- [x] Error policy: 400/409/422 back off 24h, 401/403/404 back off 5m (404 also
+      clears the provisioned marker), transient failures use exponential
+      backoff capped at 1h (the max-attempts knob caps the exponent). Failed
+      and conflicted rows are retained.
+- [x] 9 new tests (7 sync integration incl. worker; 2 ledger). 221 tests total
+      (107 shared + 84 daemon + 30 server), all green. Format and
+      `mix compile --warnings-as-errors` clean.
+
 ## Next
-- Start **Phase 2b milestone 2b-3** per `docs/phase-2b-3-prep.md` (cold-start
-  brief with the proposed ledger schema, worker shape, push/pull flows,
-  `created_by` mapping, config, and tests). Summary: daemon `SyncLedger`
-  (per-project cursor + pending queue, persistent SQLite), `SyncClient` (Req,
-  bearer token, timeouts), and `Cadence.Daemon.Sync`; enqueue after local
-  commits, import pulled objects/nodes, rehydrate on boot. Use `Req.Test`
-  rather than adding Bypass. Before live end-to-end sync, resolve the
-  server-side project-provisioning gap (spec §16).
-- Deferred picker items (can be picked up any time): Telescope project picker
-  (would add a dep to §11) and cloud-sync default selection (lands with 2b).
+- Start **Phase 2b-4 — preferences + broadcast + resilience**:
+  implement `POST /sync/preferences` and pull-side membership preference
+  transport (`PushPreferences`), sync `active_heads`/`session_pointer` A→B,
+  consume server `Phoenix.PubSub` pushes (or a poll trigger) in the daemon, and
+  add partial-batch/retry coverage for the remaining resilience gaps.
+  Then run a two-daemon convergence acceptance test.
+- Deferred picker items: Telescope project picker (would add a dep to §11) and
+  the `:CadOpen` short-sync attempt (can call `Sync.sync/1` with a short
+  timeout now that orchestration exists).
 - Remaining audit items (lower priority): derive service timeouts from config
   rather than literals; consider `.gitignore`-style patterns beyond `CAD_IGNORE`;
-  `Membership.last_seen_at` is defined but unused; `CommitQueue` still inlines
-  `@default_author`.
+  `Membership.last_seen_at` is defined but unused; add a unique DB constraint
+  for `project_locations.work_dir` (currently enforced in app code only).
 
 ## Blocked
 - (none)
@@ -369,17 +461,58 @@ Phase 2b-2 complete → moving into 2b-3 (daemon ledger + sync client)
 - Node identity is now identity-mapped (`local_id == cloud_id`), overriding the
   original plan's server-assigned cloud IDs. Spec §10.2/§10.6 updated; retries
   are idempotent by construction.
-- **Server-side project provisioning is still missing.** 2b-2 tests seed
-  `Project`/`Membership` rows and assume project IDs match the daemon. Live
-  end-to-end sync needs a registration path; tracked in spec §16.
+- **Server-side project provisioning resolved in Slice 3.** `POST /sync/projects`
+  is idempotent by local project ID; the first caller becomes owner and
+  existing owner/trusted members can re-provision. Spec §10.2/§13/§16 updated.
 - Sync payload size is still unbounded beyond `CAD_SYNC_PULL_LIMIT` node count.
   Object/body caps and Phase 7 negotiation remain.
+- Spec §3.2/§6.1 updated: `:CadSwitch` may target any node in the project, not
+  only active heads. The picker needs this; active heads remain the usual
+  shortcuts.
+- `Project.created_at` and `Node.created_at` are now required by their
+  changesets; `Project`/`ProjectLocation` truncate to second precision because
+  their schema fields are `:utc_datetime`. Pre-release DBs with existing rows
+  are unaffected (rows already carry values; missing legacy values are filled
+  on update).
+- `CAD_GIT_AUTHOR_NAME`/`CAD_GIT_AUTHOR_EMAIL`, `CAD_WATCH_BACKEND`,
+  `CAD_LOCAL_USER_ID`, `CAD_DIFF_MAX_BYTES`, and the existing `CAD_LLM_*`
+  retry/rate knobs are now documented in §12.6 and `.env.example`.
+- `Projects.rehydrate/0` and `MessageQueue.rehydrate/0` intentionally skip only
+  the pre-migration "no such table" case (logged); all other DB errors
+  propagate. This preserves test boot ordering without hiding real failures.
+- Slice 2 placed the global server user ID and the one-time backfill marker in a
+  `sync_state(key, value)` table instead of duplicating `server_user_id` on every
+  `sync_cursors` row (the prep brief allowed either). Cursors remain
+  per-project.
+- Pre-sync local nodes are seeded into `sync_pending` by migration and can also
+  be backfilled by `SyncLedger.rehydrate/1`; the marker makes the app-level pass
+  idempotent. Pulled nodes are never enqueued for push.
+- `NodeCodec` now returns string-keyed wire maps on encode (JSON output is
+  unchanged) and decodes into atom-keyed changeset attrs. The server still owns
+  its push-time validation and error taxonomy.
+- `POST /sync/projects` is an addition beyond the original sync endpoint list
+  (spec §10.2/§13 now document it). Project metadata is creation-only: repeat
+  provisioning returns the existing project rather than overwriting the server
+  row. `:project_conflict` (409) is distinct from node `:conflict`.
+- `Project.changeset/2` now maps the unique slug constraint, so provisioning
+  races return `:project_conflict` instead of a raw constraint error.
+
+- Slice 4 added `Sync`/`SyncWorker`/`SyncTasks` and commit/spawn hooks. The
+  worker uses `CAD_SYNC_MAX_ATTEMPTS` as a backoff-exponent cap, not a hard
+  retry limit: transient failures retry indefinitely (capped at 1h) so offline
+  commits eventually flush.
+- Pulled nodes map only the current server user's `created_by` to the local
+  user ID; other users keep their server UUID. Membership preferences
+  (`active_heads`/`session_pointer`) are still local and remain 2b-4 work.
+- `:CadOpen`'s short cloud-sync attempt is not wired to `Sync.sync/1` yet;
+  deferred until 2b-4/picker polish.
+- Provisioning is cached per project in `sync_state`; a 404 from push/pull
+  clears the marker so the next cycle re-provisions.
 
 ## Last Updated
-2026-10-16 — Phase 2b-2 complete: shared Git object export/import, per-project
-server object stores, fail-fast/parents-first node push with identity IDs,
-`nodes.seq` cursor pulls, PubSub broadcast, and 9 new sync tests. Phase 2b-2
-acceptance passes (push→pull into a clean store with identical tree SHAs).
-169 Elixir tests green (97 shared + 48 daemon + 24 server). Next session starts
-2b-3 (daemon ledger + sync client) from `docs/phase-2b-3-prep.md`; server project
-provisioning is the known pre-live-sync gap.
+2026-10-23 — Slice 4 orchestration + integration complete: `Sync` push/pull
+orchestration, `SyncWorker`/`SyncTasks`, commit/spawn enqueue hooks, boot
+rehydrate/wake, backoff/conflict policy, and end-to-end push/pull/worker tests.
+221 Elixir tests green (107 shared + 84 daemon + 30 server); format and
+`mix compile --warnings-as-errors` clean. Next is Phase 2b-4 (preferences +
+broadcast + two-daemon convergence).

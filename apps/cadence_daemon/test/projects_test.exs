@@ -18,11 +18,26 @@ defmodule Cadence.Daemon.ProjectsTest do
     {:ok, project} =
       Projects.register_project(%{"name" => "Proj", "slug" => slug, "work_dir" => work_dir})
 
-    assert Repo.get(Project, project.id).slug == slug
+    stored = Repo.get(Project, project.id)
+    assert stored.slug == slug
+    assert stored.created_at
     assert ProjectRegistry.lookup_queue(project.id) != nil
 
     assert [%{slug: ^slug, work_dir: ^work_dir}] =
              Projects.list_projects() |> Enum.filter(&(&1.slug == slug))
+
+    assert project.id in Projects.list_project_ids()
+  end
+
+  test "register_project rejects an already-registered work_dir", %{work_dir: work_dir} do
+    attrs = %{
+      "name" => "Proj",
+      "slug" => "proj-#{System.unique_integer([:positive])}",
+      "work_dir" => work_dir
+    }
+
+    assert {:ok, _project} = Projects.register_project(attrs)
+    assert {:error, :already_registered} = Projects.register_project(attrs)
   end
 
   test "register_project rejects a missing work_dir" do

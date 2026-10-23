@@ -18,6 +18,14 @@ defmodule Cadence.Shared.Node do
   @flags [:functioning, :"in-progress", :broken, :sandbox]
   @docs_states [:current, :pending, :skipped]
 
+  @doc "The allowed flag atoms (spec §3.1)."
+  @spec flags() :: [atom()]
+  def flags, do: @flags
+
+  @doc "The allowed docs states."
+  @spec docs_states() :: [atom()]
+  def docs_states, do: @docs_states
+
   schema "nodes" do
     field(:project_id, Ecto.UUID)
     field(:git_commit_sha, :string)
@@ -52,7 +60,7 @@ defmodule Cadence.Shared.Node do
       :created_at,
       :docs_state
     ])
-    |> validate_required([:project_id, :git_commit_sha, :created_by, :docs_state])
+    |> validate_required([:project_id, :git_commit_sha, :created_by, :created_at, :docs_state])
     |> SharedChangeset.validate_uuid([:project_id, :created_by])
     |> validate_subset(:flags, @flags)
     |> validate_inclusion(:docs_state, @docs_states)

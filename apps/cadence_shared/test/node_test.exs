@@ -7,6 +7,7 @@ defmodule Cadence.Shared.NodeTest do
     project_id: Ecto.UUID.generate(),
     git_commit_sha: String.duplicate("a", 40),
     created_by: Ecto.UUID.generate(),
+    created_at: DateTime.utc_now(),
     docs_state: :pending
   }
 
@@ -30,13 +31,14 @@ defmodule Cadence.Shared.NodeTest do
       assert Ecto.Changeset.get_field(changeset, :docs_state) == :pending
     end
 
-    test "requires project_id, git_commit_sha, created_by, and docs_state" do
+    test "requires project_id, git_commit_sha, created_by, created_at, and docs_state" do
       changeset = Node.changeset(%{})
 
       refute changeset.valid?
       assert "can't be blank" in errors_on(changeset, :project_id)
       assert "can't be blank" in errors_on(changeset, :git_commit_sha)
       assert "can't be blank" in errors_on(changeset, :created_by)
+      assert "can't be blank" in errors_on(changeset, :created_at)
       assert "can't be blank" in errors_on(changeset, :docs_state)
     end
 

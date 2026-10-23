@@ -1,5 +1,9 @@
 # Phase 2b-3 prep — Daemon sync ledger + client
 
+> Status: implemented. `SyncLedger`, `SyncClient`, `Sync`, `SyncWorker`,
+> commit/spawn enqueue hooks, boot rehydrate, and server project provisioning
+> are in place. Next milestone is 2b-4 (preferences + broadcast + resilience).
+>
 > Cold-start notes written after 2b-2. The deliverable is the daemon side of
 > sync: persistent pending/cursor state, an HTTP client, and the boot/commit
 > integration. This is **not** a spec replacement; see `docs/spec.md` §10 and
@@ -23,10 +27,12 @@
 
 ## 2. Decisions to make first
 
-1. **Ledger schema.** Recommended: two daemon-only tables:
-   - `sync_cursors(project_id uuid PK, cursor text, server_user_id uuid, updated_at)`
+1. **Ledger schema.** Implemented as three daemon-only tables:
+   - `sync_cursors(project_id uuid PK, cursor text, updated_at)`
    - `sync_pending(node_id uuid PK, project_id uuid, enqueued_at, attempts,
      last_error, next_attempt_at)`
+   - `sync_state(key text PK, value text, updated_at)` — holds the global
+     `server_user_id` and the one-time backfill marker.
    Since IDs are identity-mapped, there is no local↔cloud node table.
 2. **Worker shape.** Recommended: keep `SyncLedger` as the persistent
    GenServer/owner and add a small `SyncWorker`/`Task.Supervisor` for network

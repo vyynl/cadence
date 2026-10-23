@@ -40,6 +40,7 @@ defmodule Cadence.ServerWeb.Router do
 
     post("/sync/nodes", SyncController, :push_nodes)
     get("/sync/nodes", SyncController, :pull_nodes)
+    post("/sync/projects", SyncController, :provision_project)
     get("/sync/me", SyncController, :me)
   end
 end

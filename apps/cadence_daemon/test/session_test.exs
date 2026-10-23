@@ -33,6 +33,7 @@ defmodule Cadence.Daemon.SessionTest do
     assert membership.session_pointer == node.id
 
     assert {:error, :not_found} = Session.switch(project.id, Ecto.UUID.generate())
+    assert {:error, :not_found} = Session.switch(project.id, "not-a-uuid")
 
     other = project_fixture(project.owner_id)
     assert {:error, :not_found} = Session.switch(project.id, node_fixture(other.id).id)
@@ -131,7 +132,7 @@ defmodule Cadence.Daemon.SessionTest do
     |> Repo.insert!()
   end
 
-  defp other_user_node(project_id, opts \\ []) do
+  defp other_user_node(project_id, opts) do
     %{
       project_id: project_id,
       git_commit_sha: String.duplicate("b", 40),

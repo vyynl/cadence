@@ -1,0 +1,310 @@
+defmodule Cadence.Daemon.SyncTest do
+  use ExUnit.Case, async: false
+
+  alias Cadence.Daemon.{
+    CommitQueue,
+    Env,
+    Nodes,
+    ProjectLocation,
+    Repo,
+    Sync,
+    SyncLedger,
+    SyncPending,
+    SyncWorker
+  }
+
+  alias Cadence.Daemon.TestSyncServer
+  alias Cadence.Shared.{GitStore, Node, Project}
+  alias Cadence.Shared.Sync.NodeCodec
+
+  @server_user "11111111-1111-4111-8111-111111111111"
+  @token "cad-test-token"
+  @author %{name: "Sync Test", email: "sync@example.com"}
+
+  setup do
+    root = Path.join(System.tmp_dir!(), "cadence_sync_#{System.unique_integer([:positive])}")
+    work_dir = Path.join(root, "work")
+    git_dir = Path.join(root, "git")
+    File.mkdir_p!(work_dir)
+
+    project = insert_project()
+    insert_location(project.id, work_dir, git_dir)
+
+    {:ok, server} = TestSyncServer.start(@server_user)
+    TestSyncServer.stub(__MODULE__, server)
+    {:ok, _} = SyncLedger.put_server_user_id(@server_user)
+
+    on_exit(fn ->
+      clear_sync_config()
+      File.rm_rf(root)
+    end)
+
+    %{
+      project: project,
+      work_dir: work_dir,
+      git_dir: git_dir,
+      server: server
+    }
+  end
+
+  test "commits and spawns enqueue pending sync rows", %{
+    project: project,
+    work_dir: work_dir,
+    git_dir: git_dir
+  } do
+    queue = start_queue(project, work_dir, git_dir)
+
+    {:ok, first} = commit(queue, work_dir, "first")
+    assert eventually(fn -> pending?(project.id, first.id) end)
+
+    {:ok, spawn} = CommitQueue.spawn(queue, "explore")
+    assert eventually(fn -> pending?(project.id, spawn.id) end)
+  end
+
+  test "sync provisions, pushes, clears pending, and is idempotent", %{
+    project: project,
+    work_dir: work_dir,
+    git_dir: git_dir,
+    server: server
+  } do
+    queue = start_queue(project, work_dir, git_dir)
+    {:ok, node} = commit(queue, work_dir, "first")
+    assert eventually(fn -> pending?(project.id, node.id) end)
+
+    configure_sync()
+
+    assert :ok = Sync.sync(project.id)
+    assert SyncLedger.pending(project.id) == []
+    assert SyncLedger.cursor(project.id) == "1"
+    assert TestSyncServer.project(server, project.id)["id"] == project.id
+
+    assert [wire] = TestSyncServer.nodes(server)
+    assert wire["id"] == node.id
+    assert wire["created_by"] == @server_user
+    assert wire["message"] == "first"
+    assert wire["git_objects"] != []
+
+    assert :ok = Sync.sync(project.id)
+    assert length(TestSyncServer.nodes(server)) == 1
+    assert length(Nodes.list(project.id)) == 1
+  end
+
+  test "pull imports a remote DAG into a clean local store", %{
+    project: project,
+    git_dir: git_dir,
+    server: server
+  } do
+    {wire, commit_sha, expected} = remote_node(project.id)
+
+    TestSyncServer.seed_node(server, project.id, wire)
+    configure_sync()
+
+    assert :ok = Sync.sync(project.id)
+    assert [node] = Nodes.list(project.id)
+    assert node.id == wire["id"]
+    assert node.git_commit_sha == commit_sha
+    assert node.created_by == Env.local_user_id()
+    assert SyncLedger.cursor(project.id) == "1"
+
+    git = GitStore.open(git_dir, bare: true)
+    dest = Path.join(Path.dirname(git_dir), "checkout")
+    :ok = GitStore.checkout(git, commit_sha, dest)
+    assert File.read!(Path.join(dest, "README.md")) == expected
+
+    # A second pull is idempotent and does not duplicate the node.
+    assert :ok = Sync.sync(project.id)
+    assert length(Nodes.list(project.id)) == 1
+  end
+
+  test "pull conflict aborts before advancing the cursor", %{
+    project: project,
+    server: server
+  } do
+    {wire, _commit_sha, _expected} = remote_node(project.id)
+    local = insert_node(project.id, wire["id"], String.duplicate("a", 40), [])
+
+    TestSyncServer.seed_node(server, project.id, wire)
+    configure_sync()
+
+    assert {:error, {:node_conflict, id}} = Sync.sync(project.id)
+    assert id == local.id
+    assert SyncLedger.cursor(project.id) == nil
+  end
+
+  test "transient push failure leaves the node pending with backoff", %{
+    project: project,
+    work_dir: work_dir,
+    git_dir: git_dir,
+    server: server
+  } do
+    queue = start_queue(project, work_dir, git_dir)
+    {:ok, node} = commit(queue, work_dir, "first")
+    assert eventually(fn -> pending?(project.id, node.id) end)
+
+    configure_sync()
+    assert :ok = Sync.ensure_project(project.id)
+
+    TestSyncServer.fail_next(server, 500)
+
+    assert {:error, {:http, 500, %{"error" => "forced failure"}}} =
+             Sync.push_pending(project.id)
+
+    assert Enum.any?(SyncLedger.pending(project.id), &(&1.id == node.id))
+    assert SyncLedger.due_pending(project.id) == []
+    assert Repo.get!(SyncPending, node.id).attempts == 1
+  end
+
+  test "offline sync leaves pending nodes untouched", %{
+    project: project,
+    work_dir: work_dir,
+    git_dir: git_dir
+  } do
+    queue = start_queue(project, work_dir, git_dir)
+    {:ok, node} = commit(queue, work_dir, "first")
+    assert eventually(fn -> pending?(project.id, node.id) end)
+
+    assert {:error, :not_configured} = Sync.sync(project.id)
+    assert Enum.any?(SyncLedger.pending(project.id), &(&1.id == node.id))
+  end
+
+  test "SyncWorker wakes and flushes a project in a task", %{
+    project: project,
+    work_dir: work_dir,
+    git_dir: git_dir,
+    server: server
+  } do
+    queue = start_queue(project, work_dir, git_dir)
+    {:ok, node} = commit(queue, work_dir, "worker")
+    assert eventually(fn -> pending?(project.id, node.id) end)
+
+    configure_sync()
+    Req.Test.set_req_test_to_shared()
+
+    on_exit(fn -> Req.Test.set_req_test_to_private() end)
+
+    SyncWorker.wake(project.id)
+
+    assert eventually(fn -> SyncLedger.pending(project.id) == [] end)
+    assert eventually(fn -> SyncLedger.cursor(project.id) != nil end)
+    assert Enum.any?(TestSyncServer.nodes(server), &(&1["id"] == node.id))
+  end
+
+  defp configure_sync do
+    Application.put_env(:cadence_daemon, :server_url, "https://cadence.test")
+    Application.put_env(:cadence_daemon, :auth_token, @token)
+    Application.put_env(:cadence_daemon, :sync_enabled, true)
+    Application.put_env(:cadence_daemon, :sync_req_options, plug: {Req.Test, __MODULE__})
+  end
+
+  defp clear_sync_config do
+    Enum.each(
+      [
+        :server_url,
+        :auth_token,
+        :sync_enabled,
+        :sync_req_options,
+        :sync_request_timeout_ms
+      ],
+      &Application.delete_env(:cadence_daemon, &1)
+    )
+  end
+
+  defp start_queue(project, work_dir, git_dir) do
+    start_supervised!(
+      {CommitQueue, [project_id: project.id, work_dir: work_dir, git_dir: git_dir]}
+    )
+  end
+
+  defp commit(queue, work_dir, message) do
+    File.write!(Path.join(work_dir, "a.txt"), "#{message}\n")
+    CommitQueue.commit(queue, message)
+  end
+
+  defp pending?(project_id, node_id) do
+    Enum.any?(SyncLedger.pending(project_id), &(&1.id == node_id))
+  end
+
+  defp remote_node(project_id) do
+    root = Path.join(System.tmp_dir!(), "cadence_remote_#{System.unique_integer([:positive])}")
+    work = Path.join(root, "work")
+    File.mkdir_p!(work)
+    File.write!(Path.join(work, "README.md"), "# Remote\n")
+    on_exit(fn -> File.rm_rf(root) end)
+
+    git = GitStore.init(Path.join(root, "git"), bare: true)
+    tree = GitStore.build_tree(git, work)
+    commit_sha = GitStore.write_commit(git, tree, [], @author, "remote")
+    {:ok, objects} = GitStore.objects_from(git, commit_sha)
+
+    node = %Node{
+      id: Ecto.UUID.generate(),
+      project_id: project_id,
+      git_commit_sha: commit_sha,
+      parents: [],
+      flags: [:"in-progress"],
+      pinned: false,
+      message: "remote",
+      session_metadata: %{},
+      created_by: @server_user,
+      created_at: DateTime.utc_now(),
+      docs_state: :pending
+    }
+
+    {NodeCodec.encode_node(node, objects), commit_sha, "# Remote\n"}
+  end
+
+  defp insert_project do
+    %{
+      name: "p",
+      slug: "sync-#{System.unique_integer([:positive])}",
+      owner_id: Env.local_user_id()
+    }
+    |> Project.changeset()
+    |> Repo.insert!()
+  end
+
+  defp insert_location(project_id, work_dir, git_dir) do
+    %ProjectLocation{}
+    |> ProjectLocation.changeset(%{
+      project_id: project_id,
+      work_dir: work_dir,
+      git_dir: git_dir,
+      created_at: DateTime.utc_now()
+    })
+    |> Repo.insert!()
+  end
+
+  defp insert_node(project_id, id, sha, parents) do
+    %{
+      id: id,
+      project_id: project_id,
+      git_commit_sha: sha,
+      parents: parents,
+      flags: [:"in-progress"],
+      message: "local",
+      created_by: Env.local_user_id(),
+      created_at: DateTime.utc_now(),
+      docs_state: :pending
+    }
+    |> Node.changeset()
+    |> Repo.insert!()
+  end
+
+  defp eventually(fun, timeout \\ 3_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    try_until(fun, deadline)
+  end
+
+  defp try_until(fun, deadline) do
+    if fun.() do
+      true
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        flunk("condition not met within timeout")
+      else
+        Process.sleep(20)
+        try_until(fun, deadline)
+      end
+    end
+  end
+end

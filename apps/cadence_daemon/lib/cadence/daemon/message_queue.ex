@@ -13,7 +13,9 @@ defmodule Cadence.Daemon.MessageQueue do
 
   use GenServer
 
-  alias Cadence.Daemon.{AgentWorker, ProjectLocation, Repo}
+  require Logger
+
+  alias Cadence.Daemon.{AgentWorker, NodeStore, Repo}
   alias Cadence.Shared.{GitStore, Node}
   alias Cadence.Shared.LLM.CommitMessage
 
@@ -43,7 +45,16 @@ defmodule Cadence.Daemon.MessageQueue do
 
     :ok
   rescue
-    _ -> :ok
+    e in Exqlite.Error ->
+      if String.contains?(Exception.message(e), "no such table") do
+        Logger.warning(
+          "message queue rehydrate skipped before migrations: #{Exception.message(e)}"
+        )
+
+        :ok
+      else
+        reraise e, __STACKTRACE__
+      end
   end
 
   @impl true
@@ -122,38 +133,11 @@ defmodule Cadence.Daemon.MessageQueue do
   end
 
   defp build_diff_text(node) do
-    case Repo.get_by(ProjectLocation, project_id: node.project_id) do
-      nil -> {:error, :no_location}
-      location -> build_diff_text(node, location)
-    end
-  end
-
-  defp build_diff_text(node, location) do
-    git = GitStore.open(location.git_dir, bare: true)
-
-    case GitStore.read_commit(git, node.git_commit_sha) do
-      nil ->
-        {:error, :no_commit}
-
-      %{tree: new_tree} ->
-        old_tree = parent_tree(git, node.parents)
-        changes = GitStore.diff_trees(git, old_tree, new_tree)
-        {:ok, CommitMessage.diff_to_text(changes, diff_max_bytes())}
-    end
-  end
-
-  defp parent_tree(_git, []), do: nil
-
-  defp parent_tree(git, [parent_id | _]) do
-    case Repo.get(Node, parent_id) do
-      nil ->
-        nil
-
-      parent ->
-        case GitStore.read_commit(git, parent.git_commit_sha) do
-          nil -> nil
-          commit -> commit.tree
-        end
+    with {:ok, git} <- NodeStore.open(node.project_id),
+         {:ok, commit} <- NodeStore.read_commit(git, node.git_commit_sha),
+         {:ok, old_tree} <- NodeStore.parent_tree(git, node.parents) do
+      changes = GitStore.diff_trees(git, old_tree, commit.tree)
+      {:ok, CommitMessage.diff_to_text(changes, diff_max_bytes())}
     end
   end
 

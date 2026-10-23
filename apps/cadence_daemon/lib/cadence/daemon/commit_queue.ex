@@ -19,11 +19,10 @@ defmodule Cadence.Daemon.CommitQueue do
 
   use GenServer
 
-  alias Cadence.Daemon.{Dirs, Env, MessageQueue, Repo, Session}
+  alias Cadence.Daemon.{Dirs, Env, MessageQueue, Nodes, Repo, Session, SyncLedger}
   alias Cadence.Shared.{GitStore, Node}
 
   @default_message "session commit"
-  @default_author %{name: "cadence", email: "cadence@local"}
 
   defstruct [:project_id, :work_dir, :git, :author, :head]
 
@@ -60,7 +59,7 @@ defmodule Cadence.Daemon.CommitQueue do
     project_id = Keyword.fetch!(opts, :project_id)
     work_dir = Path.expand(Keyword.fetch!(opts, :work_dir))
     git_dir = Path.expand(Keyword.fetch!(opts, :git_dir))
-    author = Keyword.get(opts, :author, @default_author)
+    author = Keyword.get(opts, :author, Env.git_author())
 
     Dirs.ensure!(git_dir)
     File.mkdir_p!(work_dir)
@@ -71,7 +70,7 @@ defmodule Cadence.Daemon.CommitQueue do
        work_dir: work_dir,
        git: GitStore.init(git_dir, bare: true),
        author: author,
-       head: latest_node(project_id)
+       head: Nodes.latest(project_id)
      }}
   end
 
@@ -118,13 +117,18 @@ defmodule Cadence.Daemon.CommitQueue do
       docs_state: :pending
     }
 
-    {:ok, node} = attrs |> Node.changeset() |> Repo.insert()
-    Session.commit_after(state.project_id, node)
+    {:ok, node} =
+      Repo.transaction(fn ->
+        {:ok, node} = attrs |> Node.changeset() |> Repo.insert()
+        {:ok, _membership} = Session.commit_after(state.project_id, node)
+        node
+      end)
 
     if metadata["message_pending"] == true do
       MessageQueue.enqueue(node.project_id, node.id)
     end
 
+    SyncLedger.enqueue(state.project_id, node.id)
     {:ok, node}
   end
 
@@ -144,8 +148,14 @@ defmodule Cadence.Daemon.CommitQueue do
       docs_state: :current
     }
 
-    {:ok, node} = attrs |> Node.changeset() |> Repo.insert()
-    Session.spawn_after(state.project_id, current, node)
+    {:ok, node} =
+      Repo.transaction(fn ->
+        {:ok, node} = attrs |> Node.changeset() |> Repo.insert()
+        {:ok, _membership} = Session.spawn_after(state.project_id, current, node)
+        node
+      end)
+
+    SyncLedger.enqueue(state.project_id, node.id)
     {:ok, node}
   end
 
@@ -166,15 +176,5 @@ defmodule Cadence.Daemon.CommitQueue do
   # tip (spec §6.3). `state.head` is a last resort for an empty project.
   defp base_node(state) do
     Session.anchor_node(state.project_id) || state.head
-  end
-
-  defp latest_node(project_id) do
-    import Ecto.Query
-
-    Node
-    |> where([n], n.project_id == ^project_id)
-    |> order_by([n], desc: n.created_at, desc: n.id)
-    |> limit(1)
-    |> Repo.one()
   end
 end

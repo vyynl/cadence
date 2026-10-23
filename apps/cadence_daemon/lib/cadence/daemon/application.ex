@@ -11,8 +11,11 @@ defmodule Cadence.Daemon.Application do
         Cadence.Daemon.LLMRateLimit,
         Cadence.Daemon.AgentWorker,
         Cadence.Daemon.MessageQueue,
+        Cadence.Daemon.SyncLedger,
+        {Task.Supervisor, name: Cadence.Daemon.SyncTasks},
         {Registry, keys: :unique, name: Cadence.Daemon.Queues},
-        Cadence.Daemon.ProjectRegistry
+        Cadence.Daemon.ProjectRegistry,
+        Cadence.Daemon.SyncWorker
       ] ++ api_children()
 
     opts = [strategy: :one_for_one, name: Cadence.Daemon.Supervisor]
@@ -20,8 +23,18 @@ defmodule Cadence.Daemon.Application do
 
     Cadence.Daemon.Projects.rehydrate()
     Cadence.Daemon.MessageQueue.rehydrate()
+    maybe_start_sync()
 
     {:ok, pid}
+  end
+
+  # Sync boot work is skipped entirely when the daemon is offline/unconfigured;
+  # this also keeps test boots safe before their migrations run.
+  defp maybe_start_sync do
+    if Cadence.Daemon.Env.sync_enabled?() and Cadence.Daemon.SyncClient.configured?() do
+      Cadence.Daemon.SyncLedger.rehydrate()
+      Cadence.Daemon.SyncWorker.wake_all()
+    end
   end
 
   # The Unix-socket API is disabled in tests so booting the app doesn't bind the

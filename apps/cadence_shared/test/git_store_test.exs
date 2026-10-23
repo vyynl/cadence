@@ -53,6 +53,22 @@ defmodule Cadence.Shared.GitStoreTest do
     test "read_blob returns nil for a missing object", %{repo: repo} do
       assert GitStore.read_blob(repo, String.duplicate("0", 40)) == nil
     end
+
+    test "read_blob returns nil for malformed or unknown-type objects", %{repo: repo} do
+      sha = String.duplicate("1", 40)
+      write_raw_object(repo, sha, :zlib.compress("wat 1\0x"))
+      assert GitStore.read_blob(repo, sha) == nil
+
+      sha = String.duplicate("2", 40)
+      write_raw_object(repo, sha, "not zlib")
+      assert GitStore.read_blob(repo, sha) == nil
+    end
+
+    test "read_blob returns nil when the header size does not match", %{repo: repo} do
+      sha = String.duplicate("3", 40)
+      write_raw_object(repo, sha, :zlib.compress("blob 99\0x"))
+      assert GitStore.read_blob(repo, sha) == nil
+    end
   end
 
   describe "tree" do
@@ -270,6 +286,14 @@ defmodule Cadence.Shared.GitStoreTest do
       assert %{status: :modified} = Enum.find(changes, &(&1.path == "sub/a.txt"))
       assert %{status: :added} = Enum.find(changes, &(&1.path == "sub/b.txt"))
     end
+
+    test "raises a clear error when a referenced tree is missing", %{dir: dir, repo: repo} do
+      new_tree = build_file_tree(repo, Path.join(dir, "new"), %{"a.txt" => "x\n"})
+
+      assert_raise ArgumentError, ~r/missing tree object/, fn ->
+        GitStore.diff_trees(repo, String.duplicate("0", 40), new_tree)
+      end
+    end
   end
 
   describe "object transfer" do
@@ -394,5 +418,12 @@ defmodule Cadence.Shared.GitStoreTest do
     end)
 
     GitStore.build_tree(repo, dir)
+  end
+
+  defp write_raw_object(repo, sha, compressed) do
+    <<dir::binary-size(2)>> <> rest = sha
+    path = Path.join([repo.home_dir, "objects", dir, rest])
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, compressed)
   end
 end

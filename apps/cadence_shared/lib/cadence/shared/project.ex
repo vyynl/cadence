@@ -41,8 +41,26 @@ defmodule Cadence.Shared.Project do
       :actions_manifest,
       :created_at
     ])
-    |> validate_required([:name, :slug, :owner_id])
+    |> put_default_created_at()
+    |> truncate_created_at()
+    |> validate_required([:name, :slug, :owner_id, :created_at])
     |> validate_format(:slug, ~r/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+    |> unique_constraint(:slug)
     |> SharedChangeset.validate_uuid(:owner_id)
+  end
+
+  defp put_default_created_at(changeset) do
+    if get_field(changeset, :created_at) do
+      changeset
+    else
+      put_change(changeset, :created_at, DateTime.utc_now())
+    end
+  end
+
+  defp truncate_created_at(changeset) do
+    update_change(changeset, :created_at, fn
+      %DateTime{} = datetime -> DateTime.truncate(datetime, :second)
+      value -> value
+    end)
   end
 end

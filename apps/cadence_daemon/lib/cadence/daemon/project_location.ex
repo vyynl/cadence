@@ -23,6 +23,10 @@ defmodule Cadence.Daemon.ProjectLocation do
   def changeset(location \\ %__MODULE__{}, attrs) do
     location
     |> cast(attrs, [:project_id, :work_dir, :git_dir, :created_at])
+    |> update_change(:created_at, fn
+      %DateTime{} = datetime -> DateTime.truncate(datetime, :second)
+      value -> value
+    end)
     |> validate_required([:project_id, :work_dir, :git_dir])
   end
 end

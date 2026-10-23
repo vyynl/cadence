@@ -8,6 +8,8 @@ defmodule Cadence.Shared.Changeset do
 
   import Ecto.Changeset
 
+  alias Cadence.Shared.UUID
+
   @doc """
   Validates that one or more fields hold a UUID string.
 
@@ -29,6 +31,5 @@ defmodule Cadence.Shared.Changeset do
     end)
   end
 
-  defp valid_uuid?(value) when is_binary(value), do: match?({:ok, _}, Ecto.UUID.cast(value))
-  defp valid_uuid?(_value), do: false
+  defp valid_uuid?(value), do: UUID.valid?(value)
 end

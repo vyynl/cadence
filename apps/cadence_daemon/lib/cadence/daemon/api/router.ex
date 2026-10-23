@@ -5,10 +5,16 @@ defmodule Cadence.Daemon.API.Router do
 
   use Plug.Router
 
-  import Ecto.Query
+  alias Cadence.Daemon.{
+    CommitQueue,
+    NodeDiff,
+    Nodes,
+    ProjectRegistry,
+    Projects,
+    Session
+  }
 
-  alias Cadence.Daemon.{CommitQueue, NodeDiff, ProjectRegistry, Projects, Repo, Session}
-  alias Cadence.Shared.{DAG, Node}
+  alias Cadence.Shared.DAG
 
   plug(Plug.Parsers, parsers: [:json], json_decoder: Jason)
   plug(:match)
@@ -146,21 +152,14 @@ defmodule Cadence.Daemon.API.Router do
   end
 
   defp list_nodes(project_id) do
-    project_id |> project_nodes() |> Enum.map(&node_json/1)
-  end
-
-  defp project_nodes(project_id) do
-    Node
-    |> where([n], n.project_id == ^project_id)
-    |> order_by([n], desc: n.created_at, desc: n.id)
-    |> Repo.all()
+    project_id |> Nodes.list() |> Enum.map(&node_json/1)
   end
 
   # Structural graph for the Neovim picker (spec §6.2, §13 Phase 2a): nodes with
   # topological depth, parent->child edges, and the resolved default/preview
   # node. Coordinate/glyph layout is the renderer's concern.
   defp graph_json(project_id) do
-    nodes = project_nodes(project_id)
+    nodes = Nodes.list(project_id)
     depths = DAG.depths(nodes)
     session = Session.state(project_id)
 

@@ -10,17 +10,11 @@ defmodule Cadence.Server.Sync do
   import Ecto.Query
 
   alias Cadence.Server.{ProjectGit, Repo}
-  alias Cadence.Shared.{GitStore, Membership, Node, Project}
+  alias Cadence.Shared.{GitStore, Membership, Node, Project, UUID}
+  alias Cadence.Shared.Sync.NodeCodec
 
   @writable_roles [:owner, :trusted]
   @max_parents 1
-  @flag_values %{
-    "functioning" => :functioning,
-    "in-progress" => :"in-progress",
-    "broken" => :broken,
-    "sandbox" => :sandbox
-  }
-  @docs_states %{"current" => :current, "pending" => :pending, "skipped" => :skipped}
 
   @type user :: Ash.Resource.record()
 
@@ -135,7 +129,7 @@ defmodule Cadence.Server.Sync do
        when is_map(metadata) do
     with {:ok, local_id} <- uuid(local_id),
          true <- matched_project?(metadata["project_id"], project_id),
-         {:ok, objects} <- decode_objects(Map.get(node, "git_objects", [])),
+         {:ok, objects} <- NodeCodec.decode_objects(Map.get(node, "git_objects", [])),
          {:ok, attrs} <- node_attrs(metadata, local_id, project_id, user) do
       {:ok, %{local_id: local_id, objects: objects, attrs: attrs}}
     else
@@ -145,38 +139,6 @@ defmodule Cadence.Server.Sync do
   end
 
   defp parse_node(_node, _project_id, _user), do: {:error, :invalid_payload}
-
-  defp decode_objects(objects) when is_list(objects) do
-    Enum.reduce_while(objects, {:ok, []}, fn object, {:ok, acc} ->
-      case decode_object(object) do
-        {:ok, decoded} -> {:cont, {:ok, [decoded | acc]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, objects} -> {:ok, Enum.reverse(objects)}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp decode_objects(_objects), do: {:error, :invalid_objects}
-
-  defp decode_object(%{"sha" => sha, "type" => type, "data" => data})
-       when is_binary(sha) and is_binary(type) and is_binary(data) do
-    with {:ok, type} <- object_type(type),
-         {:ok, data} <- Base.decode64(data) do
-      {:ok, %{sha: sha, type: type, data: data}}
-    else
-      _ -> {:error, :invalid_objects}
-    end
-  end
-
-  defp decode_object(_object), do: {:error, :invalid_objects}
-
-  defp object_type("blob"), do: {:ok, :blob}
-  defp object_type("tree"), do: {:ok, :tree}
-  defp object_type("commit"), do: {:ok, :commit}
-  defp object_type(_type), do: {:error, :invalid_object_type}
 
   defp node_attrs(metadata, local_id, project_id, user) do
     with {:ok, sha} <- commit_sha(metadata["git_commit_sha"]),
@@ -230,28 +192,20 @@ defmodule Cadence.Server.Sync do
   end
 
   defp flags(flags) when is_list(flags) do
-    Enum.reduce_while(flags, {:ok, []}, fn flag, {:ok, acc} ->
-      case Map.fetch(@flag_values, flag) do
-        {:ok, flag} -> {:cont, {:ok, [flag | acc]}}
-        :error -> {:halt, {:error, :invalid_flag}}
-      end
-    end)
-    |> case do
-      {:ok, flags} -> {:ok, Enum.reverse(flags)}
-      {:error, reason} -> {:error, reason}
+    case NodeCodec.decode_flags(flags) do
+      {:ok, flags} -> {:ok, flags}
+      {:error, _reason} -> {:error, :invalid_flag}
     end
   end
 
   defp flags(_flags), do: {:error, :invalid_flag}
 
-  defp docs_state(state) when is_binary(state) do
-    case Map.fetch(@docs_states, state) do
+  defp docs_state(state) do
+    case NodeCodec.decode_docs_state(state) do
       {:ok, state} -> {:ok, state}
-      :error -> {:error, :invalid_docs_state}
+      {:error, reason} -> {:error, reason}
     end
   end
-
-  defp docs_state(_state), do: {:error, :invalid_docs_state}
 
   defp session_metadata(metadata) when is_map(metadata), do: {:ok, metadata}
   defp session_metadata(nil), do: {:ok, %{}}
@@ -367,7 +321,7 @@ defmodule Cadence.Server.Sync do
     Enum.reduce_while(rows, {:ok, []}, fn %{node: node}, {:ok, acc} ->
       case GitStore.objects_from(store, node.git_commit_sha) do
         {:ok, objects} ->
-          {:cont, {:ok, [encode_node(node, objects) | acc]}}
+          {:cont, {:ok, [NodeCodec.encode_node(node, objects) | acc]}}
 
         {:error, _reason} ->
           {:halt, {:error, :object_store_incomplete}}
@@ -379,44 +333,14 @@ defmodule Cadence.Server.Sync do
     end
   end
 
-  defp encode_node(node, objects) do
-    %{
-      id: node.id,
-      project_id: node.project_id,
-      git_commit_sha: node.git_commit_sha,
-      parents: node.parents,
-      flags: Enum.map(node.flags, &Atom.to_string/1),
-      pinned: node.pinned,
-      message: node.message,
-      session_metadata: node.session_metadata,
-      created_by: node.created_by,
-      created_at: encode_datetime(node.created_at),
-      docs_state: Atom.to_string(node.docs_state),
-      git_objects: Enum.map(objects, &encode_object/1)
-    }
-  end
-
-  defp encode_object(object) do
-    %{
-      sha: object.sha,
-      type: Atom.to_string(object.type),
-      data: Base.encode64(object.data)
-    }
-  end
-
-  defp encode_datetime(nil), do: nil
-  defp encode_datetime(datetime), do: DateTime.to_iso8601(datetime)
-
   ## Shared
 
-  defp uuid(value) when is_binary(value) do
-    case Ecto.UUID.cast(value) do
+  defp uuid(value) do
+    case UUID.cast(value) do
       {:ok, uuid} -> {:ok, uuid}
       :error -> {:error, :invalid_uuid}
     end
   end
-
-  defp uuid(_value), do: {:error, :invalid_uuid}
 
   defp matched_project?(value, project_id) when is_binary(value) do
     case uuid(value) do

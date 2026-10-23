@@ -29,6 +29,7 @@ defmodule Cadence.Daemon.RepoTest do
         message: "initial",
         session_metadata: %{"files" => ["a.ex"], "duration_ms" => 120},
         created_by: owner_id,
+        created_at: DateTime.utc_now(),
         docs_state: :current
       }
       |> Node.changeset()
