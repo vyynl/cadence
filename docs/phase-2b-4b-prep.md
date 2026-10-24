@@ -1,9 +1,10 @@
 # Phase 2b-4b prep — Daemon preference push/apply
 
-> Cold-start brief for the next session. **2b-4a is committed** (`25d6dfb`).
-> Read `docs/spec.md` §4.3/§10.5/§10.6, `docs/phase-2b-4-prep.md`, and
-> `docs/progress.md` first. This slice is daemon-only plus fake-server tests;
-> do not add `slipstream` yet (2b-4d).
+> Status: **2b-4b complete**. This was the cold-start brief for the slice.
+> 2b-4a is committed (`25d6dfb`). Read `docs/spec.md` §4.3/§10.5/§10.6,
+> `docs/phase-2b-4-prep.md`, and `docs/progress.md` for the current handoff.
+> This slice was daemon-only plus fake-server tests; `slipstream` is not added
+> until 2b-4d.
 
 ## 1. Goal
 

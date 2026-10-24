@@ -44,12 +44,37 @@ defmodule Cadence.Daemon.Nodes do
     end
   end
 
+  @doc "Returns the subset of `ids` that exist in the project."
+  @spec existing_ids(Ecto.UUID.t(), [Ecto.UUID.t()]) :: MapSet.t(Ecto.UUID.t())
+  def existing_ids(project_id, ids) when is_list(ids) do
+    with {:ok, project_id} <- UUID.cast(project_id),
+         ids = Enum.flat_map(ids, &cast_uuid/1),
+         true <- ids != [] do
+      Node
+      |> where([n], n.project_id == ^project_id and n.id in ^ids)
+      |> select([n], n.id)
+      |> Repo.all()
+      |> MapSet.new()
+    else
+      _ -> MapSet.new()
+    end
+  end
+
+  def existing_ids(_project_id, _ids), do: MapSet.new()
+
   @doc "The project's preview node (spec §4.4), or `nil`."
   @spec preview(Ecto.UUID.t()) :: Node.t() | nil
   def preview(project_id) do
     case UUID.cast(project_id) do
       {:ok, project_id} -> project_id |> list() |> DAG.preview_node()
       :error -> nil
+    end
+  end
+
+  defp cast_uuid(value) do
+    case UUID.cast(value) do
+      {:ok, uuid} -> [uuid]
+      :error -> []
     end
   end
 

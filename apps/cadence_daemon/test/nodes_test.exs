@@ -40,6 +40,20 @@ defmodule Cadence.Daemon.NodesTest do
     assert Nodes.preview(project.id).id == good.id
   end
 
+  test "existing_ids returns only matching project nodes", %{
+    project: project,
+    user_id: user_id
+  } do
+    node = insert_node(project.id, user_id, ~U[2026-01-01 00:00:00.000000Z])
+    other = insert_node(insert_project().id, user_id, ~U[2026-01-02 00:00:00.000000Z])
+
+    assert Nodes.existing_ids(project.id, [node.id, other.id, "not-a-uuid"]) ==
+             MapSet.new([node.id])
+
+    assert Nodes.existing_ids(project.id, []) == MapSet.new()
+    assert Nodes.existing_ids("not-a-uuid", [node.id]) == MapSet.new()
+  end
+
   test "malformed project ids return empty results" do
     assert Nodes.latest("not-a-uuid") == nil
     assert Nodes.list("not-a-uuid") == []

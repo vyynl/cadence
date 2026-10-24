@@ -1,7 +1,7 @@
 # Cadence — Progress
 
 ## Current Phase
-Phase 2b-4a complete/committed → 2b-4b (daemon preference push/apply)
+Phase 2b-4b complete → 2b-4c (partial-batch `failed_local_id` isolation)
 
 ## Done
 - [x] Read spec + AGENTS.md; audited and resolved all scaffold blockers.
@@ -411,18 +411,33 @@ Phase 2b-4a complete/committed → 2b-4b (daemon preference push/apply)
       `mix compile --warnings-as-errors` clean.
 - [x] Committed 2b-4a as `25d6dfb`; added
       `docs/phase-2b-4b-prep.md` with the cold-start daemon-preference brief.
+- [x] 2b-4b — daemon preference push/apply: added
+      `Cadence.Daemon.SyncPreference` + `create_sync_preferences` migration;
+      `SyncLedger` preference state/pushed/remote/error/wake helpers; `Session`
+      switch/commit/spawn now bump `preferences_updated_at` monotonically and
+      wake the worker; `SyncClient.pull` preserves preferences and
+      `push_preferences/1` posts flat LWW payloads; `Sync.push_preferences`
+      pushes only dirty versions and applies newer server responses; `Sync.pull`
+      applies remote preferences after node import, filters unknown heads,
+      preserves unknown pointers, and never echoes applied values.
+- [x] Extended `TestSyncServer` with preference storage/LWW/pull support and
+      added 16 daemon tests (session versions, ledger state, client transport,
+      push/apply, pull filtering/older ignore, malformed payloads, e2e
+      round-trip, offline flush, worker wake, existing-node filtering).
+- [x] 2b-4b hardening: wake notifications are only emitted when sync is ready
+      at enqueue/preference-change time (prevents stale wakeups); applied
+      `active_heads` are deduplicated; malformed remote preference payloads are
+      rejected; test teardown waits for in-flight sync tasks. 244 tests total
+      (108 shared + 100 daemon + 36 server), all green; format and compile
+      (dev/test/prod) clean.
 
 ## Next
-- **Read `docs/phase-2b-4b-prep.md` first.**
-- Start **2b-4b — daemon preferences**:
-  add `sync_preferences` state to `SyncLedger`, set
-  `Membership.preferences_updated_at` in `Session` switch/commit/spawn, extend
-  `SyncClient.pull` to retain preferences, add `SyncClient.push_preferences`,
-  and implement `Sync.push_preferences`/remote apply-if-newer. Do not add
-  `slipstream` yet.
-- Then **2b-4c** partial-batch `failed_local_id` isolation, **2b-4d** the
-  `slipstream` Phoenix Channels accelerator, and **2b-4e** two-daemon
-  convergence/docs.
+- **Read `docs/phase-2b-4-prep.md` §6 first.**
+- Start **2b-4c — partial-batch isolation**: add `failed_local_id` to node push
+  errors, isolate bad nodes, and preserve parents-first retry behavior so one
+  invalid node does not block unrelated nodes.
+- Then **2b-4d** the `slipstream` Phoenix Channels accelerator and **2b-4e**
+  two-daemon convergence/docs.
 - Deferred picker items: Telescope project picker (would add a dep to §11) and
   the `:CadOpen` short-sync attempt (can call `Sync.sync/1` with a short
   timeout now that orchestration exists).
@@ -523,29 +538,39 @@ Phase 2b-4a complete/committed → 2b-4b (daemon preference push/apply)
   retry limit: transient failures retry indefinitely (capped at 1h) so offline
   commits eventually flush.
 - Pulled nodes map only the current server user's `created_by` to the local
-  user ID; other users keep their server UUID. Membership preferences
-  (`active_heads`/`session_pointer`) are still local and remain 2b-4 work.
+  user ID; other users keep their server UUID.
 - `:CadOpen`'s short cloud-sync attempt is not wired to `Sync.sync/1` yet;
   deferred until 2b-4/picker polish.
 - Provisioning is cached per project in `sync_state`; a 404 from push/pull
   clears the marker so the next cycle re-provisions.
 - 2b-4a preference semantics: `preferences_updated_at` is nullable (nil means
   never synced), and only strictly newer writes are accepted. Stale pushes
-  return 200 with the current server preferences rather than an error, so the
-  daemon can reconcile in 2b-4b.
+  return 200 with the current server preferences rather than an error; the
+  daemon compares the returned version and applies it when newer.
 - `POST /sync/preferences` is a new endpoint beyond the earlier sync list; spec
   §10.5/§10.6/§13 now document it. The pull response carries `preferences`
   alongside nodes/cursor.
-- Preference `active_heads`/`session_pointer` are accepted without verifying
-  that the referenced nodes exist; the daemon will filter `active_heads` when
-  applying remote preferences in 2b-4b.
+- The server still accepts preference node IDs without verifying they exist;
+  the daemon filters unknown `active_heads` and ignores unknown pointers when
+  applying remote preferences.
 - Spec §11 now names `slipstream` as the notification-channel client, but the
   dependency is not added until 2b-4d. The channel carries only
   `sync_available` hints; polling remains the correctness fallback.
 - `last_seen_at` is now set on accepted preference writes (previously unused).
+- Pre-existing local preferences with a `nil` `preferences_updated_at` are not
+  force-pushed until the next switch/commit/spawn. This follows the 2b-4b brief:
+  assigning a version on first boot could clobber a newer value from another
+  machine.
+- Remote `session_pointer: nil` (or a pointer to a node absent locally) leaves
+  the local pointer unchanged; unknown `active_heads` entries are dropped.
+  Applied remote versions are marked pushed so they are not echoed. Spec §10.5
+  now documents this.
+- Preference push failures are diagnostic state in `sync_preferences.last_error`
+  and retry on the next sync cycle; they never enter `sync_pending`. A
+  preference failure does not block the node pull in `Sync.sync/1`.
 
 ## Last Updated
-2026-10-23 — 2b-4a committed as `25d6dfb`; cold-start handoff written in
-`docs/phase-2b-4b-prep.md`. 228 Elixir tests green (108 shared + 84 daemon + 36
-server); format and `mix compile --warnings-as-errors` clean. Next session
-starts 2b-4b (daemon preference push/apply).
+2026-10-24 — 2b-4b daemon preference push/apply implemented, hardened, and
+verified. 244 Elixir tests green (108 shared + 100 daemon + 36 server); format
+and `mix compile --warnings-as-errors` clean in dev/test/prod. Next session
+starts 2b-4c (partial-batch `failed_local_id` isolation).

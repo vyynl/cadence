@@ -13,6 +13,7 @@ defmodule Cadence.Daemon.Sync do
 
   alias Cadence.Daemon.{
     Env,
+    Nodes,
     NodeStore,
     ProjectLocation,
     Projects,
@@ -21,8 +22,8 @@ defmodule Cadence.Daemon.Sync do
     SyncLedger
   }
 
-  alias Cadence.Shared.{GitStore, Node, Project, UUID}
-  alias Cadence.Shared.Sync.NodeCodec
+  alias Cadence.Shared.{GitStore, Membership, Node, Project, UUID}
+  alias Cadence.Shared.Sync.{NodeCodec, PushPreferences}
 
   @permanent_statuses [400, 409, 422]
   @config_statuses [401, 403, 404]
@@ -42,7 +43,15 @@ defmodule Cadence.Daemon.Sync do
          :ok <- ensure_server_user(),
          :ok <- ensure_project(project_id),
          :ok <- push_pending(project_id) do
-      pull(project_id)
+      preference_result = push_preferences(project_id)
+
+      case pull(project_id) do
+        :ok -> preference_result
+        {:error, _reason} = error -> error
+      end
+    else
+      :error -> {:error, :invalid_uuid}
+      {:error, _reason} = error -> error
     end
   end
 
@@ -94,18 +103,237 @@ defmodule Cadence.Daemon.Sync do
   end
 
   @doc """
-  Pulls remote nodes for a project until the cursor stops advancing.
+  Pushes the local user's preferences when they are newer than the last
+  accepted version.
 
-  `cursor` defaults to the stored project cursor.
+  A newer server value returned by the push is applied locally; a stale server
+  value is ignored. The local version is only marked pushed after a successful
+  exchange.
   """
-  @spec pull(Ecto.UUID.t(), String.t() | nil) :: :ok | {:error, term()}
-  def pull(project_id, cursor \\ nil) do
+  @spec push_preferences(Ecto.UUID.t()) :: :ok | {:error, term()}
+  def push_preferences(project_id) do
     with {:ok, project_id} <- UUID.cast(project_id) do
-      do_pull(project_id, cursor || SyncLedger.cursor(project_id))
+      do_push_preferences(project_id)
     else
       :error -> {:error, :invalid_uuid}
     end
   end
+
+  @doc """
+  Applies remote preferences when they are strictly newer than the local
+  version.
+
+  `active_heads` is filtered to nodes present locally; a `session_pointer` is
+  applied only when its node exists locally. Applied values are marked so they
+  are not echoed back to the server.
+  """
+  @spec apply_remote_preferences(Ecto.UUID.t(), map() | nil) :: :ok | {:error, term()}
+  def apply_remote_preferences(_project_id, nil), do: :ok
+
+  def apply_remote_preferences(project_id, preferences) do
+    with {:ok, project_id} <- UUID.cast(project_id),
+         {:ok, %{version: remote_version} = parsed} <- parse_preferences(preferences) do
+      if is_nil(remote_version) do
+        :ok
+      else
+        case Repo.get_by(Membership, user_id: Env.local_user_id(), project_id: project_id) do
+          nil ->
+            :ok
+
+          membership ->
+            if newer_version?(remote_version, membership.preferences_updated_at) do
+              do_apply_remote_preferences(project_id, membership, parsed)
+            else
+              :ok
+            end
+        end
+      end
+    else
+      :error -> {:error, :invalid_preferences}
+    end
+  end
+
+  @doc """
+  Pulls remote nodes for a project until the cursor stops advancing.
+
+  `cursor` defaults to the stored project cursor. Remote preferences are applied
+  only after all node batches have been imported.
+  """
+  @spec pull(Ecto.UUID.t(), String.t() | nil) :: :ok | {:error, term()}
+  def pull(project_id, cursor \\ nil) do
+    with {:ok, project_id} <- UUID.cast(project_id) do
+      do_pull(project_id, cursor || SyncLedger.cursor(project_id), nil)
+    else
+      :error -> {:error, :invalid_uuid}
+    end
+  end
+
+  defp do_push_preferences(project_id) do
+    case Repo.get_by(Membership, user_id: Env.local_user_id(), project_id: project_id) do
+      nil ->
+        :ok
+
+      %Membership{preferences_updated_at: nil} ->
+        :ok
+
+      %Membership{} = membership ->
+        pushed =
+          case SyncLedger.preferences_state(project_id) do
+            %{pushed_updated_at: pushed_updated_at} -> pushed_updated_at
+            nil -> nil
+          end
+
+        if newer_version?(membership.preferences_updated_at, pushed) do
+          push_local_preferences(project_id, membership)
+        else
+          :ok
+        end
+    end
+  end
+
+  defp push_local_preferences(project_id, membership) do
+    version = membership.preferences_updated_at
+
+    payload = %PushPreferences{
+      project_id: project_id,
+      active_heads: membership.active_heads || [],
+      session_pointer: membership.session_pointer,
+      updated_at: DateTime.to_iso8601(version)
+    }
+
+    case SyncClient.push_preferences(payload) do
+      {:ok, %{preferences: preferences}} ->
+        handle_pushed_preferences(project_id, version, preferences)
+
+      {:error, reason} ->
+        record_preference_error(project_id, reason)
+        {:error, reason}
+    end
+  end
+
+  defp handle_pushed_preferences(project_id, local_version, preferences) do
+    case parse_preferences(preferences) do
+      {:ok, %{version: nil}} ->
+        mark_preferences_pushed(project_id, local_version)
+
+      {:ok, %{version: remote_version}} ->
+        if newer_version?(remote_version, local_version) do
+          apply_remote_preferences(project_id, preferences)
+        else
+          mark_preferences_pushed(project_id, local_version)
+        end
+
+      :error ->
+        record_preference_error(project_id, :invalid_preferences)
+        {:error, :invalid_preferences}
+    end
+  end
+
+  defp mark_preferences_pushed(project_id, version) do
+    case SyncLedger.mark_preferences_pushed(project_id, version) do
+      {:ok, _preference} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp record_preference_error(project_id, reason) do
+    case SyncLedger.mark_preferences_error(project_id, reason) do
+      {:ok, _preference} -> :ok
+      {:error, error} -> {:error, error}
+    end
+  end
+
+  defp do_apply_remote_preferences(project_id, membership, parsed) do
+    candidates = Enum.uniq(parsed.active_heads ++ List.wrap(parsed.session_pointer))
+    existing = Nodes.existing_ids(project_id, candidates)
+
+    active_heads =
+      parsed.active_heads
+      |> Enum.filter(&MapSet.member?(existing, &1))
+      |> Enum.uniq()
+
+    session_pointer =
+      case parsed.session_pointer do
+        nil ->
+          membership.session_pointer
+
+        node_id ->
+          if MapSet.member?(existing, node_id),
+            do: node_id,
+            else: membership.session_pointer
+      end
+
+    case membership
+         |> Membership.changeset(%{
+           active_heads: active_heads,
+           session_pointer: session_pointer,
+           preferences_updated_at: parsed.version
+         })
+         |> Repo.update() do
+      {:ok, _membership} ->
+        case SyncLedger.mark_preferences_remote(project_id, parsed.version) do
+          {:ok, _preference} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp parse_preferences(preferences) when is_map(preferences) do
+    with {:ok, version} <- parse_version(Map.get(preferences, "updated_at")),
+         {:ok, active_heads} <- parse_uuid_list(Map.get(preferences, "active_heads", [])),
+         {:ok, session_pointer} <- parse_optional_uuid(Map.get(preferences, "session_pointer")) do
+      {:ok,
+       %{
+         version: version,
+         active_heads: active_heads,
+         session_pointer: session_pointer
+       }}
+    end
+  end
+
+  defp parse_preferences(_preferences), do: :error
+
+  defp parse_version(nil), do: {:ok, nil}
+
+  defp parse_version(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> {:ok, DateTime.shift_zone!(datetime, "Etc/UTC")}
+      _ -> :error
+    end
+  end
+
+  defp parse_version(_value), do: :error
+
+  defp parse_uuid_list(values) when is_list(values) do
+    values
+    |> Enum.reduce_while({:ok, []}, fn value, {:ok, acc} ->
+      case UUID.cast(value) do
+        {:ok, uuid} -> {:cont, {:ok, [uuid | acc]}}
+        :error -> {:halt, :error}
+      end
+    end)
+    |> case do
+      {:ok, values} -> {:ok, Enum.reverse(values)}
+      :error -> :error
+    end
+  end
+
+  defp parse_uuid_list(_values), do: :error
+
+  defp parse_optional_uuid(nil), do: {:ok, nil}
+
+  defp parse_optional_uuid(value) do
+    case UUID.cast(value) do
+      {:ok, uuid} -> {:ok, uuid}
+      :error -> :error
+    end
+  end
+
+  defp newer_version?(_incoming, nil), do: true
+  defp newer_version?(incoming, current), do: DateTime.compare(incoming, current) == :gt
 
   defp provision_if_needed(project) do
     if SyncLedger.provisioned?(project.id) do
@@ -224,22 +452,30 @@ defmodule Cadence.Daemon.Sync do
     min(base * Integer.pow(2, exponent), @max_transient_backoff_ms)
   end
 
-  defp do_pull(project_id, cursor) do
+  defp do_pull(project_id, cursor, preferences) do
     case pull_batch(project_id, cursor) do
-      {:ok, 0, _next} -> :ok
-      {:ok, _count, next} when next != cursor -> do_pull(project_id, next)
-      {:ok, _count, ^cursor} -> {:error, :cursor_not_advancing}
-      {:error, reason} -> {:error, reason}
+      {:ok, 0, _next, batch_preferences} ->
+        apply_remote_preferences(project_id, batch_preferences || preferences)
+
+      {:ok, _count, next, batch_preferences} when next != cursor ->
+        do_pull(project_id, next, batch_preferences || preferences)
+
+      {:ok, _count, ^cursor, _preferences} ->
+        {:error, :cursor_not_advancing}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
   defp pull_batch(project_id, cursor) do
-    with {:ok, %{nodes: wires, cursor: next}} <- SyncClient.pull(project_id, cursor),
+    with {:ok, %{nodes: wires, cursor: next, preferences: preferences}} <-
+           SyncClient.pull(project_id, cursor),
          {:ok, git} <- NodeStore.open(project_id),
          {:ok, changesets} <- prepare_nodes(wires, git, project_id),
          :ok <- insert_pulled(changesets, project_id),
          {:ok, _cursor} <- SyncLedger.put_cursor(project_id, next) do
-      {:ok, length(wires), next}
+      {:ok, length(wires), next, preferences}
     else
       {:error, reason} -> pull_error(project_id, reason)
     end

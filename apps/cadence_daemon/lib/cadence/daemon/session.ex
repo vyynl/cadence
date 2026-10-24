@@ -7,7 +7,7 @@ defmodule Cadence.Daemon.Session do
   `active_heads` are the nodes this user considers live (see spec §4.3).
   """
 
-  alias Cadence.Daemon.{Env, Nodes, Repo}
+  alias Cadence.Daemon.{Env, Nodes, Repo, SyncLedger}
   alias Cadence.Shared.{Membership, Node, UUID}
 
   @role :owner
@@ -104,11 +104,17 @@ defmodule Cadence.Daemon.Session do
            Repo.get_by(Membership, user_id: Env.local_user_id(), project_id: project_id),
          node when not is_nil(node) <- Repo.get(Node, node_id),
          true <- node.project_id == project_id do
+      version = next_preferences_version(membership)
+
       {:ok, membership} =
         membership
-        |> Membership.changeset(%{session_pointer: node_id})
+        |> Membership.changeset(%{
+          session_pointer: node_id,
+          preferences_updated_at: version
+        })
         |> Repo.update()
 
+      SyncLedger.preferences_changed(project_id)
       {:ok, membership}
     else
       _ -> {:error, :not_found}
@@ -127,11 +133,18 @@ defmodule Cadence.Daemon.Session do
       membership.active_heads
       |> then(&((parent_node.id in &1 && &1) || [parent_node.id | &1]))
 
+    version = next_preferences_version(membership)
+
     {:ok, membership} =
       membership
-      |> Membership.changeset(%{session_pointer: new_node.id, active_heads: active_heads})
+      |> Membership.changeset(%{
+        session_pointer: new_node.id,
+        active_heads: active_heads,
+        preferences_updated_at: version
+      })
       |> Repo.update()
 
+    SyncLedger.preferences_changed(project_id)
     {:ok, membership}
   end
 
@@ -144,11 +157,34 @@ defmodule Cadence.Daemon.Session do
     membership = ensure_membership!(project_id)
     active_heads = (membership.active_heads || []) -- new_node.parents
 
+    version = next_preferences_version(membership)
+
     {:ok, membership} =
       membership
-      |> Membership.changeset(%{session_pointer: new_node.id, active_heads: active_heads})
+      |> Membership.changeset(%{
+        session_pointer: new_node.id,
+        active_heads: active_heads,
+        preferences_updated_at: version
+      })
       |> Repo.update()
 
+    SyncLedger.preferences_changed(project_id)
     {:ok, membership}
+  end
+
+  defp next_preferences_version(membership) do
+    now = DateTime.utc_now()
+
+    case membership.preferences_updated_at do
+      nil ->
+        now
+
+      current ->
+        if DateTime.compare(now, current) == :gt do
+          now
+        else
+          DateTime.add(current, 1, :microsecond)
+        end
+    end
   end
 end

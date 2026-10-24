@@ -14,7 +14,16 @@ defmodule Cadence.Daemon.SyncLedger do
 
   require Logger
 
-  alias Cadence.Daemon.{Env, Repo, SyncClient, SyncCursor, SyncPending, SyncState}
+  alias Cadence.Daemon.{
+    Env,
+    Repo,
+    SyncClient,
+    SyncCursor,
+    SyncPending,
+    SyncPreference,
+    SyncState
+  }
+
   alias Cadence.Shared.{Node, UUID}
 
   @backfill_key "backfill_v1"
@@ -28,7 +37,7 @@ defmodule Cadence.Daemon.SyncLedger do
   @doc "Queues a node for upload. Idempotent for a given node ID."
   @spec enqueue(Ecto.UUID.t(), Ecto.UUID.t()) :: :ok
   def enqueue(project_id, node_id) do
-    GenServer.cast(__MODULE__, {:enqueue, project_id, node_id})
+    GenServer.cast(__MODULE__, {:enqueue, project_id, node_id, sync_ready?()})
   end
 
   @doc "All pending nodes for a project, ordered parents-first."
@@ -76,6 +85,51 @@ defmodule Cadence.Daemon.SyncLedger do
           {:ok, SyncCursor.t()} | {:error, term()}
   def put_cursor(project_id, cursor) do
     GenServer.call(__MODULE__, {:put_cursor, project_id, cursor})
+  end
+
+  @doc """
+  The project's preference sync state, or `nil` before any preference sync.
+  """
+  @spec preferences_state(Ecto.UUID.t()) ::
+          %{
+            pushed_updated_at: DateTime.t() | nil,
+            remote_updated_at: DateTime.t() | nil,
+            last_error: String.t() | nil
+          }
+          | nil
+  def preferences_state(project_id) do
+    GenServer.call(__MODULE__, {:preferences_state, project_id})
+  end
+
+  @doc "Records the local preference version accepted by the server."
+  @spec mark_preferences_pushed(Ecto.UUID.t(), DateTime.t()) ::
+          {:ok, SyncPreference.t()} | {:error, term()}
+  def mark_preferences_pushed(project_id, version) do
+    GenServer.call(__MODULE__, {:mark_preferences_pushed, project_id, version})
+  end
+
+  @doc "Records a remote preference version applied locally."
+  @spec mark_preferences_remote(Ecto.UUID.t(), DateTime.t()) ::
+          {:ok, SyncPreference.t()} | {:error, term()}
+  def mark_preferences_remote(project_id, version) do
+    GenServer.call(__MODULE__, {:mark_preferences_remote, project_id, version})
+  end
+
+  @doc "Records a preference sync failure without clearing the local version."
+  @spec mark_preferences_error(Ecto.UUID.t(), term()) ::
+          {:ok, SyncPreference.t()} | {:error, term()}
+  def mark_preferences_error(project_id, reason) do
+    GenServer.call(__MODULE__, {:mark_preferences_error, project_id, reason})
+  end
+
+  @doc "Wakes the sync worker after a local preference change when sync is ready."
+  @spec preferences_changed(Ecto.UUID.t()) :: :ok
+  def preferences_changed(project_id) do
+    if sync_ready?() do
+      GenServer.cast(__MODULE__, {:preferences_changed, project_id})
+    else
+      :ok
+    end
   end
 
   @doc "The authenticated server user ID, or `nil` before `/sync/me` succeeds."
@@ -127,7 +181,7 @@ defmodule Cadence.Daemon.SyncLedger do
   def init(_opts), do: {:ok, %{}}
 
   @impl true
-  def handle_cast({:enqueue, project_id, node_id}, state) do
+  def handle_cast({:enqueue, project_id, node_id, ready?}, state) do
     with {:ok, project_id} <- UUID.cast(project_id),
          {:ok, node_id} <- UUID.cast(node_id) do
       now = DateTime.utc_now()
@@ -141,13 +195,25 @@ defmodule Cadence.Daemon.SyncLedger do
            }
            |> Repo.insert(on_conflict: :nothing) do
         {:ok, _pending} ->
-          notify_worker(project_id)
+          if ready?, do: notify_worker(project_id)
 
         {:error, reason} ->
           Logger.error("failed to enqueue node #{node_id} for sync: #{inspect(reason)}")
       end
     else
       _ -> Logger.warning("ignoring sync enqueue with invalid ids")
+    end
+
+    {:noreply, state}
+  end
+
+  def handle_cast({:preferences_changed, project_id}, state) do
+    case UUID.cast(project_id) do
+      {:ok, project_id} ->
+        notify_worker(project_id)
+
+      :error ->
+        Logger.warning("ignoring preference change with an invalid project id")
     end
 
     {:noreply, state}
@@ -231,6 +297,48 @@ defmodule Cadence.Daemon.SyncLedger do
       end
 
     {:reply, reply, state}
+  end
+
+  def handle_call({:preferences_state, project_id}, _from, state) do
+    reply =
+      with {:ok, project_id} <- UUID.cast(project_id),
+           %SyncPreference{} = preference <- Repo.get(SyncPreference, project_id) do
+        %{
+          pushed_updated_at: preference.pushed_updated_at,
+          remote_updated_at: preference.remote_updated_at,
+          last_error: preference.last_error
+        }
+      else
+        _ -> nil
+      end
+
+    {:reply, reply, state}
+  end
+
+  def handle_call({:mark_preferences_pushed, project_id, version}, _from, state) do
+    reply =
+      put_preferences(project_id, %{
+        pushed_updated_at: version,
+        remote_updated_at: version,
+        last_error: nil
+      })
+
+    {:reply, reply, state}
+  end
+
+  def handle_call({:mark_preferences_remote, project_id, version}, _from, state) do
+    reply =
+      put_preferences(project_id, %{
+        pushed_updated_at: version,
+        remote_updated_at: version,
+        last_error: nil
+      })
+
+    {:reply, reply, state}
+  end
+
+  def handle_call({:mark_preferences_error, project_id, reason}, _from, state) do
+    {:reply, put_preferences(project_id, %{last_error: format_error(reason)}), state}
   end
 
   def handle_call(:server_user_id, _from, state) do
@@ -362,6 +470,35 @@ defmodule Cadence.Daemon.SyncLedger do
     end
   end
 
+  defp put_preferences(project_id, attrs) do
+    with {:ok, project_id} <- UUID.cast(project_id),
+         :ok <- validate_preference_attrs(attrs) do
+      now = DateTime.utc_now()
+      fields = [:updated_at | Map.keys(attrs)]
+
+      case %SyncPreference{project_id: project_id}
+           |> SyncPreference.changeset(
+             Map.merge(attrs, %{project_id: project_id, updated_at: now})
+           )
+           |> Repo.insert(on_conflict: {:replace, fields}, conflict_target: :project_id) do
+        {:ok, _preference} -> {:ok, Repo.get!(SyncPreference, project_id)}
+        {:error, _changeset} = error -> error
+      end
+    else
+      :error -> {:error, :invalid_uuid}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp validate_preference_attrs(%{
+         pushed_updated_at: %DateTime{},
+         remote_updated_at: %DateTime{}
+       }),
+       do: :ok
+
+  defp validate_preference_attrs(%{last_error: error}) when is_binary(error), do: :ok
+  defp validate_preference_attrs(_attrs), do: {:error, :invalid_preference_state}
+
   defp state_value(key) do
     case Repo.get(SyncState, key) do
       %SyncState{value: value} -> value
@@ -382,10 +519,12 @@ defmodule Cadence.Daemon.SyncLedger do
   defp provisioned_key(project_id), do: @provisioned_prefix <> project_id
 
   defp notify_worker(project_id) do
-    if Env.sync_enabled?() and SyncClient.configured?() and
-         Process.whereis(Cadence.Daemon.SyncWorker) do
-      Cadence.Daemon.SyncWorker.wake(project_id)
-    end
+    if sync_ready?(), do: Cadence.Daemon.SyncWorker.wake(project_id)
+  end
+
+  defp sync_ready? do
+    Env.sync_enabled?() and SyncClient.configured?() and
+      Process.whereis(Cadence.Daemon.SyncWorker) != nil
   end
 
   defp cast_uuid(value) do

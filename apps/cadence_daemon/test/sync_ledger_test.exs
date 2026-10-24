@@ -75,6 +75,52 @@ defmodule Cadence.Daemon.SyncLedgerTest do
     assert {:error, :invalid_uuid} = SyncLedger.put_cursor("nope", "1")
   end
 
+  test "preference state round-trips through push, remote, and error", %{project: project} do
+    assert SyncLedger.preferences_state(project.id) == nil
+
+    first = DateTime.utc_now()
+    assert {:ok, preference} = SyncLedger.mark_preferences_pushed(project.id, first)
+    assert preference.pushed_updated_at == first
+    assert preference.remote_updated_at == first
+
+    assert SyncLedger.preferences_state(project.id) == %{
+             pushed_updated_at: first,
+             remote_updated_at: first,
+             last_error: nil
+           }
+
+    second = DateTime.add(first, 1, :second)
+    assert {:ok, _preference} = SyncLedger.mark_preferences_remote(project.id, second)
+
+    assert %{pushed_updated_at: ^second, remote_updated_at: ^second} =
+             SyncLedger.preferences_state(project.id)
+
+    assert {:ok, _preference} = SyncLedger.mark_preferences_error(project.id, {:http, 500})
+
+    assert %{pushed_updated_at: ^second, remote_updated_at: ^second, last_error: error} =
+             SyncLedger.preferences_state(project.id)
+
+    assert error =~ "http"
+  end
+
+  test "preference errors are bounded and invalid versions are rejected", %{project: project} do
+    assert {:ok, preference} =
+             SyncLedger.mark_preferences_error(project.id, String.duplicate("x", 5_000))
+
+    assert String.length(preference.last_error) <= 1_000
+
+    assert {:error, :invalid_uuid} =
+             SyncLedger.mark_preferences_pushed("nope", DateTime.utc_now())
+
+    assert {:error, :invalid_preference_state} =
+             SyncLedger.mark_preferences_pushed(project.id, nil)
+  end
+
+  test "preference changes are harmless before sync is configured", %{project: project} do
+    assert :ok = SyncLedger.preferences_changed(project.id)
+    assert :ok = SyncLedger.preferences_changed("not-a-uuid")
+  end
+
   test "server user id round-trips and rejects invalid values" do
     user_id = Ecto.UUID.generate()
 

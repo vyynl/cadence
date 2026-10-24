@@ -9,7 +9,14 @@ defmodule Cadence.Daemon.TestSyncServer do
   @doc "Starts a fake server state for `user_id`."
   def start(user_id) do
     Agent.start_link(fn ->
-      %{user_id: user_id, projects: %{}, nodes: [], next_seq: 1, next_failure: nil}
+      %{
+        user_id: user_id,
+        projects: %{},
+        nodes: [],
+        preferences: %{},
+        next_seq: 1,
+        next_failure: nil
+      }
     end)
   end
 
@@ -39,6 +46,20 @@ defmodule Cadence.Daemon.TestSyncServer do
   @doc "Returns the stored server-side project map for `project_id`."
   def project(server, project_id) do
     Agent.get(server, fn state -> Map.get(state.projects, project_id) end)
+  end
+
+  @doc "Seeds stored preferences for `project_id` (string-keyed map)."
+  def seed_preferences(server, project_id, preferences) do
+    Agent.update(server, fn state ->
+      %{state | preferences: Map.put(state.preferences, project_id, preferences)}
+    end)
+  end
+
+  @doc "Returns the stored preferences for `project_id`, or the empty value."
+  def preferences(server, project_id) do
+    Agent.get(server, fn state ->
+      Map.get(state.preferences, project_id) || empty_preferences()
+    end)
   end
 
   defp handle(server, conn) do
@@ -116,12 +137,50 @@ defmodule Cadence.Daemon.TestSyncServer do
     end
   end
 
+  defp route(server, %{method: "POST", request_path: "/sync/preferences"} = conn) do
+    params = conn.body_params
+    project_id = params["project_id"]
+
+    with true <- known_project?(server, project_id),
+         {:ok, incoming} <- parse_version(params["updated_at"]) do
+      stored =
+        Agent.get_and_update(server, fn state ->
+          current = Map.get(state.preferences, project_id) || empty_preferences()
+
+          case parse_version(current["updated_at"]) do
+            {:ok, nil} ->
+              {new_preferences(params),
+               %{
+                 state
+                 | preferences: Map.put(state.preferences, project_id, new_preferences(params))
+               }}
+
+            {:ok, current_version} ->
+              if DateTime.compare(incoming, current_version) == :gt do
+                updated = new_preferences(params)
+                {updated, %{state | preferences: Map.put(state.preferences, project_id, updated)}}
+              else
+                {current, state}
+              end
+
+            :error ->
+              {current, state}
+          end
+        end)
+
+      json(conn, 200, %{preferences: stored})
+    else
+      false -> json(conn, 404, %{"error" => "project not found"})
+      :error -> json(conn, 422, %{"error" => "invalid updated_at"})
+    end
+  end
+
   defp route(server, %{method: "GET", request_path: "/sync/nodes"} = conn) do
     project_id = conn.query_params["project_id"]
     since = parse_since(conn.query_params["since"])
 
     if known_project?(server, project_id) do
-      {nodes, cursor} =
+      {nodes, cursor, preferences} =
         Agent.get(server, fn state ->
           selected =
             state.nodes
@@ -134,10 +193,16 @@ defmodule Cadence.Daemon.TestSyncServer do
               _ -> List.last(selected).seq
             end
 
-          {Enum.map(selected, & &1.wire), cursor}
+          preferences = Map.get(state.preferences, project_id) || empty_preferences()
+
+          {Enum.map(selected, & &1.wire), cursor, preferences}
         end)
 
-      json(conn, 200, %{nodes: nodes, cursor: Integer.to_string(cursor)})
+      json(conn, 200, %{
+        nodes: nodes,
+        cursor: Integer.to_string(cursor),
+        preferences: preferences
+      })
     else
       json(conn, 404, %{"error" => "project not found"})
     end
@@ -163,6 +228,29 @@ defmodule Cadence.Daemon.TestSyncServer do
       :error -> :error
     end
   end
+
+  defp empty_preferences do
+    %{"active_heads" => [], "session_pointer" => nil, "updated_at" => nil}
+  end
+
+  defp new_preferences(params) do
+    %{
+      "active_heads" => params["active_heads"] || [],
+      "session_pointer" => params["session_pointer"],
+      "updated_at" => params["updated_at"]
+    }
+  end
+
+  defp parse_version(nil), do: {:ok, nil}
+
+  defp parse_version(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> {:ok, DateTime.shift_zone!(datetime, "Etc/UTC")}
+      _ -> :error
+    end
+  end
+
+  defp parse_version(_value), do: :error
 
   defp parse_since(nil), do: 0
 

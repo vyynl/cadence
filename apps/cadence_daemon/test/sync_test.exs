@@ -7,6 +7,7 @@ defmodule Cadence.Daemon.SyncTest do
     Nodes,
     ProjectLocation,
     Repo,
+    Session,
     Sync,
     SyncLedger,
     SyncPending,
@@ -14,7 +15,7 @@ defmodule Cadence.Daemon.SyncTest do
   }
 
   alias Cadence.Daemon.TestSyncServer
-  alias Cadence.Shared.{GitStore, Node, Project}
+  alias Cadence.Shared.{GitStore, Membership, Node, Project}
   alias Cadence.Shared.Sync.NodeCodec
 
   @server_user "11111111-1111-4111-8111-111111111111"
@@ -32,9 +33,14 @@ defmodule Cadence.Daemon.SyncTest do
 
     {:ok, server} = TestSyncServer.start(@server_user)
     TestSyncServer.stub(__MODULE__, server)
+    Req.Test.set_req_test_to_shared()
     {:ok, _} = SyncLedger.put_server_user_id(@server_user)
 
     on_exit(fn ->
+      _ = :sys.get_state(SyncLedger)
+      Application.put_env(:cadence_daemon, :sync_enabled, false)
+      wait_for_sync_idle()
+      Req.Test.set_req_test_to_private()
       clear_sync_config()
       File.rm_rf(root)
     end)
@@ -131,6 +137,244 @@ defmodule Cadence.Daemon.SyncTest do
     assert SyncLedger.cursor(project.id) == nil
   end
 
+  test "push_preferences sends a dirty local version and stops when clean", %{
+    project: project,
+    work_dir: work_dir,
+    git_dir: git_dir,
+    server: server
+  } do
+    queue = start_queue(project, work_dir, git_dir)
+    {:ok, node} = commit(queue, work_dir, "first")
+    assert eventually(fn -> pending?(project.id, node.id) end)
+
+    configure_sync()
+    assert :ok = Sync.ensure_project(project.id)
+
+    local = membership(project.id)
+    assert local.preferences_updated_at
+
+    assert :ok = Sync.push_preferences(project.id)
+
+    stored = TestSyncServer.preferences(server, project.id)
+    assert stored["session_pointer"] == node.id
+    assert stored["updated_at"] == DateTime.to_iso8601(local.preferences_updated_at)
+
+    assert %{pushed_updated_at: pushed} = SyncLedger.preferences_state(project.id)
+    assert DateTime.compare(pushed, local.preferences_updated_at) == :eq
+
+    TestSyncServer.fail_next(server, 500)
+    assert :ok = Sync.push_preferences(project.id)
+  end
+
+  test "push_preferences applies a newer server value and does not echo", %{
+    project: project,
+    work_dir: work_dir,
+    git_dir: git_dir,
+    server: server
+  } do
+    queue = start_queue(project, work_dir, git_dir)
+    {:ok, first} = commit(queue, work_dir, "first")
+    {:ok, _second} = commit(queue, work_dir, "second")
+
+    configure_sync()
+    assert :ok = Sync.ensure_project(project.id)
+
+    local = membership(project.id)
+    remote_version = DateTime.add(local.preferences_updated_at, 60, :second)
+    unknown = Ecto.UUID.generate()
+
+    TestSyncServer.seed_preferences(server, project.id, %{
+      "active_heads" => [first.id, unknown],
+      "session_pointer" => first.id,
+      "updated_at" => DateTime.to_iso8601(remote_version)
+    })
+
+    assert :ok = Sync.push_preferences(project.id)
+
+    applied = membership(project.id)
+    assert applied.session_pointer == first.id
+    assert applied.active_heads == [first.id]
+    assert DateTime.compare(applied.preferences_updated_at, remote_version) == :eq
+
+    assert %{pushed_updated_at: pushed, remote_updated_at: remote} =
+             SyncLedger.preferences_state(project.id)
+
+    assert DateTime.compare(pushed, remote_version) == :eq
+    assert DateTime.compare(remote, remote_version) == :eq
+
+    TestSyncServer.fail_next(server, 500)
+    assert :ok = Sync.push_preferences(project.id)
+  end
+
+  test "pull applies newer remote preferences after importing the node", %{
+    project: project,
+    server: server
+  } do
+    Session.ensure_membership!(project.id)
+    {wire, _commit_sha, _expected} = remote_node(project.id)
+    TestSyncServer.seed_node(server, project.id, wire)
+
+    version = DateTime.add(DateTime.utc_now(), 60, :second)
+    unknown = Ecto.UUID.generate()
+
+    TestSyncServer.seed_preferences(server, project.id, %{
+      "active_heads" => [wire["id"], unknown, wire["id"]],
+      "session_pointer" => wire["id"],
+      "updated_at" => DateTime.to_iso8601(version)
+    })
+
+    configure_sync()
+    assert :ok = Sync.ensure_project(project.id)
+    assert :ok = Sync.pull(project.id)
+
+    applied = membership(project.id)
+    assert applied.session_pointer == wire["id"]
+    assert applied.active_heads == [wire["id"]]
+    assert DateTime.compare(applied.preferences_updated_at, version) == :eq
+  end
+
+  test "pull filters unknown active heads and preserves an unknown pointer", %{
+    project: project,
+    server: server
+  } do
+    Session.ensure_membership!(project.id)
+    local = insert_node(project.id, Ecto.UUID.generate(), String.duplicate("c", 40), [])
+    assert {:ok, _membership} = Session.switch(project.id, local.id)
+
+    version = DateTime.add(DateTime.utc_now(), 60, :second)
+    unknown = Ecto.UUID.generate()
+
+    TestSyncServer.seed_preferences(server, project.id, %{
+      "active_heads" => [local.id, unknown],
+      "session_pointer" => unknown,
+      "updated_at" => DateTime.to_iso8601(version)
+    })
+
+    configure_sync()
+    assert :ok = Sync.ensure_project(project.id)
+    assert :ok = Sync.pull(project.id)
+
+    applied = membership(project.id)
+    assert applied.session_pointer == local.id
+    assert applied.active_heads == [local.id]
+    assert DateTime.compare(applied.preferences_updated_at, version) == :eq
+  end
+
+  test "pull ignores older remote preferences", %{project: project, server: server} do
+    Session.ensure_membership!(project.id)
+    local = insert_node(project.id, Ecto.UUID.generate(), String.duplicate("d", 40), [])
+    assert {:ok, _membership} = Session.switch(project.id, local.id)
+    local = membership(project.id)
+
+    older = DateTime.add(local.preferences_updated_at, -1, :second)
+
+    TestSyncServer.seed_preferences(server, project.id, %{
+      "active_heads" => [],
+      "session_pointer" => Ecto.UUID.generate(),
+      "updated_at" => DateTime.to_iso8601(older)
+    })
+
+    configure_sync()
+    assert :ok = Sync.ensure_project(project.id)
+    assert :ok = Sync.pull(project.id)
+
+    unchanged = membership(project.id)
+    assert unchanged.session_pointer == local.session_pointer
+    assert unchanged.active_heads == local.active_heads
+    assert DateTime.compare(unchanged.preferences_updated_at, local.preferences_updated_at) == :eq
+  end
+
+  test "apply_remote_preferences rejects malformed payloads", %{project: project} do
+    assert :ok = Sync.apply_remote_preferences(project.id, nil)
+
+    assert {:error, :invalid_preferences} =
+             Sync.apply_remote_preferences(project.id, %{
+               "active_heads" => [],
+               "session_pointer" => nil,
+               "updated_at" => "not-a-timestamp"
+             })
+
+    assert {:error, :invalid_preferences} =
+             Sync.apply_remote_preferences(project.id, %{
+               "active_heads" => ["not-a-uuid"],
+               "session_pointer" => nil,
+               "updated_at" => DateTime.to_iso8601(DateTime.utc_now())
+             })
+  end
+
+  test "local preferences round-trip and apply to a cleared session", %{
+    project: project,
+    work_dir: work_dir,
+    git_dir: git_dir,
+    server: server
+  } do
+    queue = start_queue(project, work_dir, git_dir)
+    {:ok, node} = commit(queue, work_dir, "first")
+
+    configure_sync()
+    assert :ok = Sync.sync(project.id)
+
+    stored = TestSyncServer.preferences(server, project.id)
+    assert stored["session_pointer"] == node.id
+
+    cleared = membership(project.id)
+
+    {:ok, _membership} =
+      cleared
+      |> Membership.changeset(%{
+        active_heads: [],
+        session_pointer: nil,
+        preferences_updated_at: nil
+      })
+      |> Repo.update()
+
+    assert :ok = Sync.sync(project.id)
+
+    restored = membership(project.id)
+    assert restored.session_pointer == node.id
+    assert restored.preferences_updated_at
+  end
+
+  test "offline preference changes flush once sync is configured", %{
+    project: project,
+    work_dir: work_dir,
+    git_dir: git_dir,
+    server: server
+  } do
+    queue = start_queue(project, work_dir, git_dir)
+    {:ok, node} = commit(queue, work_dir, "first")
+
+    local = membership(project.id)
+    assert local.preferences_updated_at
+    assert SyncLedger.preferences_state(project.id) == nil
+
+    configure_sync()
+    assert :ok = Sync.sync(project.id)
+
+    assert TestSyncServer.preferences(server, project.id)["session_pointer"] == node.id
+  end
+
+  test "a local switch wakes the worker and pushes preferences", %{
+    project: project,
+    work_dir: work_dir,
+    git_dir: git_dir,
+    server: server
+  } do
+    queue = start_queue(project, work_dir, git_dir)
+    {:ok, first} = commit(queue, work_dir, "first")
+    {:ok, _second} = commit(queue, work_dir, "second")
+
+    configure_sync()
+    assert :ok = Sync.ensure_project(project.id)
+
+    assert {:ok, _membership} = Session.switch(project.id, first.id)
+
+    assert eventually(fn ->
+             TestSyncServer.preferences(server, project.id)["session_pointer"] == first.id and
+               SyncLedger.cursor(project.id) != nil
+           end)
+  end
+
   test "transient push failure leaves the node pending with backoff", %{
     project: project,
     work_dir: work_dir,
@@ -178,15 +422,53 @@ defmodule Cadence.Daemon.SyncTest do
     assert eventually(fn -> pending?(project.id, node.id) end)
 
     configure_sync()
-    Req.Test.set_req_test_to_shared()
-
-    on_exit(fn -> Req.Test.set_req_test_to_private() end)
-
     SyncWorker.wake(project.id)
 
     assert eventually(fn -> SyncLedger.pending(project.id) == [] end)
     assert eventually(fn -> SyncLedger.cursor(project.id) != nil end)
     assert Enum.any?(TestSyncServer.nodes(server), &(&1["id"] == node.id))
+  end
+
+  defp wait_for_sync_idle(timeout \\ 3_000) do
+    Process.sleep(20)
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_wait_for_sync_idle(deadline)
+  end
+
+  defp do_wait_for_sync_idle(deadline) do
+    cond do
+      not sync_busy?() ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        :ok
+
+      true ->
+        Process.sleep(20)
+        do_wait_for_sync_idle(deadline)
+    end
+  end
+
+  defp sync_busy? do
+    in_flight =
+      try do
+        :sys.get_state(SyncWorker).in_flight
+      catch
+        _kind, _reason -> %{}
+      end
+
+    children =
+      try do
+        Task.Supervisor.children(Cadence.Daemon.SyncTasks)
+      catch
+        _kind, _reason -> []
+      end
+
+    in_flight != %{} or children != []
+  end
+
+  defp membership(project_id) do
+    Repo.get_by!(Membership, user_id: Env.local_user_id(), project_id: project_id)
   end
 
   defp configure_sync do

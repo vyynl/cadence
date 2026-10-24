@@ -3,6 +3,7 @@ defmodule Cadence.Daemon.SyncClientTest do
 
   alias Cadence.Daemon.SyncClient
   alias Cadence.Shared.Project
+  alias Cadence.Shared.Sync.PushPreferences
 
   @token "cad-test-token"
 
@@ -77,7 +78,59 @@ defmodule Cadence.Daemon.SyncClientTest do
       Req.Test.json(conn, %{nodes: [], cursor: "42"})
     end)
 
-    assert SyncClient.pull(project_id, "42") == {:ok, %{nodes: [], cursor: "42"}}
+    assert SyncClient.pull(project_id, "42") ==
+             {:ok, %{nodes: [], cursor: "42", preferences: nil}}
+  end
+
+  test "pull/2 preserves returned preferences" do
+    configure()
+    project_id = Ecto.UUID.generate()
+
+    preferences = %{
+      "active_heads" => [Ecto.UUID.generate()],
+      "session_pointer" => Ecto.UUID.generate(),
+      "updated_at" => "2026-10-23T12:00:00.000000Z"
+    }
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      Req.Test.json(conn, %{nodes: [], cursor: "42", preferences: preferences})
+    end)
+
+    assert {:ok, %{nodes: [], cursor: "42", preferences: ^preferences}} =
+             SyncClient.pull(project_id, "42")
+  end
+
+  test "push_preferences/1 posts flat versioned preferences" do
+    configure()
+    project_id = Ecto.UUID.generate()
+    head = Ecto.UUID.generate()
+    pointer = Ecto.UUID.generate()
+    updated_at = "2026-10-23T12:00:00.000000Z"
+
+    preferences = %PushPreferences{
+      project_id: project_id,
+      active_heads: [head],
+      session_pointer: pointer,
+      updated_at: updated_at
+    }
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      assert conn.method == "POST"
+      assert conn.request_path == "/sync/preferences"
+      assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer #{@token}"]
+
+      assert conn.body_params == %{
+               "project_id" => project_id,
+               "active_heads" => [head],
+               "session_pointer" => pointer,
+               "updated_at" => updated_at
+             }
+
+      Req.Test.json(conn, %{preferences: conn.body_params})
+    end)
+
+    assert {:ok, %{preferences: %{"updated_at" => ^updated_at}}} =
+             SyncClient.push_preferences(preferences)
   end
 
   test "provision/1 posts the local project identity" do

@@ -788,8 +788,16 @@ This means opening a project on machine B resumes your session from machine A.
 
 Preference writes are versioned by `preferences_updated_at`; a write wins only
 when its timestamp is strictly newer than the stored value (last-write-wins).
-Reads return the caller’s current preferences alongside the node pull. The
-server also broadcasts a notification when preferences change. The daemon’s
+Reads return the caller’s current preferences alongside the node pull.
+
+Daemon preference sync is independent of the node queue: a local session
+mutation bumps the version, and a background sync pushes it after pending nodes.
+Remote preferences are applied only after the node batch is imported;
+`active_heads` entries absent locally are dropped, and a `session_pointer` to
+an unknown node is ignored (the local pointer is retained). Applied remote
+versions are recorded as both remote and pushed so they are not echoed back.
+
+The server also broadcasts a notification when preferences change. The daemon’s
 optional Phoenix Channels connection (Phase 2b-4) is a **latency accelerator
 only**: it carries a `sync_available` hint, never DAG/preference state, and
 polling remains the correctness fallback.

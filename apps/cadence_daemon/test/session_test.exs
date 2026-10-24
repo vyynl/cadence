@@ -16,6 +16,7 @@ defmodule Cadence.Daemon.SessionTest do
     assert membership.user_id == user_id
     assert membership.role == :owner
     assert membership.active_heads == []
+    assert membership.preferences_updated_at == nil
 
     assert Session.ensure_membership!(project.id).user_id == user_id
   end
@@ -31,6 +32,7 @@ defmodule Cadence.Daemon.SessionTest do
 
     assert {:ok, membership} = Session.switch(project.id, node.id)
     assert membership.session_pointer == node.id
+    assert membership.preferences_updated_at
 
     assert {:error, :not_found} = Session.switch(project.id, Ecto.UUID.generate())
     assert {:error, :not_found} = Session.switch(project.id, "not-a-uuid")
@@ -50,6 +52,7 @@ defmodule Cadence.Daemon.SessionTest do
 
     assert membership.session_pointer == child.id
     assert parent.id in membership.active_heads
+    assert membership.preferences_updated_at
   end
 
   test "commit_after advances the pointer and drops superseded parents",
@@ -65,6 +68,24 @@ defmodule Cadence.Daemon.SessionTest do
 
     assert membership.session_pointer == child.id
     refute parent.id in membership.active_heads
+    assert membership.preferences_updated_at
+  end
+
+  test "preference versions advance across mutations", %{project: project} do
+    Session.ensure_membership!(project.id)
+    first = node_fixture(project.id)
+
+    {:ok, switched} = Session.switch(project.id, first.id)
+    second = node_fixture(project.id, [first.id])
+    {:ok, committed} = Session.commit_after(project.id, second)
+    third = node_fixture(project.id, [second.id])
+    {:ok, spawned} = Session.spawn_after(project.id, second, third)
+
+    assert DateTime.compare(committed.preferences_updated_at, switched.preferences_updated_at) ==
+             :gt
+
+    assert DateTime.compare(spawned.preferences_updated_at, committed.preferences_updated_at) ==
+             :gt
   end
 
   test "state returns read-only defaults without a membership",

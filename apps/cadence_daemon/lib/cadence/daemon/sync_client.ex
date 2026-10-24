@@ -10,6 +10,7 @@ defmodule Cadence.Daemon.SyncClient do
 
   alias Cadence.Daemon.Env
   alias Cadence.Shared.Project
+  alias Cadence.Shared.Sync.PushPreferences
 
   @doc "Whether a server URL and bearer token are configured."
   @spec configured?() :: boolean()
@@ -53,10 +54,11 @@ defmodule Cadence.Daemon.SyncClient do
   @doc """
   Pulls nodes for `project_id` after `cursor` (`nil` starts from the beginning).
 
-  Returns `%{nodes: [...], cursor: next_cursor}`.
+  Returns `%{nodes: [...], cursor: next_cursor, preferences: ...}`.
   """
   @spec pull(Ecto.UUID.t(), String.t() | nil) ::
-          {:ok, %{nodes: [map()], cursor: String.t()}} | {:error, term()}
+          {:ok, %{nodes: [map()], cursor: String.t(), preferences: map() | nil}}
+          | {:error, term()}
   def pull(project_id, cursor \\ nil) do
     params =
       [project_id: project_id]
@@ -66,10 +68,37 @@ defmodule Cadence.Daemon.SyncClient do
       case body do
         %{"nodes" => nodes, "cursor" => next_cursor}
         when is_list(nodes) and is_binary(next_cursor) ->
-          {:ok, %{nodes: nodes, cursor: next_cursor}}
+          {:ok,
+           %{
+             nodes: nodes,
+             cursor: next_cursor,
+             preferences: Map.get(body, "preferences")
+           }}
 
         _ ->
           {:error, {:invalid_response, body}}
+      end
+    end
+  end
+
+  @doc """
+  Pushes the caller's versioned preferences to the server.
+
+  Accepts a `Cadence.Shared.Sync.PushPreferences` struct or a map with the same
+  keys. Returns the server's current preferences, which may be newer than the
+  version that was pushed.
+  """
+  @spec push_preferences(PushPreferences.t() | map()) ::
+          {:ok, %{preferences: map()}} | {:error, term()}
+  def push_preferences(%PushPreferences{} = preferences) do
+    push_preferences(Map.from_struct(preferences))
+  end
+
+  def push_preferences(preferences) when is_map(preferences) do
+    with {:ok, body} <- request(:post, "/sync/preferences", json: preferences) do
+      case body do
+        %{"preferences" => %{} = current} -> {:ok, %{preferences: current}}
+        _ -> {:error, {:invalid_response, body}}
       end
     end
   end

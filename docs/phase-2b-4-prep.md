@@ -1,9 +1,9 @@
 # Phase 2b-4 prep — Preferences, notification channel, resilience
 
-> Status: **2b-4a complete/committed** (versioned preferences + server
-> preference transport); 2b-4b next. Cold-start brief for the next session:
-> `docs/phase-2b-4b-prep.md`. Canonical contract: `docs/spec.md` §4.3, §10.5,
-> §10.6, §11, §13.
+> Status: **2b-4a and 2b-4b complete/committed** (versioned preferences,
+> server transport, daemon push/apply); 2b-4c next. Cold-start brief:
+> `docs/phase-2b-4b-prep.md` (completed). Canonical contract: `docs/spec.md`
+> §4.3, §10.5, §10.6, §11, §13.
 
 Phase 2b-4 makes multi-machine continuity real and tightens sync failure
 handling. Sync remains local-first: preferences and notifications are hints,
@@ -96,7 +96,7 @@ preferences: %{active_heads, session_pointer, updated_at} | nil
 1. **2b-4a — Versioned preferences + server transport. ✅ Done.**
    Schema/migrations, `PushPreferences`/`PullNodesResponse`, pull preferences,
    `POST /sync/preferences`, versioning/broadcast/auth tests.
-2. **2b-4b — Daemon preferences.**
+2. **2b-4b — Daemon preferences. ✅ Done.**
    Ledger dirty/version state, `Session` dirty marking, push/apply, tests.
 3. **2b-4c — Partial batches.**
    `failed_local_id`, isolate bad nodes, preserve parents-first retry behavior.
