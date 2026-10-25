@@ -113,6 +113,21 @@ defmodule Cadence.Server.Portfolio do
     end
   end
 
+  @doc "List a project's memberships for the member read view."
+  @spec list_memberships(Ecto.UUID.t() | String.t()) :: [Membership.t()]
+  def list_memberships(project_id) do
+    with {:ok, project_id} <- UUID.cast(project_id) do
+      Repo.all(
+        from(m in Membership,
+          where: m.project_id == ^project_id,
+          order_by: [asc: m.role, asc: m.user_id]
+        )
+      )
+    else
+      :error -> []
+    end
+  end
+
   @readme_names [
     "README.md",
     "README.markdown",
@@ -163,11 +178,14 @@ defmodule Cadence.Server.Portfolio do
           | {:error, :not_found}
   def list_dir(project, node, path, opts \\ []) do
     max_entries = Keyword.get(opts, :max_entries) || config_int(:tree_max_entries, 1000)
+    filtered? = Keyword.get(opts, :filter, true)
     path = path || ""
 
     case GitStore.list_path(repo(project), node.git_commit_sha, path, max_entries: max_entries) do
       {:ok, entries, truncated?} ->
-        {visible, hidden_count} = PublicContent.filter_entries(entries)
+        {visible, hidden_count} =
+          if filtered?, do: PublicContent.filter_entries(entries), else: {entries, 0}
+
         {:ok, %{entries: visible, hidden_count: hidden_count, truncated?: truncated?}}
 
       {:error, :not_a_directory} ->
@@ -192,7 +210,10 @@ defmodule Cadence.Server.Portfolio do
   def read_file(project, node, path, opts \\ [])
 
   def read_file(project, node, path, opts) when is_binary(path) do
-    if PublicContent.sensitive_path?(path) and not PublicContent.allowed_sensitive_path?(path) do
+    filtered? = Keyword.get(opts, :filter, true)
+
+    if filtered? and PublicContent.sensitive_path?(path) and
+         not PublicContent.allowed_sensitive_path?(path) do
       {:error, :hidden}
     else
       max_bytes = Keyword.get(opts, :max_bytes) || config_int(:file_max_bytes, 524_288)
@@ -203,8 +224,14 @@ defmodule Cadence.Server.Portfolio do
           if PublicContent.binary?(content) do
             {:ok, %{path: path, content: nil, binary?: true, truncated?: false, redacted?: false}}
           else
-            {redacted, findings} = PublicContent.redact(content)
-            {display, lines_truncated?} = truncate_lines(redacted, max_lines)
+            {rendered, findings} =
+              if filtered? do
+                PublicContent.redact(content)
+              else
+                {content, []}
+              end
+
+            {display, lines_truncated?} = truncate_lines(rendered, max_lines)
 
             {:ok,
              %{
@@ -236,11 +263,12 @@ defmodule Cadence.Server.Portfolio do
   @spec read_readme(Project.t(), Node.t(), keyword()) :: {:ok, map()} | {:error, :not_found}
   def read_readme(project, node, opts \\ []) do
     max_bytes = Keyword.get(opts, :max_bytes) || config_int(:readme_max_bytes, 262_144)
+    filtered? = Keyword.get(opts, :filter, true)
     repo = repo(project)
 
     result =
       Enum.find_value(readme_candidates(repo, node.git_commit_sha), fn name ->
-        case read_readme_candidate(repo, node.git_commit_sha, name, max_bytes) do
+        case read_readme_candidate(repo, node.git_commit_sha, name, max_bytes, filtered?) do
           :not_found -> nil
           {:ok, _readme} = ok -> ok
         end
@@ -274,8 +302,9 @@ defmodule Cadence.Server.Portfolio do
     end
   end
 
-  defp read_readme_candidate(repo, commit_sha, name, max_bytes) do
-    if PublicContent.sensitive_path?(name) and not PublicContent.allowed_sensitive_path?(name) do
+  defp read_readme_candidate(repo, commit_sha, name, max_bytes, filtered?) do
+    if filtered? and PublicContent.sensitive_path?(name) and
+         not PublicContent.allowed_sensitive_path?(name) do
       :not_found
     else
       case GitStore.read_path(repo, commit_sha, name, max_bytes: max_bytes) do
@@ -290,7 +319,12 @@ defmodule Cadence.Server.Portfolio do
                redacted?: false
              }}
           else
-            {markdown, findings} = PublicContent.redact(content)
+            {markdown, findings} =
+              if filtered? do
+                PublicContent.redact(content)
+              else
+                {content, []}
+              end
 
             {:ok,
              %{

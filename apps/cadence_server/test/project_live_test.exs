@@ -5,7 +5,8 @@ defmodule Cadence.ServerWeb.ProjectLiveTest do
   import Phoenix.LiveViewTest
 
   alias Cadence.Server.{ProjectGit, Repo}
-  alias Cadence.Shared.{GitStore, Node, Project}
+  alias Cadence.Server.Accounts.User
+  alias Cadence.Shared.{GitStore, Membership, Node, Project}
 
   setup do
     project = insert_project("demo")
@@ -193,6 +194,150 @@ defmodule Cadence.ServerWeb.ProjectLiveTest do
     assert html =~ "ok"
   end
 
+  describe "authenticated controls" do
+    setup do
+      owner = seed_user("owner@example.com", "Owner")
+      trusted = seed_user("trusted@example.com", "Trusted")
+      viewer = seed_user("viewer@example.com", "Viewer")
+      project = insert_project("auth-demo", owner.id)
+      insert_membership(project, owner, :owner)
+      insert_membership(project, trusted, :trusted)
+      insert_membership(project, viewer, :viewer)
+
+      visible =
+        insert_node(
+          project,
+          %{message: "visible node", flags: [:functioning]},
+          %{"README.md" => "# Visible\n", "src/app.ex" => "defmodule App do\nend\n"}
+        )
+
+      secret =
+        insert_node(
+          project,
+          %{message: "secret node", flags: [:"in-progress"]},
+          %{
+            "README.md" => "# Secret\n",
+            "config.txt" => "token: ghp_abcdefghijklmnopqrstuvwxyz0123456789\n"
+          }
+        )
+
+      %{
+        owner: owner,
+        trusted: trusted,
+        viewer: viewer,
+        project: project,
+        visible: visible,
+        secret: secret
+      }
+    end
+
+    test "anonymous visitors get no controls or member list", %{conn: conn} do
+      {:ok, _view, html} = live(conn, "/p/auth-demo")
+
+      refute html =~ "Pin node"
+      refute html =~ "Show raw content"
+      refute html =~ "Members ("
+      refute html =~ "owner@example.com"
+    end
+
+    test "owners can pin and unpin nodes and see members", %{
+      conn: conn,
+      owner: owner,
+      visible: visible
+    } do
+      {:ok, view, html} = live(signed_conn(conn, owner), "/p/auth-demo")
+
+      assert html =~ "Pin node"
+      assert html =~ "Show raw content"
+      assert html =~ "Members (3)"
+      assert html =~ "Owner"
+      assert html =~ "Trusted"
+
+      html = render_click(view, "toggle_pin", %{"id" => visible.id})
+      assert html =~ "Unpin node"
+      assert Repo.get!(Node, visible.id).pinned
+
+      html = render_click(view, "toggle_pin", %{"id" => visible.id})
+      assert html =~ "Pin node"
+      refute Repo.get!(Node, visible.id).pinned
+    end
+
+    test "trusted members can reveal raw content but cannot pin", %{
+      conn: conn,
+      trusted: trusted,
+      visible: visible
+    } do
+      {:ok, view, html} = live(signed_conn(conn, trusted), "/p/auth-demo")
+
+      refute html =~ "Pin node"
+      assert html =~ "Show raw content"
+      assert html =~ "Members (3)"
+
+      html = render_click(view, "toggle_pin", %{"id" => visible.id})
+      assert html =~ "Only the project owner can pin nodes."
+      refute Repo.get!(Node, visible.id).pinned
+    end
+
+    test "viewers get no owner/trusted controls", %{conn: conn, viewer: viewer} do
+      {:ok, _view, html} = live(signed_conn(conn, viewer), "/p/auth-demo")
+
+      refute html =~ "Pin node"
+      refute html =~ "Show raw content"
+      refute html =~ "Members ("
+    end
+
+    test "owner raw view reveals a quarantined snapshot and can be toggled off", %{
+      conn: conn,
+      owner: owner,
+      secret: secret
+    } do
+      {:ok, view, html} =
+        live(signed_conn(conn, owner), "/p/auth-demo/n/#{secret.id}/blob/config.txt")
+
+      assert html =~ "Snapshot hidden for review"
+      refute html =~ "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+
+      html = render_click(view, "toggle_raw", %{})
+      assert html =~ "Raw view — unfiltered content."
+      assert html =~ "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+
+      html = render_click(view, "toggle_raw", %{})
+      assert html =~ "Snapshot hidden for review"
+      refute html =~ "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+    end
+
+    test "raw view resets when the selected node changes", %{
+      conn: conn,
+      owner: owner,
+      visible: visible,
+      secret: secret
+    } do
+      {:ok, view, _html} =
+        live(signed_conn(conn, owner), "/p/auth-demo/n/#{secret.id}/blob/config.txt")
+
+      html = render_click(view, "toggle_raw", %{})
+      assert html =~ "Raw view — unfiltered content."
+
+      html = render_patch(view, "/p/auth-demo/n/#{visible.id}")
+      refute html =~ "Raw view — unfiltered content."
+      assert html =~ "Show raw content"
+    end
+
+    test "viewer event injection cannot reveal raw content", %{
+      conn: conn,
+      viewer: viewer,
+      secret: secret
+    } do
+      {:ok, view, _html} =
+        live(signed_conn(conn, viewer), "/p/auth-demo/n/#{secret.id}/blob/config.txt")
+
+      html = render_click(view, "toggle_raw", %{})
+
+      refute html =~ "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+      assert html =~ "Only project owners and trusted members can view raw content."
+    end
+  end
+
   test "renders the empty state", %{conn: conn} do
     insert_project("empty")
     {:ok, _view, html} = live(conn, "/p/empty")
@@ -236,12 +381,35 @@ defmodule Cadence.ServerWeb.ProjectLiveTest do
     assert conn |> get("/assets/css/app.css") |> response(200) =~ ".project-home"
   end
 
-  defp insert_project(slug) do
+  defp seed_user(email, name) do
+    Ash.Seed.seed!(User, %{email: email, name: name})
+  end
+
+  defp insert_membership(project, user, role) do
+    %Membership{}
+    |> Membership.changeset(%{
+      user_id: user.id,
+      project_id: project.id,
+      role: role
+    })
+    |> Repo.insert!()
+  end
+
+  defp signed_conn(conn, user) do
+    {:ok, _token, claims} = AshAuthentication.Jwt.token_for_user(user)
+    subject_name = AshAuthentication.Info.authentication_subject_name!(User)
+
+    conn
+    |> init_test_session(%{})
+    |> put_session(to_string(subject_name), claims["jti"] <> ":" <> claims["sub"])
+  end
+
+  defp insert_project(slug, owner_id \\ Ecto.UUID.generate()) do
     %Project{}
     |> Project.changeset(%{
       name: "Demo",
       slug: slug,
-      owner_id: Ecto.UUID.generate()
+      owner_id: owner_id
     })
     |> Repo.insert!()
   end

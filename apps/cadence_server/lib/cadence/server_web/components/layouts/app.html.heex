@@ -25,6 +25,13 @@
       <nav><a class="brand" href="/">Cadence</a></nav>
     </header>
     <main id="main" tabindex="-1">
+      <%= if assigns[:flash] && assigns[:flash] != %{} do %>
+        <div class="flash-stack">
+          <p :for={{kind, message} <- assigns[:flash]} class={"flash flash-#{kind}"} role="status">
+            {message}
+          </p>
+        </div>
+      <% end %>
       <%= if assigns[:inner_content] do %>
         {@inner_content}
       <% else %>

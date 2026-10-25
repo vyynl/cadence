@@ -1,6 +1,6 @@
 # Phase 3 roadmap — Web UI & Portfolio
 
-> Status: **approved 2026-10-24; 3a–3c complete; 3d next**. This is the
+> Status: **approved 2026-10-24; Phase 3 slices 3a–3d complete; close next**. This is the
 > session-by-session plan for Phase 3. `docs/spec.md` §7/§13/§16 are canonical;
 > this file tracks execution order and acceptance. The cold-start build brief is
 > `docs/phase-3b-prep.md`.
@@ -31,7 +31,7 @@
 | 2 | 3b-1 | **Done** — LiveView project home, DAG SVG, node routes, message redaction, intro animation | Full DAG/interaction works; tests green |
 | 3 | 3b-2 | **Done** — file tree, file viewer, README/MDEx, public secret filter + quarantine | Repo pane browsable; no secret bytes in public HTML |
 | 4 | 3c | **Done** — portfolio index, canonical metadata, public-page polish | `/` lists projects; edge cases covered |
-| 5 | 3d | Owner pin/unpin, role checks, explicit unfiltered reveal | Owner controls work; public stays filtered |
+| 5 | 3d | **Done** — owner pin/unpin, members read view, explicit unfiltered reveal | Owner controls work; public stays filtered |
 | 6 | Close | Final spec/progress update, full suite + prod compile | Handoff clean |
 
 ### Session 2 — 3b-1: LiveView foundation + DAG + intro (done)
@@ -107,7 +107,14 @@ Original slice scope (implemented):
 - Public empty/error states.
 - Remaining accessibility/responsive polish.
 
-### Session 5 — 3d: authenticated controls
+### Session 5 — 3d: authenticated controls (done)
+
+Implemented: `ProjectAdmin.set_pinned/3`, owner-only pin/unpin in the LiveView,
+owner/trusted member read panel, and an explicit raw-view toggle for
+owner/trusted members. Viewer/anonymous events are rejected server-side; raw
+view resets on node change.
+
+Original slice scope (implemented):
 
 - Reuse `current_user` + `Membership` roles.
 - Owner pin/unpin; membership read views.

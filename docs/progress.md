@@ -1,7 +1,7 @@
 # Cadence — Progress
 
 ## Current Phase
-Phase 3d — authenticated owner/trusted controls
+Phase 3 close-out — final docs + verification (3e deferred to Phase 4)
 
 ## Done
 - [x] Read spec + AGENTS.md; audited and resolved all scaffold blockers.
@@ -544,15 +544,24 @@ Phase 3d — authenticated owner/trusted controls
 - [x] 5 new tests (2 Portfolio list, 2 portfolio page, 1 LiveView canonical
       metadata). 337 tests total (121 shared + 115 daemon + 101 server), all
       green; format, compile, and prod compile clean.
+- [x] Phase 3d — authenticated owner/trusted controls: `ProjectAdmin.set_pinned/3`;
+      LiveView resolves `current_user` + `Membership`; owner-only pin/unpin;
+      owner/trusted member read panel; explicit raw-view toggle for
+      owner/trusted (bypasses redaction/quarantine server-side, resets on node
+      change); viewer/anonymous event injection rejected; flash feedback.
+- [x] 10 new tests (membership listing, ProjectAdmin, sign-in/role controls,
+      pin/unpin, raw reveal/toggle-off/reset, viewer event injection). 347 tests
+      total (121 shared + 115 daemon + 111 server), all green; format, compile,
+      and prod compile clean.
 
 ## Next
-- **3d — authenticated owner/trusted controls.** Reuse the existing browser
-  session + `Membership` roles; add owner pin/unpin, membership read views, and
-  an explicit unfiltered reveal for owner/trusted users. Public/default renders
-  stay filtered.
-- Keep authorization server-side; do not rely on hiding controls in HTML.
-- Open decisions: syntax highlighting (plain code for now), member raw-view
-  policy, public `broken`/`sandbox` visibility, secret-filter overrides.
+- **Phase 3 close-out.** Defer the 3e review/promotion UI to Phase 4 (no backend
+  yet), update the roadmap/spec/progress, and run the final verification.
+- Known gap: web pinning is server-side only; pin updates are not propagated to
+  daemons by the sync protocol yet (spec §16). Revisit before relying on web
+  pins in the local picker.
+- Remaining open decisions: syntax highlighting, public `broken`/`sandbox`
+  visibility, secret-filter overrides, pin propagation, reveal auditing.
 
 ## Blocked
 - (none)
@@ -757,10 +766,24 @@ Phase 3d — authenticated owner/trusted controls
   though both were already present transitively. 3b starts using LiveView for the
   project home; 3a's dead-view page is superseded.
 - `membership_for/2` is in place for the 3d authenticated controls.
+- 3d added `Cadence.Server.ProjectAdmin.set_pinned/3` and a read-only member
+  panel (`Portfolio.list_memberships/1` + `Accounts.users_by_ids/1`). Owner-only
+  pinning follows §4.5; trusted members may view members/raw content but cannot
+  pin.
+- Raw view is a server-side, explicit owner/trusted toggle. It bypasses
+  redaction/quarantine only after the role check, resets when the selected node
+  changes, and is not available to viewers/anonymous users. Auditing the reveal
+  is deferred.
+- **Pinning propagation gap:** web pin/unpin updates `nodes.pinned` on the
+  server only. The sync pull inserts nodes but does not carry pinned-flag updates
+  back to the daemon, so the local picker's pinned state can diverge. Recorded
+  as an open decision in spec §16.
+- LiveView flash messages are now rendered in the shared layout for unauthorized
+  action feedback.
 
 ## Last Updated
-2026-10-24 — Phase 3c complete: public portfolio index with node counts,
-canonical/Open Graph metadata, skip link and responsive project cards. 337 tests
-green (121 shared + 115 daemon + 101 server); format and compile
-(dev/test/prod) clean. Next session starts 3d (authenticated owner/trusted
-controls).
+2026-10-24 — Phase 3d complete: owner pin/unpin, member read panel, and explicit
+owner/trusted raw view with server-side authorization. 347 tests green (121
+shared + 115 daemon + 111 server); format and compile (dev/test/prod) clean.
+Next session is the Phase 3 close-out; 3e (review/promotion UI) is deferred to
+Phase 4.

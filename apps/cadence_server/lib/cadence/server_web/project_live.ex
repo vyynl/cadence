@@ -5,10 +5,11 @@ defmodule Cadence.ServerWeb.ProjectLive do
 
   use Cadence.ServerWeb, :live_view
 
-  alias Cadence.Server.{Portfolio, PublicContent}
+  alias Cadence.Server.{Accounts, Portfolio, ProjectAdmin, PublicContent}
   alias Cadence.ServerWeb.Components.{DAG, Repo}
   alias Cadence.ServerWeb.DAGLayout
   alias Cadence.ServerWeb.Metadata
+  alias Cadence.Shared.{Node, Project}
 
   @impl true
   def mount(_params, _session, socket) do
@@ -43,11 +44,18 @@ defmodule Cadence.ServerWeb.ProjectLive do
           {:noreply, push_navigate(socket, to: ~p"/p/#{project.slug}")}
         else
           previous_id = socket.assigns.selected_node && socket.assigns.selected_node.id
+          same_node? = selected_node && previous_id == selected_node.id
+          auth = auth_context(project, socket.assigns[:current_user])
+
+          raw_view? =
+            auth.can_manage? == true and same_node? == true and
+              socket.assigns.raw_view? == true
 
           quarantine =
             cond do
               is_nil(selected_node) -> :ok
-              previous_id == selected_node.id -> socket.assigns.quarantine
+              raw_view? -> :ok
+              same_node? and not socket.assigns.raw_view? -> socket.assigns.quarantine
               true -> Portfolio.quarantine_status(project, selected_node)
             end
 
@@ -70,7 +78,12 @@ defmodule Cadence.ServerWeb.ProjectLive do
               selected_node: selected_node,
               not_found: false,
               quarantine: quarantine,
-              repo_action: action
+              repo_action: action,
+              membership: auth.membership,
+              members: auth.members,
+              can_pin?: auth.can_pin? == true,
+              can_manage?: auth.can_manage? == true,
+              raw_view?: raw_view?
             )
 
           {:noreply, load_repo(socket, project, selected_node, params, action)}
@@ -92,6 +105,54 @@ defmodule Cadence.ServerWeb.ProjectLive do
   end
 
   @impl true
+  def handle_event("toggle_pin", %{"id" => node_id}, socket) do
+    case {socket.assigns.can_pin?, socket.assigns.project, socket.assigns.selected_node} do
+      {true, %Project{} = project, %Node{}} ->
+        case Portfolio.node_for_project(project.id, node_id) do
+          nil ->
+            {:noreply, socket}
+
+          node ->
+            case ProjectAdmin.set_pinned(project.id, node.id, not node.pinned) do
+              {:ok, _node} ->
+                {:noreply, reload_dag(socket)}
+
+              {:error, _reason} ->
+                {:noreply, put_flash(socket, :error, "Could not update the pin.")}
+            end
+        end
+
+      _ ->
+        {:noreply, put_flash(socket, :error, "Only the project owner can pin nodes.")}
+    end
+  end
+
+  def handle_event("toggle_raw", _params, socket) do
+    case {socket.assigns.can_manage?, socket.assigns.project, socket.assigns.selected_node} do
+      {true, %Project{} = project, %Node{} = selected_node} ->
+        raw_view? = !socket.assigns.raw_view?
+
+        quarantine =
+          if raw_view? do
+            :ok
+          else
+            Portfolio.quarantine_status(project, selected_node)
+          end
+
+        socket = assign(socket, raw_view?: raw_view?, quarantine: quarantine)
+        {:noreply, reload_repo(socket)}
+
+      _ ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Only project owners and trusted members can view raw content."
+         )}
+    end
+  end
+
+  @impl true
   def render(assigns) do
     ~H"""
     <%= if @not_found do %>
@@ -107,6 +168,17 @@ defmodule Cadence.ServerWeb.ProjectLive do
           <p class="eyebrow">Project</p>
           <h1>{@project.name}</h1>
           <p class="slug">/{@project.slug}</p>
+
+          <details :if={@members} class="members-panel">
+            <summary>Members ({length(@members)})</summary>
+            <ul>
+              <li :for={%{membership: membership, user: user} <- @members}>
+                <span>{member_name(user, membership.user_id)}</span>
+                <span class="role-badge">{membership.role}</span>
+                <span :if={membership.approver} class="note">approver</span>
+              </li>
+            </ul>
+          </details>
         </header>
 
         <div class="project-home">
@@ -137,7 +209,27 @@ defmodule Cadence.ServerWeb.ProjectLive do
                   </p>
                 </header>
 
-                <Repo.quarantine :if={@quarantine == :quarantined} />
+                <div :if={@can_manage?} class="admin-controls">
+                  <button
+                    :if={@can_pin?}
+                    type="button"
+                    class="admin-button"
+                    phx-click="toggle_pin"
+                    phx-value-id={@selected_node.id}
+                  >
+                    {if @selected_node.pinned, do: "Unpin node", else: "Pin node"}
+                  </button>
+
+                  <button type="button" class="admin-button" phx-click="toggle_raw">
+                    {if @raw_view?, do: "Show filtered view", else: "Show raw content"}
+                  </button>
+
+                  <span :if={@raw_view?} class="admin-warning">
+                    Raw view — unfiltered content.
+                  </span>
+                </div>
+
+                <Repo.quarantine :if={@quarantine == :quarantined and not @raw_view?} />
 
                 <div :if={@quarantine != :quarantined and @path_error} class="path-error">
                   <p class="note">{@path_error}</p>
@@ -206,6 +298,11 @@ defmodule Cadence.ServerWeb.ProjectLive do
       not_found: false,
       quarantine: :ok,
       repo_action: :node,
+      membership: nil,
+      members: nil,
+      can_pin?: false,
+      can_manage?: false,
+      raw_view?: false,
       current_path: "",
       tree: nil,
       file: nil,
@@ -220,26 +317,31 @@ defmodule Cadence.ServerWeb.ProjectLive do
   defp load_repo(socket, _project, nil, _params, _action), do: clear_repo(socket)
 
   defp load_repo(socket, project, node, params, action) do
+    filtered? = not socket.assigns.raw_view?
+    path = param_path(params["path"])
+
     cond do
-      socket.assigns.quarantine == :quarantined ->
-        clear_repo(socket)
+      filtered? and socket.assigns.quarantine == :quarantined ->
+        clear_repo(socket, path)
 
       action == :blob ->
-        load_file(socket, project, node, param_path(params["path"]))
+        load_file(socket, project, node, path, filtered?)
 
       action == :tree ->
-        load_tree(socket, project, node, param_path(params["path"]))
+        load_tree(socket, project, node, path, filtered?)
 
       true ->
-        load_tree(socket, project, node, "")
+        load_tree(socket, project, node, "", filtered?)
     end
   end
 
-  defp load_tree(socket, project, node, path) do
-    case Portfolio.list_dir(project, node, path) do
+  defp load_tree(socket, project, node, path, filtered?) do
+    case Portfolio.list_dir(project, node, path, filter: filtered?) do
       {:ok, dir} ->
         {readme_html, readme_name, readme_redacted?, readme_notice} =
-          if path == "", do: load_readme(project, node), else: {nil, nil, false, nil}
+          if path == "",
+            do: load_readme(project, node, filtered?),
+            else: {nil, nil, false, nil}
 
         assign(socket,
           current_path: path,
@@ -259,10 +361,10 @@ defmodule Cadence.ServerWeb.ProjectLive do
     end
   end
 
-  defp load_file(socket, project, node, path) do
+  defp load_file(socket, project, node, path, filtered?) do
     path = path || ""
 
-    case Portfolio.read_file(project, node, path) do
+    case Portfolio.read_file(project, node, path, filter: filtered?) do
       {:ok, file} ->
         assign(socket,
           current_path: path,
@@ -287,8 +389,8 @@ defmodule Cadence.ServerWeb.ProjectLive do
     end
   end
 
-  defp load_readme(project, node) do
-    case Portfolio.read_readme(project, node) do
+  defp load_readme(project, node, filtered?) do
+    case Portfolio.read_readme(project, node, filter: filtered?) do
       {:ok, %{binary?: true, name: name}} ->
         {nil, name, false, "README is binary and was not rendered."}
 
@@ -315,6 +417,68 @@ defmodule Cadence.ServerWeb.ProjectLive do
       {:error, _reason} -> "<p>README could not be rendered.</p>"
     end
   end
+
+  defp reload_dag(socket) do
+    project = socket.assigns.project
+
+    nodes =
+      project.id
+      |> Portfolio.list_nodes()
+      |> Enum.map(&redact_node/1)
+
+    preview = Portfolio.preview_node(project.id)
+    selected_id = socket.assigns.selected_node && socket.assigns.selected_node.id
+    selected_node = Enum.find(nodes, &(&1.id == selected_id))
+
+    dag_layout =
+      DAGLayout.layout(nodes,
+        default_id: preview && preview.id,
+        intro_ms: dag_intro_ms()
+      )
+
+    assign(socket, selected_node: selected_node, dag_layout: dag_layout)
+  end
+
+  defp reload_repo(socket) do
+    params = %{"path" => socket.assigns.current_path}
+
+    load_repo(
+      socket,
+      socket.assigns.project,
+      socket.assigns.selected_node,
+      params,
+      socket.assigns.repo_action
+    )
+  end
+
+  defp auth_context(project, current_user) do
+    membership =
+      if current_user do
+        Portfolio.membership_for(current_user.id, project.id)
+      end
+
+    can_manage? = membership && membership.role in [:owner, :trusted]
+    can_pin? = membership && membership.role == :owner
+
+    %{
+      membership: membership,
+      can_manage?: can_manage?,
+      can_pin?: can_pin?,
+      members: if(can_manage?, do: load_members(project.id), else: nil)
+    }
+  end
+
+  defp load_members(project_id) do
+    memberships = Portfolio.list_memberships(project_id)
+    users = Accounts.users_by_ids(Enum.map(memberships, & &1.user_id))
+
+    Enum.map(memberships, fn membership ->
+      %{membership: membership, user: Map.get(users, membership.user_id)}
+    end)
+  end
+
+  defp member_name(nil, user_id), do: user_id
+  defp member_name(user, _user_id), do: user.name || user.email || user.id
 
   defp clear_repo(socket, path \\ "") do
     assign(socket,

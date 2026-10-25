@@ -604,3 +604,85 @@ code {
     stroke-dashoffset: 0 !important;
   }
 }
+
+.admin-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.75rem 0 1rem;
+}
+
+.admin-button {
+  padding: 0.4rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.admin-button:hover,
+.admin-button:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.admin-warning {
+  color: var(--broken);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.members-panel {
+  margin-top: 0.75rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.members-panel summary {
+  cursor: pointer;
+}
+
+.members-panel ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1.2rem;
+}
+
+.members-panel li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: baseline;
+  margin: 0.2rem 0;
+}
+
+.role-badge {
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+}
+
+.flash-stack {
+  display: grid;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.flash {
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  font-size: 0.9rem;
+}
+
+.flash-error {
+  border-color: var(--broken);
+  color: var(--broken);
+}

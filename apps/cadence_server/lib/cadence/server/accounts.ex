@@ -35,6 +35,23 @@ defmodule Cadence.Server.Accounts do
   def authenticate_api_key(_api_key), do: {:error, :invalid_api_key}
 
   @doc """
+  Load users by ID for the membership read view.
+
+  Returns a `%{user_id => user}` map; missing/deleted users are omitted.
+  """
+  @spec users_by_ids([Ecto.UUID.t() | String.t()]) :: %{
+          optional(String.t()) => Ash.Resource.record()
+        }
+  def users_by_ids(ids) when is_list(ids) do
+    Enum.reduce(ids, %{}, fn id, acc ->
+      case Ash.get(Cadence.Server.Accounts.User, id, domain: __MODULE__) do
+        {:ok, user} -> Map.put(acc, user.id, user)
+        _ -> acc
+      end
+    end)
+  end
+
+  @doc """
   Issues a personal access token for a daemon.
 
   The plaintext key is available exactly once in

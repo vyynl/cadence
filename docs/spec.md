@@ -530,7 +530,8 @@ and static paths are reserved.
 ### 7.2 Owner/trusted views (authenticated)
 
 - All of the above, plus:
-- Pin/unpin nodes.
+- Pin/unpin nodes (owner only; trusted members may not pin, §4.5).
+- A read-only member list with roles/approver flags (owner/trusted only).
 - Trigger actions.
 - Manage memberships.
 - Review and approve/reject meld proposals (shareable link).
@@ -684,7 +685,10 @@ therefore applies a mandatory, server-side filter to every anonymous render
 5. **Binary files** are never rendered publicly.
 6. **Authenticated raw view** is an explicit owner/trusted action (Phase 3d),
    never the default. Public and default authenticated renders stay filtered;
-   the quarantine notice and explicit reveal are owner/trusted actions.
+   owner/trusted members may toggle raw content for the selected node. Raw view
+   bypasses redaction and quarantine only on the server, after a server-side
+   role check; it resets when the selected node changes. Viewers and anonymous
+   visitors cannot enable it.
 7. **No content logging.** Scan results log counts/reasons only, never values or
    file content.
 
@@ -1432,10 +1436,15 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       hover metadata (§7.3). Time-clamped spacing is deferred.
 - [x] **Y-axis curve:** resolved for Phase 3 — depth-based spacing has no
       curve. Revisit only if time-clamped spacing is adopted.
-- [ ] **Public raw/filtered member view:** how much unfiltered content should
-      authenticated owner/trusted members see in the web UI, and whether the
-      reveal action must be audited? Current plan: default filtered, explicit
-      owner/trusted reveal in 3d.
+- [x] **Public raw/filtered member view:** resolved in 3d — public and default
+      authenticated renders stay filtered; owner/trusted members get an explicit
+      raw toggle for the selected node. It resets on node change; viewers and
+      anonymous visitors cannot enable it. Auditing the reveal action is
+      deferred.
+- [ ] **Pin propagation to daemons:** web pin/unpin is currently server-side
+      only. The sync protocol pulls/inserts nodes but does not carry pinned-flag
+      updates back to the daemon, so a web pin changes the public preview but not
+      the local picker's pinned state. Revisit in a later sync-protocol slice.
 - [ ] **Secret filter overrides:** per-project allowlists or custom patterns for
       legitimate files that trip the scanner. Deferred until false positives are
       observed.

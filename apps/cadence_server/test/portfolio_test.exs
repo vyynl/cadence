@@ -271,6 +271,31 @@ defmodule Cadence.Server.PortfolioTest do
   end
 
   describe "membership_for/2" do
+    test "lists memberships for a project" do
+      project = insert_project()
+      owner_id = Ecto.UUID.generate()
+      trusted_id = Ecto.UUID.generate()
+      viewer_id = Ecto.UUID.generate()
+
+      for {user_id, role} <- [
+            {viewer_id, :viewer},
+            {trusted_id, :trusted},
+            {owner_id, :owner}
+          ] do
+        %Membership{}
+        |> Membership.changeset(%{user_id: user_id, project_id: project.id, role: role})
+        |> Repo.insert!()
+      end
+
+      assert Enum.map(Portfolio.list_memberships(project.id), &{&1.user_id, &1.role}) == [
+               {owner_id, :owner},
+               {trusted_id, :trusted},
+               {viewer_id, :viewer}
+             ]
+
+      assert Portfolio.list_memberships("not-a-uuid") == []
+    end
+
     test "returns the membership or nil" do
       project = insert_project()
       user_id = Ecto.UUID.generate()
