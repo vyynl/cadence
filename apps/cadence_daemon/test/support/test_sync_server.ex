@@ -15,7 +15,8 @@ defmodule Cadence.Daemon.TestSyncServer do
         nodes: [],
         preferences: %{},
         next_seq: 1,
-        next_failure: nil
+        next_failure: nil,
+        next_node_failure: nil
       }
     end)
   end
@@ -28,6 +29,11 @@ defmodule Cadence.Daemon.TestSyncServer do
   @doc "Makes the next request fail with `status`/`body`."
   def fail_next(server, status, body \\ %{"error" => "forced failure"}) do
     Agent.update(server, &%{&1 | next_failure: {status, body}})
+  end
+
+  @doc "Makes the next push containing `node_id` fail with `status`/`body`."
+  def fail_next_node(server, node_id, status \\ 422, body \\ %{"error" => "node failed"}) do
+    Agent.update(server, &%{&1 | next_node_failure: {node_id, status, body}})
   end
 
   @doc "Seeds a remote wire node for pull tests."
@@ -104,36 +110,12 @@ defmodule Cadence.Daemon.TestSyncServer do
   defp route(server, %{method: "POST", request_path: "/sync/nodes"} = conn) do
     nodes = conn.body_params["nodes"] || []
 
-    with [project_id] <- nodes |> Enum.map(&get_in(&1, ["metadata", "project_id"])) |> Enum.uniq(),
-         true <- known_project?(server, project_id) do
-      mappings =
-        Agent.get_and_update(server, fn state ->
-          {state, mappings} =
-            Enum.reduce(nodes, {state, []}, fn node, {state, mappings} ->
-              id = node["local_id"]
-              metadata = node["metadata"] || %{}
-              wire = Map.merge(metadata, %{"id" => id, "created_by" => state.user_id})
-              wire = Map.put(wire, "git_objects", node["git_objects"] || [])
+    case take_node_failure(server, nodes) do
+      {status, body, node_id} ->
+        json(conn, status, Map.put(body, "failed_local_id", node_id))
 
-              state =
-                if Enum.any?(state.nodes, &(&1.wire["id"] == id)) do
-                  state
-                else
-                  entry = %{seq: state.next_seq, project_id: metadata["project_id"], wire: wire}
-                  %{state | nodes: state.nodes ++ [entry], next_seq: state.next_seq + 1}
-                end
-
-              {state, [%{"local_id" => id, "cloud_id" => id} | mappings]}
-            end)
-
-          {Enum.reverse(mappings), state}
-        end)
-
-      json(conn, 200, %{mappings: mappings})
-    else
-      [] -> json(conn, 422, %{"error" => "empty batch"})
-      false -> json(conn, 404, %{"error" => "project not found"})
-      _ -> json(conn, 422, %{"error" => "mixed projects"})
+      nil ->
+        push_nodes(server, conn, nodes)
     end
   end
 
@@ -210,6 +192,56 @@ defmodule Cadence.Daemon.TestSyncServer do
 
   defp route(_server, conn) do
     json(conn, 404, %{"error" => "not found"})
+  end
+
+  defp push_nodes(server, conn, nodes) do
+    with [project_id] <- nodes |> Enum.map(&get_in(&1, ["metadata", "project_id"])) |> Enum.uniq(),
+         true <- known_project?(server, project_id) do
+      mappings =
+        Agent.get_and_update(server, fn state ->
+          {state, mappings} =
+            Enum.reduce(nodes, {state, []}, fn node, {state, mappings} ->
+              id = node["local_id"]
+              metadata = node["metadata"] || %{}
+              wire = Map.merge(metadata, %{"id" => id, "created_by" => state.user_id})
+              wire = Map.put(wire, "git_objects", node["git_objects"] || [])
+
+              state =
+                if Enum.any?(state.nodes, &(&1.wire["id"] == id)) do
+                  state
+                else
+                  entry = %{seq: state.next_seq, project_id: metadata["project_id"], wire: wire}
+                  %{state | nodes: state.nodes ++ [entry], next_seq: state.next_seq + 1}
+                end
+
+              {state, [%{"local_id" => id, "cloud_id" => id} | mappings]}
+            end)
+
+          {Enum.reverse(mappings), state}
+        end)
+
+      json(conn, 200, %{mappings: mappings})
+    else
+      [] -> json(conn, 422, %{"error" => "empty batch"})
+      false -> json(conn, 404, %{"error" => "project not found"})
+      _ -> json(conn, 422, %{"error" => "mixed projects"})
+    end
+  end
+
+  defp take_node_failure(server, nodes) do
+    Agent.get_and_update(server, fn state ->
+      case state.next_node_failure do
+        {node_id, status, body} ->
+          if Enum.any?(nodes, &(&1["local_id"] == node_id)) do
+            {{status, body, node_id}, %{state | next_node_failure: nil}}
+          else
+            {nil, state}
+          end
+
+        nil ->
+          {nil, state}
+      end
+    end)
   end
 
   defp take_failure(server) do

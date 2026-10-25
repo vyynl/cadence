@@ -158,8 +158,8 @@ defmodule Cadence.Server.Sync do
             {:cont, {:ok, [parsed | acc], MapSet.put(seen, parsed.local_id)}}
           end
 
-        {:error, _reason} = error ->
-          {:halt, error}
+        {:error, reason} ->
+          {:halt, {:error, wrap_node_error(node, reason)}}
       end
     end)
     |> case do
@@ -167,6 +167,22 @@ defmodule Cadence.Server.Sync do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp wrap_node_error(node, reason) do
+    case node_local_id(node) do
+      {:ok, local_id} -> {:node_error, local_id, reason}
+      :error -> reason
+    end
+  end
+
+  defp node_local_id(%{"local_id" => local_id}) do
+    case uuid(local_id) do
+      {:ok, local_id} -> {:ok, local_id}
+      {:error, _reason} -> :error
+    end
+  end
+
+  defp node_local_id(_node), do: :error
 
   defp parse_node(%{"local_id" => local_id, "metadata" => metadata} = node, project_id, user)
        when is_map(metadata) do
@@ -276,7 +292,7 @@ defmodule Cadence.Server.Sync do
       Enum.reduce_while(parsed, {:ok, []}, fn node, {:ok, mappings} ->
         case insert_node(store, node, project_id, role) do
           {:ok, mapping} -> {:cont, {:ok, [mapping | mappings]}}
-          {:error, reason} -> {:halt, {:error, reason}}
+          {:error, reason} -> {:halt, {:error, {:node_error, node.local_id, reason}}}
         end
       end)
 

@@ -1,7 +1,7 @@
 # Cadence — Progress
 
 ## Current Phase
-Phase 2b-4b complete → 2b-4c (partial-batch `failed_local_id` isolation)
+Phase 2b-4c complete → 2b-4d (`slipstream` Phoenix Channels accelerator)
 
 ## Done
 - [x] Read spec + AGENTS.md; audited and resolved all scaffold blockers.
@@ -431,13 +431,27 @@ Phase 2b-4b complete → 2b-4c (partial-batch `failed_local_id` isolation)
       (108 shared + 100 daemon + 36 server), all green; format and compile
       (dev/test/prod) clean.
 
+- [x] 2b-4c — partial-batch node failure isolation: server wraps node-level
+      parse/insert failures as `{:node_error, local_id, reason}` and controller
+      responses include `failed_local_id` (batches remain atomic); daemon
+      `SyncLedger.pushable/3` selects due nodes parents-first and blocks
+      descendants of backed-off parents; `Sync` isolates the reported node,
+      retries the rest, keeps descendants pending, and falls back to whole-batch
+      failure for batch-level/unknown failures; ledger-write errors abort
+      isolation to avoid retry loops.
+- [x] Server + daemon tests for failed-ID error bodies, parent-first pushable
+      selection, middle-node isolation, blocked descendants, retry-after-parent,
+      whole-batch fallback, and out-of-batch failed IDs. 250 tests total
+      (108 shared + 105 daemon + 37 server), all green; format and compile
+      (dev/test/prod) clean.
+
 ## Next
 - **Read `docs/phase-2b-4-prep.md` §6 first.**
-- Start **2b-4c — partial-batch isolation**: add `failed_local_id` to node push
-  errors, isolate bad nodes, and preserve parents-first retry behavior so one
-  invalid node does not block unrelated nodes.
-- Then **2b-4d** the `slipstream` Phoenix Channels accelerator and **2b-4e**
-  two-daemon convergence/docs.
+- Start **2b-4d — Phoenix Channels accelerator**: add `slipstream`, the server
+  socket/channel for `sync:user:<server_user_id>`, daemon connect/join with the
+  `x-cadence-token` header, `sync_available` → `SyncWorker.wake/1`, and
+  reconnection/fallback tests. Polling remains the correctness path.
+- Then **2b-4e** two-daemon convergence/docs.
 - Deferred picker items: Telescope project picker (would add a dep to §11) and
   the `:CadOpen` short-sync attempt (can call `Sync.sync/1` with a short
   timeout now that orchestration exists).
@@ -569,8 +583,14 @@ Phase 2b-4b complete → 2b-4c (partial-batch `failed_local_id` isolation)
   and retry on the next sync cycle; they never enter `sync_pending`. A
   preference failure does not block the node pull in `Sync.sync/1`.
 
+- Node push errors now carry `failed_local_id` in the body for per-node failures;
+  batches remain atomic (no partial inserts). Spec §10.6 documents the shape.
+- The daemon selects push batches with `SyncLedger.pushable/3`: due nodes are
+  sent parents-first, and children of a backed-off parent remain pending instead
+  of being marked failed as out-of-order.
+
 ## Last Updated
-2026-10-24 — 2b-4b daemon preference push/apply implemented, hardened, and
-verified. 244 Elixir tests green (108 shared + 100 daemon + 36 server); format
+2026-10-24 — 2b-4c partial-batch node failure isolation implemented and
+verified. 250 Elixir tests green (108 shared + 105 daemon + 37 server); format
 and `mix compile --warnings-as-errors` clean in dev/test/prod. Next session
-starts 2b-4c (partial-batch `failed_local_id` isolation).
+starts 2b-4d (`slipstream` Phoenix Channels accelerator).

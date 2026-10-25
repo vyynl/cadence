@@ -68,6 +68,10 @@ defmodule Cadence.ServerWeb.SyncController do
     }
   end
 
+  defp error(conn, {:node_error, local_id, reason}) do
+    json(conn, status(reason), %{error: message(reason), failed_local_id: local_id})
+  end
+
   defp error(conn, reason) do
     json(conn, status(reason), %{error: message(reason)})
   end

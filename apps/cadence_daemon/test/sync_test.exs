@@ -375,15 +375,95 @@ defmodule Cadence.Daemon.SyncTest do
            end)
   end
 
-  test "transient push failure leaves the node pending with backoff", %{
+  test "push_pending isolates a failed node and retries the rest", %{
     project: project,
     work_dir: work_dir,
     git_dir: git_dir,
     server: server
   } do
     queue = start_queue(project, work_dir, git_dir)
-    {:ok, node} = commit(queue, work_dir, "first")
-    assert eventually(fn -> pending?(project.id, node.id) end)
+    {:ok, root} = commit(queue, work_dir, "root")
+    {:ok, child} = commit(queue, work_dir, "child")
+    assert {:ok, _membership} = Session.switch(project.id, root.id)
+    {:ok, sibling} = CommitQueue.spawn(queue, "sibling")
+
+    Enum.each([root, child, sibling], fn node ->
+      assert eventually(fn -> pending?(project.id, node.id) end)
+    end)
+
+    configure_sync()
+    assert :ok = Sync.ensure_project(project.id)
+
+    TestSyncServer.fail_next_node(server, child.id, 422, %{"error" => "invalid node"})
+
+    assert :ok = Sync.push_pending(project.id)
+
+    assert pending_ids(project.id) == [child.id]
+    assert Repo.get!(SyncPending, child.id).attempts == 1
+    assert Repo.get!(SyncPending, child.id).last_error =~ "invalid node"
+    refute Repo.get(SyncPending, root.id)
+    refute Repo.get(SyncPending, sibling.id)
+
+    assert Enum.sort(Enum.map(TestSyncServer.nodes(server), & &1["id"])) ==
+             Enum.sort([root.id, sibling.id])
+  end
+
+  test "a failed parent leaves descendants pending until it is retried", %{
+    project: project,
+    work_dir: work_dir,
+    git_dir: git_dir,
+    server: server
+  } do
+    queue = start_queue(project, work_dir, git_dir)
+    {:ok, root} = commit(queue, work_dir, "root")
+    {:ok, parent} = commit(queue, work_dir, "parent")
+    {:ok, child} = commit(queue, work_dir, "child")
+    assert {:ok, _membership} = Session.switch(project.id, root.id)
+    {:ok, sibling} = CommitQueue.spawn(queue, "sibling")
+
+    Enum.each([root, parent, child, sibling], fn node ->
+      assert eventually(fn -> pending?(project.id, node.id) end)
+    end)
+
+    configure_sync()
+    assert :ok = Sync.ensure_project(project.id)
+
+    TestSyncServer.fail_next_node(server, parent.id)
+
+    assert :ok = Sync.push_pending(project.id)
+
+    assert pending_ids(project.id) == [parent.id, child.id]
+    assert Repo.get!(SyncPending, parent.id).attempts == 1
+    child_pending = Repo.get!(SyncPending, child.id)
+    assert child_pending.attempts == 0
+    assert child_pending.last_error == nil
+
+    assert Enum.sort(Enum.map(TestSyncServer.nodes(server), & &1["id"])) ==
+             Enum.sort([root.id, sibling.id])
+
+    past = DateTime.add(DateTime.utc_now(), -1, :second)
+    assert {:ok, _pending} = SyncLedger.mark_failed(parent.id, :retry, past)
+
+    assert :ok = Sync.push_pending(project.id)
+    assert pending_ids(project.id) == []
+
+    assert Enum.sort(Enum.map(TestSyncServer.nodes(server), & &1["id"])) ==
+             Enum.sort([root.id, parent.id, child.id, sibling.id])
+  end
+
+  test "transient push failure marks the whole batch with backoff", %{
+    project: project,
+    work_dir: work_dir,
+    git_dir: git_dir,
+    server: server
+  } do
+    queue = start_queue(project, work_dir, git_dir)
+    {:ok, first} = commit(queue, work_dir, "first")
+    {:ok, second} = commit(queue, work_dir, "second")
+
+    Enum.each([first, second], fn node ->
+      assert eventually(fn -> pending?(project.id, node.id) end)
+    end)
 
     configure_sync()
     assert :ok = Sync.ensure_project(project.id)
@@ -393,9 +473,39 @@ defmodule Cadence.Daemon.SyncTest do
     assert {:error, {:http, 500, %{"error" => "forced failure"}}} =
              Sync.push_pending(project.id)
 
-    assert Enum.any?(SyncLedger.pending(project.id), &(&1.id == node.id))
+    assert pending_ids(project.id) == [first.id, second.id]
     assert SyncLedger.due_pending(project.id) == []
-    assert Repo.get!(SyncPending, node.id).attempts == 1
+    assert Repo.get!(SyncPending, first.id).attempts == 1
+    assert Repo.get!(SyncPending, second.id).attempts == 1
+  end
+
+  test "an out-of-batch failed_local_id falls back to whole-batch failure", %{
+    project: project,
+    work_dir: work_dir,
+    git_dir: git_dir,
+    server: server
+  } do
+    queue = start_queue(project, work_dir, git_dir)
+    {:ok, first} = commit(queue, work_dir, "first")
+    {:ok, second} = commit(queue, work_dir, "second")
+
+    Enum.each([first, second], fn node ->
+      assert eventually(fn -> pending?(project.id, node.id) end)
+    end)
+
+    configure_sync()
+    assert :ok = Sync.ensure_project(project.id)
+
+    TestSyncServer.fail_next(server, 422, %{
+      "error" => "node failed",
+      "failed_local_id" => Ecto.UUID.generate()
+    })
+
+    assert {:error, {:http, 422, _body}} = Sync.push_pending(project.id)
+
+    assert pending_ids(project.id) == [first.id, second.id]
+    assert Repo.get!(SyncPending, first.id).attempts == 1
+    assert Repo.get!(SyncPending, second.id).attempts == 1
   end
 
   test "offline sync leaves pending nodes untouched", %{
@@ -500,6 +610,10 @@ defmodule Cadence.Daemon.SyncTest do
   defp commit(queue, work_dir, message) do
     File.write!(Path.join(work_dir, "a.txt"), "#{message}\n")
     CommitQueue.commit(queue, message)
+  end
+
+  defp pending_ids(project_id) do
+    project_id |> SyncLedger.pending() |> Enum.map(& &1.id)
   end
 
   defp pending?(project_id, node_id) do

@@ -346,10 +346,7 @@ defmodule Cadence.Daemon.Sync do
   end
 
   defp do_push_pending(project_id) do
-    batch =
-      project_id
-      |> SyncLedger.due_pending()
-      |> Enum.take(Env.sync_push_limit())
+    batch = SyncLedger.pushable(project_id, nil, Env.sync_push_limit())
 
     case batch do
       [] ->
@@ -359,10 +356,40 @@ defmodule Cadence.Daemon.Sync do
         case push_batch(project_id, nodes) do
           {:ok, 0} -> fail_batch(project_id, nodes, :no_progress)
           {:ok, _pushed} -> do_push_pending(project_id)
-          {:error, reason} -> fail_batch(project_id, nodes, reason)
+          {:error, reason} -> handle_push_error(project_id, nodes, reason)
         end
     end
   end
+
+  defp handle_push_error(project_id, nodes, reason) do
+    case failed_node(nodes, reason) do
+      nil ->
+        fail_batch(project_id, nodes, reason)
+
+      node ->
+        case mark_node_failed(node, reason) do
+          :ok ->
+            Logger.warning(
+              "sync isolated node #{node.id} for project #{project_id}: #{inspect(reason)}"
+            )
+
+            do_push_pending(project_id)
+
+          {:error, error} ->
+            {:error, error}
+        end
+    end
+  end
+
+  defp failed_node(nodes, {:http, status, %{"failed_local_id" => local_id}})
+       when status in [409, 422] do
+    case UUID.cast(local_id) do
+      {:ok, local_id} -> Enum.find(nodes, &(&1.id == local_id))
+      :error -> nil
+    end
+  end
+
+  defp failed_node(_nodes, _reason), do: nil
 
   defp push_batch(project_id, nodes) do
     with {:ok, git} <- NodeStore.open(project_id),
@@ -419,9 +446,20 @@ defmodule Cadence.Daemon.Sync do
         SyncLedger.clear_provisioned(project_id)
       end
 
-      Enum.each(nodes, &mark_node_failed(&1, reason))
-      {:error, reason}
+      case mark_nodes_failed(nodes, reason) do
+        :ok -> {:error, reason}
+        {:error, error} -> {:error, error}
+      end
     end
+  end
+
+  defp mark_nodes_failed(nodes, reason) do
+    Enum.reduce_while(nodes, :ok, fn node, :ok ->
+      case mark_node_failed(node, reason) do
+        :ok -> {:cont, :ok}
+        {:error, error} -> {:halt, {:error, error}}
+      end
+    end)
   end
 
   defp mark_node_failed(node, reason) do
@@ -434,6 +472,7 @@ defmodule Cadence.Daemon.Sync do
 
       {:error, error} ->
         Logger.warning("failed to record sync failure for #{node.id}: #{inspect(error)}")
+        {:error, error}
     end
   end
 

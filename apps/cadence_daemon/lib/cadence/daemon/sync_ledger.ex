@@ -52,6 +52,18 @@ defmodule Cadence.Daemon.SyncLedger do
     GenServer.call(__MODULE__, {:due_pending, project_id, now})
   end
 
+  @doc """
+  Returns up to `limit` pushable nodes in parents-first order.
+
+  A node is pushable when it is due and every parent is either not pending
+  locally or has already been selected in this pass. This keeps descendants of
+  a backed-off parent pending instead of failing them as out-of-order.
+  """
+  @spec pushable(Ecto.UUID.t(), DateTime.t() | nil, pos_integer()) :: [Node.t()]
+  def pushable(project_id, now \\ nil, limit \\ 100) do
+    GenServer.call(__MODULE__, {:pushable, project_id, now, limit})
+  end
+
   @doc "Project IDs with at least one due pending node."
   @spec pending_projects(DateTime.t()) :: [Ecto.UUID.t()]
   def pending_projects(now \\ DateTime.utc_now()) do
@@ -226,6 +238,10 @@ defmodule Cadence.Daemon.SyncLedger do
 
   def handle_call({:due_pending, project_id, now}, _from, state) do
     {:reply, pending_nodes(project_id, now), state}
+  end
+
+  def handle_call({:pushable, project_id, now, limit}, _from, state) do
+    {:reply, pushable_nodes(project_id, now || DateTime.utc_now(), limit), state}
   end
 
   def handle_call({:pending_projects, now}, _from, state) do
@@ -412,6 +428,48 @@ defmodule Cadence.Daemon.SyncLedger do
 
   def handle_call({:rehydrate, opts}, _from, state) do
     {:reply, backfill(Keyword.get(opts, :force, false)), state}
+  end
+
+  defp pushable_nodes(project_id, now, limit) do
+    with {:ok, project_id} <- UUID.cast(project_id),
+         true <- is_integer(limit) and limit > 0 do
+      rows =
+        from(n in Node,
+          join: p in SyncPending,
+          on: p.node_id == n.id,
+          where: p.project_id == ^project_id and n.project_id == ^project_id,
+          order_by: [asc: n.created_at, asc: n.id],
+          select: {n, p.next_attempt_at}
+        )
+        |> Repo.all()
+
+      pending_ids = MapSet.new(rows, fn {node, _next_attempt_at} -> node.id end)
+
+      {selected, _selected_ids} =
+        Enum.reduce(rows, {[], MapSet.new()}, fn {node, next_attempt_at},
+                                                 {selected, selected_ids} ->
+          if due?(next_attempt_at, now) and
+               parents_selected?(node.parents || [], pending_ids, selected_ids) do
+            {[node | selected], MapSet.put(selected_ids, node.id)}
+          else
+            {selected, selected_ids}
+          end
+        end)
+
+      selected
+      |> Enum.reverse()
+      |> Enum.take(limit)
+    else
+      _ -> []
+    end
+  end
+
+  defp due?(next_attempt_at, now), do: DateTime.compare(next_attempt_at, now) != :gt
+
+  defp parents_selected?(parents, pending_ids, selected_ids) do
+    Enum.all?(parents, fn parent ->
+      not MapSet.member?(pending_ids, parent) or MapSet.member?(selected_ids, parent)
+    end)
   end
 
   defp pending_nodes(project_id, now) do

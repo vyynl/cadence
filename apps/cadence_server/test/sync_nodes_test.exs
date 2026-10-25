@@ -199,11 +199,14 @@ defmodule Cadence.ServerWeb.SyncNodesTest do
       ]
     }
 
-    assert %{"error" => _} =
-             conn
-             |> authed(plaintext)
-             |> post_json("/sync/nodes", mixed)
-             |> json_response(422)
+    mixed_response =
+      conn
+      |> authed(plaintext)
+      |> post_json("/sync/nodes", mixed)
+      |> json_response(422)
+
+    assert %{"error" => _} = mixed_response
+    refute Map.has_key?(mixed_response, "failed_local_id")
 
     unknown_parent = %{
       "nodes" => [
@@ -211,10 +214,12 @@ defmodule Cadence.ServerWeb.SyncNodesTest do
       ]
     }
 
-    assert %{"error" => _} =
+    assert %{"error" => _, "failed_local_id" => failed_local_id} =
              authed_conn(plaintext)
              |> post_json("/sync/nodes", unknown_parent)
              |> json_response(422)
+
+    assert failed_local_id == dag.child_id
   end
 
   test "rejects duplicate IDs, conflicting nodes, and tampered objects", %{
@@ -227,11 +232,14 @@ defmodule Cadence.ServerWeb.SyncNodesTest do
 
     duplicate = %{"nodes" => [root, root]}
 
-    assert %{"error" => _} =
-             conn
-             |> authed(plaintext)
-             |> post_json("/sync/nodes", duplicate)
-             |> json_response(409)
+    duplicate_response =
+      conn
+      |> authed(plaintext)
+      |> post_json("/sync/nodes", duplicate)
+      |> json_response(409)
+
+    assert %{"error" => _} = duplicate_response
+    refute Map.has_key?(duplicate_response, "failed_local_id")
 
     assert %{"mappings" => _} =
              authed_conn(plaintext)
@@ -241,10 +249,12 @@ defmodule Cadence.ServerWeb.SyncNodesTest do
     conflicting =
       node_payload(project, dag.root_id, dag.child, [], dag.repo, "conflict")
 
-    assert %{"error" => _} =
+    assert %{"error" => _, "failed_local_id" => root_conflict_id} =
              authed_conn(plaintext)
              |> post_json("/sync/nodes", %{"nodes" => [conflicting]})
              |> json_response(409)
+
+    assert root_conflict_id == dag.root_id
 
     tampered = node_payload(project, dag.child_id, dag.child, [dag.root_id], dag.repo, "child")
     [object | rest] = tampered["git_objects"]
@@ -252,10 +262,31 @@ defmodule Cadence.ServerWeb.SyncNodesTest do
     tampered =
       put_in(tampered, ["git_objects"], [%{object | "data" => object["data"] <> "x"} | rest])
 
-    assert %{"error" => _} =
+    assert %{"error" => _, "failed_local_id" => tampered_id} =
              authed_conn(plaintext)
              |> post_json("/sync/nodes", %{"nodes" => [tampered]})
              |> json_response(422)
+
+    assert tampered_id == dag.child_id
+  end
+
+  test "node-level metadata errors include the failed local ID", %{
+    project: project,
+    plaintext: plaintext
+  } do
+    dag = build_dag(tmp_dir())
+
+    invalid =
+      project
+      |> node_payload(dag.root_id, dag.root, [], dag.repo, "root")
+      |> put_in(["metadata", "flags"], ["not-a-flag"])
+
+    assert %{"error" => "invalid flag", "failed_local_id" => failed_local_id} =
+             authed_conn(plaintext)
+             |> post_json("/sync/nodes", %{"nodes" => [invalid]})
+             |> json_response(422)
+
+    assert failed_local_id == dag.root_id
   end
 
   test "rejects unknown projects and invalid cursors", %{project: project, plaintext: plaintext} do

@@ -847,6 +847,10 @@ SyncMessage.Union
   response: %{meld_node_id}
 ```
 
+Node push errors are returned as `%{error: message, failed_local_id: uuid}` when
+the failure is attributable to one node. Batches remain atomic (no partial node
+inserts); the daemon can mark only that node failed and retry the rest.
+
 ---
 
 ## 11. Technology Stack

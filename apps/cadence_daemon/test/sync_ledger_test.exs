@@ -31,6 +31,40 @@ defmodule Cadence.Daemon.SyncLedgerTest do
     assert Enum.map(SyncLedger.pending(project.id), & &1.id) == [parent.id, child.id]
   end
 
+  test "pushable selects parents first and blocks children of backed-off parents", %{
+    project: project
+  } do
+    parent = insert_node(project.id, ~U[2026-10-23 12:00:00.000000Z])
+    child = insert_node(project.id, ~U[2026-10-23 12:01:00.000000Z], [parent.id])
+    independent = insert_node(project.id, ~U[2026-10-23 12:02:00.000000Z])
+
+    Enum.each([parent, child, independent], &SyncLedger.enqueue(project.id, &1.id))
+
+    assert node_ids(SyncLedger.pushable(project.id, nil, 10)) ==
+             [parent.id, child.id, independent.id]
+
+    now = DateTime.add(DateTime.utc_now(), 1, :second)
+
+    future = DateTime.add(now, 3_600, :second)
+    assert {:ok, _pending} = SyncLedger.mark_failed(parent.id, :boom, future)
+
+    assert node_ids(SyncLedger.pushable(project.id, now, 10)) == [independent.id]
+
+    assert node_ids(SyncLedger.pushable(project.id, future, 10)) ==
+             [parent.id, child.id, independent.id]
+  end
+
+  test "pushable honors the limit without skipping a parent", %{project: project} do
+    parent = insert_node(project.id, ~U[2026-10-23 12:00:00.000000Z])
+    child = insert_node(project.id, ~U[2026-10-23 12:01:00.000000Z], [parent.id])
+    SyncLedger.enqueue(project.id, parent.id)
+    SyncLedger.enqueue(project.id, child.id)
+
+    assert node_ids(SyncLedger.pushable(project.id, nil, 1)) == [parent.id]
+    assert SyncLedger.pushable(project.id, nil, 0) == []
+    assert SyncLedger.pushable("not-a-uuid", nil, 10) == []
+  end
+
   test "marks pushed nodes and clears them from the queue", %{project: project} do
     a = insert_node(project.id, ~U[2026-10-23 12:00:00.000000Z])
     b = insert_node(project.id, ~U[2026-10-23 12:01:00.000000Z])
@@ -170,6 +204,8 @@ defmodule Cadence.Daemon.SyncLedgerTest do
     assert {:error, :invalid_uuid} =
              SyncLedger.mark_failed("nope", :boom, DateTime.utc_now())
   end
+
+  defp node_ids(nodes), do: Enum.map(nodes, & &1.id)
 
   defp insert_project do
     %{
