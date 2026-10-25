@@ -25,7 +25,8 @@ config :cadence_server, Cadence.Server.Repo,
 
 config :cadence_server, Cadence.ServerWeb.Endpoint,
   server: false,
-  secret_key_base: String.duplicate("test-secret-key-base-", 4)
+  secret_key_base: String.duplicate("test-secret-key-base-", 4),
+  live_view: [signing_salt: "test-live-view-salt"]
 
 config :cadence_server,
   token_signing_secret: String.duplicate("test-token-signing-secret-", 4),
@@ -33,4 +34,5 @@ config :cadence_server,
   git_store_path:
     Path.join(System.tmp_dir!(), "cadence_test_git_#{System.unique_integer([:positive])}"),
   sync_pull_limit: 100,
+  dag_intro_ms: 0,
   oauth: []

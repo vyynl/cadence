@@ -1,7 +1,7 @@
 # Cadence — Progress
 
 ## Current Phase
-Phase 3a — UI foundation + read-only project page
+Phase 3b-2 — repository browser + README + public secret filtering
 
 ## Done
 - [x] Read spec + AGENTS.md; audited and resolved all scaffold blockers.
@@ -492,15 +492,45 @@ Phase 3a — UI foundation + read-only project page
       + 115 daemon + 58 server), all green; `mix format --check-formatted`,
       `mix compile --warnings-as-errors`, and `MIX_ENV=prod mix compile
       --warnings-as-errors` clean.
+- [x] Phase 3b design revised (no code): project home becomes a LiveView with a
+      25/75 DAG + repository browser, nested node/tree/blob URLs, CSS lineage
+      intro (root→default, pulse, repo reveal), hover tooltip-only, full public
+      DAG with mandatory server-side secret filtering. Added
+      `docs/phase-3b-prep.md`; updated spec §7.1/§7.2/§7.5/§7.6/§11/§12.6/§13/
+      §16 and the Phase 3 roadmap. Awaiting approval before implementation.
+- [x] Phase 3b-1 — LiveView project home + DAG + intro:
+      `/live` socket, prebuilt `phoenix`/`phoenix_live_view` bundles served from
+      dependency priv dirs, `app.js`, CSRF meta, and a shared layout for dead
+      views + LiveView. Added `ProjectLive` with `/p/:slug` and
+      `/p/:slug/n/:node_id`; removed the static project controller/view.
+- [x] `Cadence.ServerWeb.DAGLayout` pure layout (depth layers, wrapping bands,
+      elbow paths, preview/default resolution, lineage intro timing) and
+      `Components.DAG` SVG (flag colors, pinned/selected rings, hover tooltip,
+      patch links). CSS intro draw/pulse/repo-reveal with reduced-motion fallback.
+      `CAD_DAG_INTRO_MS` (default 1200) and `CAD_LIVE_VIEW_SALT`.
+- [x] `Cadence.Server.PublicContent` message redaction (provider tokens, AWS
+      keys, private-key blocks, JWTs, generic assignments) applied to DAG
+      tooltips and the node header before rendering. Full file/tree filtering +
+      node quarantine begin in 3b-2.
+- [x] `Cadence.Server.Portfolio.node_for_project/2`; `lazy_html` test-only dep for
+      `Phoenix.LiveViewTest`.
+- [x] 18 new tests (8 PublicContent, 6 DAGLayout, 4 ProjectLive + asset/404
+      coverage). 305 tests total (114 shared + 115 daemon + 76 server), all
+      green; `mix format --check-formatted`, `mix compile --warnings-as-errors`,
+      and `MIX_ENV=prod mix compile --warnings-as-errors` clean.
 
 ## Next
-- **3b — DAG renderer.** Build `Cadence.ServerWeb.DAGLayout` (depth-based layers,
-  elbow edges, wrap/break marker) and a server-rendered SVG component. Public
-  output remains preview-only; full-DAG rendering comes with authenticated views
-  in 3d.
-- Add pure layout tests (linear/branch/meld/wide layer) and a component/ConnTest
-  assertion for flag colors, pinned ring, and child-flag edge colors.
-- Then 3c (portfolio index + README/MDEx) and 3d (auth views + pinning).
+- **3b-2 — repository browser + README + secret hardening.** Add
+  `GitStore.list_path/4`, `Portfolio` snapshot reads, `MDEx`, file tree/file
+  viewer/README, nested tree/blob routes, and extend `PublicContent` to path
+  hiding, content redaction, binary suppression, commit-message redaction, and
+  node-level quarantine.
+- Add `CAD_FILE_MAX_BYTES`, `CAD_README_MAX_BYTES`, `CAD_TREE_MAX_ENTRIES` to
+  runtime config and `.env.example`.
+- Tests must prove no secret bytes reach anonymous HTML and that LiveView events
+  cannot bypass filtering/quarantine.
+- Open decisions: syntax highlighting (plain code for now), member raw-view
+  policy, public `broken`/`sandbox` visibility.
 
 ## Blocked
 - (none)
@@ -638,11 +668,38 @@ Phase 3a — UI foundation + read-only project page
 - The notification socket relies on local Phoenix PubSub: broadcasts do not
   fan out across multiple server nodes. Recorded in spec §16; polling remains
   the correctness fallback.
-- Phase 3 decisions resolved in spec §16: public pages expose the preview node
-  only (full DAG for authenticated members), and the web DAG uses depth-based
-  vertical spacing with timestamps in hover metadata. Project visibility
-  (`visibility`/`published` column) and review/promotion UI placement remain
-  deferred/open.
+- Phase 3 public visibility changed after review: anonymous visitors now see the
+  full read-only DAG and may browse any node's snapshot. This supersedes the
+  earlier preview-only decision. Spec §7.1/§7.2/§7.5/§7.6/§16 updated.
+- Phase 3b adds mandatory public secret filtering (path hiding + content
+  redaction + commit-message redaction + binary suppression). It is best-effort,
+  not a guarantee; per-project overrides and member raw-view policy remain open
+  in spec §16. No content may be logged.
+- Phase 3b serves the prebuilt `phoenix`/`phoenix_live_view` browser bundles from
+  dependency priv directories plus a hand-written `app.js`; no Node build or
+  `esbuild` dependency. This is noted in spec §11.
+- New Phase 3b server env vars: `CAD_DAG_INTRO_MS` (1200),
+  `CAD_FILE_MAX_BYTES` (524288), `CAD_README_MAX_BYTES` (262144), and
+  `CAD_TREE_MAX_ENTRIES` (1000). `.env.example` must be updated during 3b-2.
+- Syntax highlighting for the file viewer is still undecided; default 3b-2 is
+  escaped plain code. Any highlighter must be added to spec §11 first and must
+  operate on redacted content.
+- LiveView project routes replaced the static `/p/:slug` controller route:
+  `/p/:slug` and `/p/:slug/n/:node_id` are live in 3b-1. The tree/blob routes
+  land with the 3b-2 repository browser. Unknown projects render a not-found
+  page with HTTP 200 (LiveView mount cannot set a 404 after render); revisit if
+  search-engine semantics matter.
+- 3b-1 added a test-only `lazy_html` dependency (required by
+  `Phoenix.LiveViewTest`) and `CAD_LIVE_VIEW_SALT` (defaults to
+  `CAD_SECRET_KEY_BASE`). Both are documented in spec §11/§12.6.
+- Found and fixed a real server-boot bug during a live smoke test: the endpoint
+  had no adapter configured, so Phoenix defaulted to Cowboy2 (not a dependency).
+  `config/config.exs` now sets `adapter: Bandit.PhoenixAdapter`; spec §12.3
+  records it. The smoke test served `/p/:slug` and all four browser assets with
+  200s.
+- Public commit messages are redacted in 3b-1 via `Cadence.Server.PublicContent`.
+  File/tree redaction and node-level quarantine are 3b-2; until then the repo
+  pane is a metadata placeholder and exposes no file content.
 
 - Phase 3a added `Cadence.Shared.GitStore.read_path/3` (commit-relative file
   reads with a 1 MiB default cap and path-traversal rejection). It is a read
@@ -653,14 +710,14 @@ Phase 3a — UI foundation + read-only project page
   `/` into the project index; the route already exists so the layout/header link
   is never dead.
 - The server now declares `phoenix_html` and `phoenix_live_view` directly even
-  though both were already present transitively. They are used for dead views
-  (`Phoenix.Component`/HEEx) only; there is still no JS asset pipeline.
-- Public preview projection is server-side in `Cadence.Server.Portfolio`; the
-  project page never loads non-preview nodes. `membership_for/2` is in place for
-  the 3d authenticated views.
+  though both were already present transitively. 3b starts using LiveView for the
+  project home; 3a's dead-view page is superseded.
+- `membership_for/2` is in place for the 3d authenticated controls.
 
 ## Last Updated
-2026-10-24 — Phase 3a complete: public preview-only project page, `/` landing,
-`Portfolio` read context, HTML layout/errors, and `GitStore.read_path/3`.
-287 Elixir tests green (114 shared + 115 daemon + 58 server); format and compile
-(dev/test/prod) clean. Next session starts 3b (DAG renderer).
+2026-10-24 — Phase 3b-1 complete: LiveView project home, full public SVG DAG,
+lineage intro animation, hover tooltips, node selection via patch, and public
+commit-message redaction. Also fixed the missing Bandit endpoint adapter found
+during a live smoke test. 305 tests green (114 shared + 115 daemon + 76 server);
+format and compile (dev/test/prod) clean. Next session starts 3b-2 (repository
+browser + file/tree secret filtering + quarantine).

@@ -36,6 +36,7 @@ defmodule Cadence.Server.MixProject do
       {:ash_authentication, "~> 4.15"},
       {:ash_authentication_phoenix, "~> 2.17"},
       {:sourceror, "~> 1.7", only: [:dev, :test]},
+      {:lazy_html, ">= 0.1.0", only: :test},
       {:slipstream, "~> 1.2", only: [:dev, :test]}
     ]
   end

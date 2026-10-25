@@ -1,0 +1,386 @@
+:root {
+  color-scheme: light dark;
+  --bg: #fbfaf7;
+  --fg: #1f2328;
+  --muted: #57606a;
+  --line: #d8dee4;
+  --accent: #0969da;
+  --functioning: #2da44e;
+  --in-progress: #bf8700;
+  --broken: #cf222e;
+  --sandbox: #6e7781;
+  --pinned: #8250df;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --fg: #e6edf3;
+    --muted: #8d96a0;
+    --line: #30363d;
+    --accent: #58a6ff;
+    --functioning: #3fb950;
+    --in-progress: #d29922;
+    --broken: #f85149;
+    --sandbox: #8b949e;
+    --pinned: #bc8cff;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+a {
+  color: var(--accent);
+}
+
+.site-header {
+  border-bottom: 1px solid var(--line);
+}
+
+.site-header nav {
+  max-width: 88rem;
+  margin: 0 auto;
+  padding: 1rem 1.5rem;
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+}
+
+main {
+  max-width: 88rem;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 4rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.25rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.slug,
+.note,
+.empty {
+  color: var(--muted);
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+}
+
+.project-header {
+  margin-bottom: 1.5rem;
+}
+
+.project-header h1 {
+  margin: 0;
+}
+
+.project-home {
+  display: grid;
+  grid-template-columns: minmax(16rem, 25%) minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.dag-panel {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--bg);
+  background: color-mix(in srgb, var(--bg) 92%, var(--fg) 8%);
+}
+
+.dag-scroll {
+  overflow: auto;
+  padding: 0.75rem;
+}
+
+.dag-canvas {
+  min-height: 12rem;
+}
+
+.dag-panel svg {
+  display: block;
+  overflow: visible;
+}
+
+.dag-node {
+  cursor: pointer;
+  outline: none;
+}
+
+.dag-node:focus-visible .node-dot {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.node-dot {
+  stroke: var(--bg);
+  stroke-width: 1.5;
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 120ms ease, filter 120ms ease;
+}
+
+.dag-node:hover .node-dot,
+.dag-node:focus-visible .node-dot {
+  transform: scale(1.25);
+  filter: brightness(1.12);
+}
+
+.flag-functioning .node-dot {
+  fill: var(--functioning);
+}
+
+.flag-in-progress .node-dot,
+.node-dot.flag-in-progress {
+  fill: var(--in-progress);
+}
+
+.flag-broken .node-dot,
+.node-dot.flag-broken {
+  fill: var(--broken);
+}
+
+.flag-sandbox .node-dot,
+.node-dot.flag-sandbox {
+  fill: var(--sandbox);
+}
+
+.node-dot.flag-functioning {
+  fill: var(--functioning);
+}
+
+.node-dot.flag-unknown {
+  fill: var(--muted);
+}
+
+.node-ring,
+.node-selected {
+  fill: none;
+  pointer-events: none;
+}
+
+.node-ring {
+  stroke: var(--pinned);
+  stroke-width: 2;
+}
+
+.node-selected {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 3;
+}
+
+.dag-edge {
+  fill: none;
+  stroke-width: 1.65;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.dag-edge.flag-functioning {
+  stroke: var(--functioning);
+}
+
+.dag-edge.flag-in-progress {
+  stroke: var(--in-progress);
+}
+
+.dag-edge.flag-broken {
+  stroke: var(--broken);
+}
+
+.dag-edge.flag-sandbox {
+  stroke: var(--sandbox);
+}
+
+.dag-edge.flag-unknown {
+  stroke: var(--muted);
+}
+
+.dag-break {
+  stroke: var(--line);
+  stroke-width: 1;
+  stroke-dasharray: 2 6;
+}
+
+.dag-tooltip {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.dag-node:hover .dag-tooltip,
+.dag-node:focus-visible .dag-tooltip {
+  opacity: 1;
+}
+
+.dag-tooltip-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+  font: 12px/1.35 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.dag-tooltip-body strong {
+  display: -webkit-box;
+  overflow: hidden;
+  font-weight: 600;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.dag-tooltip-body span {
+  color: var(--muted);
+}
+
+.repo-panel {
+  min-width: 0;
+  padding: 1.25rem 1.5rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+}
+
+.node-pane {
+  animation: cad-reveal 180ms ease-out;
+}
+
+.node-header h2 {
+  margin: 0.15rem 0 0.5rem;
+}
+
+.node-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.9rem;
+  align-items: center;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.flag-badge {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.8rem;
+}
+
+@keyframes cad-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes cad-node-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes cad-fade-in {
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes cad-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.55);
+  }
+}
+
+@keyframes cad-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.dag-edge.intro {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: cad-draw var(--edge-duration, 480ms) ease-out var(--edge-delay, 0ms) forwards;
+}
+
+.dag-edge.rest {
+  opacity: 0;
+  animation: cad-fade-in 240ms ease-out var(--rest-delay, 0ms) forwards;
+}
+
+.dag-node.intro {
+  opacity: 0;
+  animation: cad-node-in 240ms ease-out var(--node-delay, 0ms) forwards;
+}
+
+.dag-node.rest {
+  opacity: 0;
+  animation: cad-fade-in 240ms ease-out var(--rest-delay, 0ms) forwards;
+}
+
+.dag-node.default .node-dot {
+  animation: cad-pulse 240ms ease-in-out var(--pulse-delay, 0ms) 2;
+}
+
+.repo-panel.reveal {
+  opacity: 0;
+  animation: cad-reveal 300ms ease-out var(--pane-delay, 0ms) forwards;
+}
+
+@media (max-width: 900px) {
+  .project-home {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dag-edge,
+  .dag-node,
+  .repo-panel,
+  .dag-node.default .node-dot,
+  .node-dot {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+    stroke-dashoffset: 0 !important;
+  }
+}

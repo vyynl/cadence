@@ -242,7 +242,9 @@ preview_node  = pinned_sorted.first
 a per-project grant set by the owner (the basic "can/can't approve melds"
 switch). See §6.6.
 
-Public visitors are unauthenticated and see the preview node only.
+Public visitors are unauthenticated and see the full read-only DAG and public
+repository snapshots (subject to §7.6 filtering); they never receive mutation
+permissions.
 
 ### 4.6 Teams, approvers & supervisor (lightweight)
 
@@ -507,36 +509,43 @@ See §16 for open questions on the exact promotion target and proposal model.
 ### 7.1 Public views (unauthenticated)
 
 - Portfolio index listing public projects.
-- Project landing page: title, description, preview node's README.
+- Project landing page: title, description, and a full read-only DAG.
+- Repository browser for any node's commit snapshot: file tree, file viewer,
+  and rendered README (§7.5).
 - Preview-node summary with its flags and timestamp.
 - Markdown-rendered docs via `MDEx`.
 - Embedded Livebook notebooks for data-analysis projects (sandboxed).
 - Actions panel (if the project exposes read-only actions).
 
-Anonymous visitors see the **preview node only**. The full read-only DAG is
-reserved for authenticated project members (§7.2), so `broken` and `sandbox`
-work is never exposed publicly. This resolves the §16 visibility decision.
+Anonymous visitors see the **full read-only DAG** and may browse the repository
+snapshot of any node. Public rendering is always passed through the server-side
+secret filter (§7.6): sensitive paths are hidden and detected secrets are
+redacted before HTML reaches the browser. Public access never grants mutation.
 
-Public routes: `/` is the portfolio index, `/p/:slug` is a project landing
-page, and `/p/:slug/n/:id` is a single-node view. `/auth`, `/sync`, `/health`,
+Public routes: `/` is the portfolio index, `/p/:slug` is the project home,
+`/p/:slug/n/:node_id/tree/*path` is a directory view, and
+`/p/:slug/n/:node_id/blob/*path` is a file view. `/auth`, `/sync`, `/health`,
 and static paths are reserved.
 
 ### 7.2 Owner/trusted views (authenticated)
 
 - All of the above, plus:
-- Full read-only DAG visualization (all nodes, including `broken` and
-  `sandbox`).
 - Pin/unpin nodes.
-- View all nodes, including `broken` and `sandbox`.
 - Trigger actions.
 - Manage memberships.
 - Review and approve/reject meld proposals (shareable link).
 - View doc diffs and approve/reject pending doc revisions.
+- Explicitly reveal unfiltered file content for maintenance (the public and
+  default authenticated views remain filtered; see §7.6).
 
 ### 7.3 DAG visualization spec
 
-**Rendering:** SVG. Each node is a filled circle (`r ≈ 8`), fill color by
-flag:
+**Rendering:** SVG inside a Phoenix LiveView. The project home is a 25/75 split:
+the DAG rail on the left and the repository browser on the right (§7.5). The
+rail is left-aligned and the right pane owns the remaining width; on narrow
+screens the panes stack with the DAG first.
+
+Each node is a filled circle (`r ≈ 8`), fill color by flag:
 
 | Flag | Color |
 |---|---|
@@ -580,8 +589,22 @@ becomes a product requirement; it is not part of Phase 3.
 3. Enforce max layer width; wrap into sub-rows with a visual break marker.
 4. Force left-align.
 
-**Interactivity:** hover shows tooltip (date, message, flag). Click selects.
-In union mode, click toggles `✓`.
+**Interactivity:** LiveView owns selection state. Hover shows a CSS tooltip
+with the commit message and node status (flags/pinned) and highlights the node;
+hover does not change the right pane. Click selects the node, patches the URL,
+and swaps the right pane to that node's snapshot with a short crossfade. The
+selected default node is marked. Nodes are focusable links so keyboard users get
+the same behavior. In union mode (Phase 4), click toggles `✓` instead.
+
+**Intro animation:** on the first full page load only, animate the default
+node's ancestor lineage from its root(s) down to the default node along the
+actual elbow paths (including the horizontal trajectory — not just a vertical
+sweep). After the lineage reaches the default node's depth, pulse that node
+2–3 times, then fade in any remaining nodes/edges and the right pane. The intro
+does not replay on LiveView node selection; selection uses the crossfade above.
+Timing is paced by `CAD_DAG_INTRO_MS` (default 1200); the repo pane reveals after
+the default-node pulse. Large DAGs animate the lineage only, never every edge.
+`prefers-reduced-motion` renders the final state immediately.
 
 ### 7.4 Auth
 
@@ -594,9 +617,77 @@ A signed-in human visits `/auth/tokens/new` and creates a daemon key with
 stored. OAuth credentials are supplied through `CAD_OAUTH_*` env vars, so the
 server can boot without OAuth configured (that provider's sign-in then fails).
 
-Public visitors are unauthenticated and see the preview node only. Optionally,
-the deployment can require a lightweight signed URL or API key to reduce
-scraping (deferred decision).
+Public visitors are unauthenticated and see the full read-only DAG and public
+repository snapshots (subject to §7.6 filtering). Optionally, the deployment can
+require a lightweight signed URL or API key to reduce scraping (deferred
+decision).
+
+### 7.5 Repository browser
+
+The right pane is a read-only browser over the selected node's Git commit
+snapshot. Each node stores `git_commit_sha`; the browser reads that commit's
+tree from the project's server-side object store. It never reads the server's
+filesystem working tree.
+
+- **Home:** the current directory's entries (directories first, then files) and
+  the rendered README for the selected node. The default selected node is the
+  preview node.
+- **Directory:** clicking a directory pushes a nested URL and lists that
+  directory. Breadcrumbs return to any ancestor.
+- **File:** clicking a file opens a clean read-only file view (escaped content,
+  monospace, line numbers, horizontal scroll). Binary files show a metadata
+  notice instead of content. A `README` is not repeated on a file view.
+- **README:** resolved from the snapshot root, case-insensitively, preferring
+  `README.md` and then common variants. Rendered through `MDEx` with raw HTML
+  disabled. Missing READMEs show an explicit empty state.
+- **URLs:** `/p/:slug/n/:node_id/tree/*path` for directories and
+  `/p/:slug/n/:node_id/blob/*path` for files. LiveView patches these URLs so
+  node/file views are shareable and survive reloads.
+- **Limits:** file reads, README reads, and directory listings are bounded
+  (`CAD_FILE_MAX_BYTES`, `CAD_README_MAX_BYTES`, `CAD_TREE_MAX_ENTRIES`).
+  Truncation is explicit in the UI, never silent.
+
+Code syntax highlighting is an open decision (§16); the first implementation
+renders escaped, readable plain code. If highlighting is added, it must run
+server-side or over already-redacted content so secret filtering cannot be
+bypassed.
+
+### 7.6 Public content safety (secret filtering)
+
+Public repository browsing makes historical snapshots visible. Old
+test/proof-of-concept nodes may contain hardcoded credentials. The server
+therefore applies a mandatory, server-side filter to every anonymous render
+(initial mount and every LiveView event):
+
+1. **Sensitive paths** are hidden from the public tree by basename pattern
+   (for example `.env`, `.env.*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa*`,
+   `id_ed25519*`, `.npmrc`, `.pypirc`, `.netrc`, `.git-credentials`,
+   `credentials*`, `secrets.*`). The UI may show a generic "hidden for security"
+   count, never the hidden filename.
+2. **Text content** is scanned for high-confidence secret patterns (provider
+   tokens, private-key blocks, JWTs, generic `api_key`/`secret`/`token`/
+   `password` assignments) before Markdown rendering, file rendering, or syntax
+   highlighting. Detected values are replaced with `[REDACTED]`; private-key
+   blocks and sensitive files are blocked entirely.
+3. **Node quarantine.** If a high-confidence secret is detected anywhere in a
+   node's snapshot (even in a file that would otherwise be redacted), that
+   node's public repository snapshot is quarantined. The DAG still shows the
+   node and its flags, but the public repo pane shows a generic "snapshot hidden
+   for review" notice and returns no file tree, file content, or README. This is
+   stricter than text redaction and prevents a partially-redacted snapshot from
+   leaking a value the scanner missed elsewhere.
+4. **Commit messages** shown in the DAG tooltip/node header are redacted with the
+   same scanner.
+5. **Binary files** are never rendered publicly.
+6. **Authenticated raw view** is an explicit owner/trusted action (Phase 3d),
+   never the default. Public and default authenticated renders stay filtered;
+   the quarantine notice and explicit reveal are owner/trusted actions.
+7. **No content logging.** Scan results log counts/reasons only, never values or
+   file content.
+
+This is best-effort defense-in-depth, not a guarantee. Owners must still rotate
+any secret that was ever committed. Per-project scan allowlists/overrides are
+deferred (§16).
 
 ---
 
@@ -884,6 +975,7 @@ inserts); the daemon can mark only that node failed and retry the rest.
 | Ash data layer | `ash_postgres` |
 | Phoenix auth routes | `ash_authentication_phoenix` |
 | Ash DSL formatting / codegen | `sourceror` (dev/test only) |
+| LiveView test DOM | `lazy_html` (test only; required by `Phoenix.LiveViewTest`) |
 | Docker API | `ex_docker_api` |
 | Rate limiting | `Hammer` (declared in `cadence_shared`, used by the daemon's `LLMRateLimit`) |
 | Graph model | `libgraph` |
@@ -902,6 +994,12 @@ inserts); the daemon can mark only that node failed and retry the rest.
 
 **Dependency discipline:** do not add dependencies beyond this list without
 justification. If a new dependency is needed, add it to this table first.
+
+**Browser assets:** the web UI serves the prebuilt `phoenix` and
+`phoenix_live_view` browser bundles from the dependency priv directories plus a
+small hand-written `app.js`. There is no Node/npm build step and no `esbuild`
+dependency in Phase 3. If a syntax highlighter is added later, it must be
+recorded here first.
 
 ---
 
@@ -959,6 +1057,8 @@ schemas, with different adapters (SQLite vs Postgres). Name them explicitly:
 - Distributed as a Docker image.
 - Targets TrueNAS SCALE or any Docker host.
 - Compose stack: app + Postgres + Docker socket proxy.
+- Phoenix endpoint uses `Bandit.PhoenixAdapter` explicitly (Phoenix otherwise
+  defaults to Cowboy2, which is not a Cadence dependency).
 - All config via environment variables read in `config/runtime.exs`.
 - Persistent volumes:
   - `/data/git` — bare Git repos / packfiles
@@ -1077,11 +1177,16 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 |---|---|---|---|
 | `CAD_PHX_HOST` | yes | — | Public hostname |
 | `CAD_SECRET_KEY_BASE` | yes | — | Phoenix secret |
+| `CAD_LIVE_VIEW_SALT` | no | `CAD_SECRET_KEY_BASE` | LiveView static-token signing salt |
 | `CAD_TOKEN_SIGNING_SECRET` | no | `CAD_SECRET_KEY_BASE` | JWT/AshAuthentication signing secret |
 | `CAD_DATABASE_URL` | yes | — | Postgres connection |
 | `CAD_DB_POOL_SIZE` | no | `10` | Ecto pool |
 | `CAD_GIT_STORE_PATH` | no | `/data/git` | Git object storage |
 | `CAD_SYNC_PULL_LIMIT` | no | `100` | Max nodes returned per pull batch |
+| `CAD_DAG_INTRO_MS` | no | `1200` | First-load DAG/repo intro animation duration |
+| `CAD_FILE_MAX_BYTES` | no | `524288` | Max bytes rendered in the public file viewer |
+| `CAD_README_MAX_BYTES` | no | `262144` | Max README bytes rendered publicly |
+| `CAD_TREE_MAX_ENTRIES` | no | `1000` | Max directory entries returned by the repo browser |
 | `CAD_ARTIFACT_PATH` | no | `/data/artifacts` | Action outputs |
 | `CAD_OAUTH_GITHUB_CLIENT_ID` | no | — | GitHub OAuth |
 | `CAD_OAUTH_GITHUB_CLIENT_SECRET` | no | — | GitHub OAuth |
@@ -1239,11 +1344,17 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 **Phase 3 — Web UI (week 12–13)**
 - 3a — UI foundation: direct web deps, layout/error HTML, `Portfolio` read
   context, `GitStore` path reader, public `/p/:slug` preview-node page.
-- 3b — DAG renderer: depth-based server-side layout data and SVG component
-  (`/p/:slug` for members once authenticated views land).
-- 3c — Public portfolio index and README/Markdown rendering via `MDEx`.
-- 3d — Authenticated owner/trusted views: role checks, pin/unpin, full DAG and
-  `broken`/`sandbox` visibility.
+- 3b-1 — LiveView project home: endpoint `/live` socket, prebuilt LiveView
+  assets, `ProjectLive.Show`, 25/75 DAG + inspector shell, depth-based
+  `DAGLayout`, SVG component, nested node URLs, lineage intro animation, hover
+  tooltip, click-to-select.
+- 3b-2 — Repository browser: `GitStore` directory listing, file viewer,
+  README/MDEx rendering, nested tree/blob URLs, mandatory public secret
+  filtering, size/entry caps.
+- 3c — Public portfolio index, canonical metadata, and remaining public-page
+  polish.
+- 3d — Authenticated owner/trusted controls: pin/unpin, membership views,
+  explicit unfiltered reveal.
 - Review/promotion UI is deferred to Phase 4; no approval actions ship before
   the meld/proposal backend.
 
@@ -1306,15 +1417,28 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 
 ## 16. Open Decisions
 
-- [x] **Public DAG visibility (Phase 3):** resolved — anonymous visitors see
-      the preview node only (§7.1); authenticated project members see the full
-      read-only DAG (§7.2). The public page must filter server-side, not in the
-      template.
+- [x] **Public DAG visibility (Phase 3):** resolved — anonymous visitors see the
+      full read-only DAG and may browse any node's repository snapshot (§7.1,
+      §7.5), subject to mandatory server-side secret filtering (§7.6). Public
+      access never grants mutation.
 - [x] **Web DAG Y-axis (Phase 3):** resolved — topological depth with fixed
       layer spacing, consistent with the Neovim picker; timestamps appear in
       hover metadata (§7.3). Time-clamped spacing is deferred.
 - [x] **Y-axis curve:** resolved for Phase 3 — depth-based spacing has no
       curve. Revisit only if time-clamped spacing is adopted.
+- [ ] **Public raw/filtered member view:** how much unfiltered content should
+      authenticated owner/trusted members see in the web UI, and whether the
+      reveal action must be audited? Current plan: default filtered, explicit
+      owner/trusted reveal in 3d.
+- [ ] **Secret filter overrides:** per-project allowlists or custom patterns for
+      legitimate files that trip the scanner. Deferred until false positives are
+      observed.
+- [ ] **Syntax highlighting:** plain escaped code vs. a server-side highlighter
+      (e.g. Makeup) vs. a vendored client-side highlighter. Must be recorded in
+      §11 before implementation.
+- [ ] **Public flags:** the full public DAG exposes `broken`/`sandbox` nodes and
+      their snapshots. Revisit if those should be members-only while keeping the
+      rest of the DAG public.
 - [ ] **Project visibility/publishing (Phase 3):** all projects are publicly
       discoverable by default (portfolio index + `/p/:slug`). A per-project
       `visibility`/`published` column and owner control are deferred until a

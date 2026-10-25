@@ -24,6 +24,22 @@ defmodule Cadence.Server.Portfolio do
   def get_project_by_slug(_slug), do: {:error, :not_found}
 
   @doc """
+  Fetch a node only if it belongs to the project.
+
+  Returns `nil` for an unknown/invalid node or project ID.
+  """
+  @spec node_for_project(Ecto.UUID.t() | String.t(), Ecto.UUID.t() | String.t()) ::
+          Node.t() | nil
+  def node_for_project(project_id, node_id) do
+    with {:ok, project_id} <- UUID.cast(project_id),
+         {:ok, node_id} <- UUID.cast(node_id) do
+      Repo.get_by(Node, id: node_id, project_id: project_id)
+    else
+      :error -> nil
+    end
+  end
+
+  @doc """
   List a project's nodes, newest first with a deterministic tie-break.
 
   Intended for authenticated full-DAG views; public pages must use

@@ -8,6 +8,7 @@ config :cadence_server,
   ash_domains: [Cadence.Server.Accounts]
 
 config :cadence_server, Cadence.ServerWeb.Endpoint,
+  adapter: Bandit.PhoenixAdapter,
   url: [host: "localhost"],
   pubsub_server: Cadence.Server.PubSub,
   render_errors: [

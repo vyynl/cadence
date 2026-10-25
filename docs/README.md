@@ -6,7 +6,7 @@ there, resolve it in the spec (or add it to §16) before implementing.
 ## Read order
 
 1. `progress.md` — current phase, completed work, next step, blockers.
-2. The phase brief named in **Next** (currently `phase-3-prep.md`).
+2. The phase brief named in **Next** (currently `phase-3b-prep.md`).
 3. `spec.md` — the relevant sections for the task.
 
 ## Current status
@@ -16,7 +16,7 @@ there, resolve it in the spec (or add it to §16) before implementing.
 | Phase 1 — local daemon, commits, DAG picker, AI messages | Complete |
 | Phase 2a — DAG structure, Neovim picker, diffs | Complete |
 | Phase 2b — cloud sync, auth, preferences, notifications | Complete |
-| Phase 3 — web UI & portfolio | **In progress (3b)** |
+| Phase 3 — web UI & portfolio | **In progress (3b-2)** |
 | Phase 4+ — unions, doc automation, actions, storage | Not started |
 
 ## Doc map
@@ -27,6 +27,7 @@ there, resolve it in the spec (or add it to §16) before implementing.
 | `progress.md` | Session handoff and implementation log |
 | `phase-3-prep.md` | Cold-start brief for Phase 3 |
 | `phase-3-roadmap.md` | Approved Phase 3 session plan and decisions |
+| `phase-3b-prep.md` | 3b LiveView/DAG/repo-browser build brief |
 | `phase-2b-cloud-sync.md` | Historical Phase 2b implementation plan |
 | `phase-2b-3-prep.md` | Historical 2b-3 daemon sync brief |
 | `phase-2b-4-prep.md` | Historical 2b-4 preferences/channel plan |

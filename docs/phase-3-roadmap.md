@@ -1,76 +1,116 @@
 # Phase 3 roadmap — Web UI & Portfolio
 
-> Status: **approved 2026-10-24; 3a complete**. This is the session-by-session
-> plan for Phase 3. `docs/spec.md` §7/§13/§16 are canonical; this file tracks
-> the execution order and per-session acceptance.
+> Status: **approved 2026-10-24; 3a and 3b-1 complete; 3b-2 next**. This is the
+> session-by-session plan for Phase 3. `docs/spec.md` §7/§13/§16 are canonical;
+> this file tracks execution order and acceptance. The cold-start build brief is
+> `docs/phase-3b-prep.md`.
 
-## Decisions (approved)
+## Decisions
 
 | # | Decision | Resolution |
 |---|---|---|
-| 1 | Public DAG visibility | Preview node only for anonymous visitors; full DAG for authenticated members |
+| 1 | Public DAG visibility | Full read-only DAG public; any node's repo snapshot browsable |
 | 2 | Web DAG Y-axis | Topological depth with fixed spacing; timestamps in hover metadata |
-| 3 | 3a view technology | Dead views (controller + HEEx), no JS asset pipeline |
-| 4 | Routing | `/p/:slug`, `/p/:slug/n/:id`, portfolio index `/` |
-| 5 | Docs source | README only in Phase 3; `docs_schema` in Phase 5 |
-| 6 | Project discoverability | All projects public by default; `visibility` column deferred |
-| 7 | Review/promotion UI | Deferred to Phase 4; optional read-only placeholder only |
+| 3 | 3a view technology | Dead views (done) |
+| 4 | 3b technology | Phoenix LiveView project home |
+| 5 | Routing | `/p/:slug`, `/p/:slug/n/:id/tree/*path`, `/p/:slug/n/:id/blob/*path` |
+| 6 | Repo pane | GitHub-style file tree, file viewer, README underneath |
+| 7 | Hover behavior | Tooltip with commit message + node status; highlight only |
+| 8 | Intro animation | Root→default lineage along real edge paths, pulse, then reveal repo pane |
+| 9 | Secret handling | Mandatory server-side filtering/redaction; quarantine node snapshots on high-confidence findings |
+| 10 | Docs source | README only in Phase 3; `docs_schema` in Phase 5 |
+| 11 | Project discoverability | All projects public by default; `visibility` column deferred |
+| 12 | Review/promotion UI | Deferred to Phase 4 |
 
 ## Session plan
 
 | Session | Slice | Deliverable | Exit criteria |
 |---|---|---|---|
-| 0 | Decisions + docs | Spec updates, this roadmap, docs commit | Docs committed; no app code |
-| 1 | 3a | **Done** — public `/p/:slug` page, `Portfolio`, `GitStore` path reader, HTML layout/errors | Seeded project renders HTML; tests green |
-| 2 | 3b | Pure DAG layout + server-rendered SVG | Branch/meld/wrap tested; visibility applied |
-| 3 | 3c | Portfolio index + README via `MDEx` | Index lists projects; safe Markdown; edge cases |
-| 4 | 3d | Session/role gating, owner pin/unpin | Owner can pin; anonymous cannot; no leakage |
-| 5 | Close | Defer 3e, final spec/progress update | Full suite + prod compile green |
+| 0 | Decisions + docs | Spec updates, roadmap, docs commit | **Done** |
+| 1 | 3a | Public project page, `Portfolio`, `GitStore.read_path`, HTML shell | **Done** |
+| 2 | 3b-1 | **Done** — LiveView project home, DAG SVG, node routes, message redaction, intro animation | Full DAG/interaction works; tests green |
+| 3 | 3b-2 | File tree, file viewer, README/MDEx, public secret filter + quarantine | Repo pane browsable; no secret bytes in public HTML |
+| 4 | 3c | Portfolio index, canonical metadata, public-page polish | `/` lists projects; edge cases covered |
+| 5 | 3d | Owner pin/unpin, role checks, explicit unfiltered reveal | Owner controls work; public stays filtered |
+| 6 | Close | Final spec/progress update, full suite + prod compile | Handoff clean |
 
-### Session 1 — 3a
+### Session 2 — 3b-1: LiveView foundation + DAG + intro (done)
 
-- Declare direct server deps: `phoenix_html`, `phoenix_live_view` (dead views;
-  no JS pipeline).
-- `Cadence.ServerWeb`: `html_helpers`, layouts, minimal components, HTML error
-  renderer.
-- `Cadence.Server.Portfolio`: `get_project_by_slug/1`, `list_nodes/1`,
-  `preview_node/1`, `membership_for/2`.
-- `Cadence.Shared.GitStore.read_path/3`: commit → tree → blob read with a size
-  cap and safe path traversal.
-- Routes: public browser pipeline, `GET /p/:slug`.
-- Tests: `Portfolio`, `GitStore.read_path`, ConnTest 200/404.
-- Acceptance: read-only HTML page for a seeded project, no JavaScript.
+Implemented: `/live` socket, prebuilt Phoenix/LiveView bundles served from
+dependency priv dirs, `app.js`, `ProjectLive`, `/p/:slug` and
+`/p/:slug/n/:node_id`, `DAGLayout`, SVG DAG, CSS intro/hover, and public
+commit-message redaction. `lazy_html` is test-only.
 
-### Session 2 — 3b
+Original slice scope (implemented):
 
-- `Cadence.ServerWeb.DAGLayout` pure module: depths, layer order, coordinates,
-  elbow edges, wrap marker.
-- SVG component: flag colors, pinned ring, child-flag edges, accessible titles.
-- Node links to `/p/:slug/n/:id`; CSS/`<title>` hover. No LiveView unless
-  interaction requires it; no `esbuild` without a spec §11 update.
-- Tests: linear/branch/meld/wide layouts, SVG output, visibility filtering.
+- Add `/live` socket to the endpoint using the existing session options; serve
+  prebuilt `phoenix.min.js` and `phoenix_live_view.min.js` from dependency priv
+  directories via `Plug.Static`; add a small `app.js` LiveSocket bootstrap and a
+  CSRF meta tag. No `esbuild`.
+- Add `Cadence.ServerWeb.ProjectLive`; wire `live_session` with
+  `AshAuthentication.Phoenix.LiveSession` so `current_user` is available without
+  forcing auth.
+- Replace the static project controller route with live routes for the project
+  home and nested node URLs; `handle_params` resolves `:slug`, `:node_id`, and
+  `:path`.
+- Add `Cadence.ServerWeb.DAGLayout` (pure): depths, layer order, coordinates,
+  elbow path data, intro lineage/delays, default node.
+- Add `Cadence.ServerWeb.Components.DAG` SVG component: flag colors, pinned ring,
+  child-flag edges, accessible node links, tooltip markup.
+- Add CSS: 25/75 layout, hover tooltip/highlight, lineage draw animation,
+  default-node pulse, right-pane reveal, reduced-motion fallback.
+- Right pane in this slice: node header + metadata placeholder. Repository
+  content lands in 3b-2.
+- Tests: pure layout (linear/branch/meld/wide/lineage), LiveView mount and node
+  selection, route/URL patching, public visibility, animation attributes.
 
-### Session 3 — 3c
+### Session 3 — 3b-2: repository browser + README + secret filter
 
-- Add `mdex` direct dependency (already in spec §11).
-- `GET /` portfolio index; `Portfolio.read_readme/2`.
-- `MDEx` safe defaults, raw HTML disabled/sanitized, size cap.
-- Canonical metadata and shareable URLs.
-- Tests: index filtering, sanitization, missing/large/binary README.
+- Add `Cadence.Shared.GitStore.list_path/4` (directory listing from a commit
+  tree, safe paths, sorted dirs-first) and tests.
+- Add `Cadence.Server.Portfolio` snapshot reads: tree entries, file content,
+  README resolution, binary/size/entry caps.
+- Add `MDEx` dependency (already in spec §11); render README with raw HTML
+  disabled and explicit missing/large states.
+- Add `Cadence.Server.PublicContent` (or similarly named) secret filter:
+  - sensitive-path hiding,
+  - text pattern detection + `[REDACTED]`,
+  - private-key block blocking,
+  - **node-level quarantine** when any high-confidence secret is found in the
+    snapshot (hide the whole repo pane; keep the DAG node),
+  - commit-message redaction,
+  - binary content suppression,
+  - no content logging.
+- Apply the filter on initial mount **and every LiveView event**; never send raw
+  secret bytes to an anonymous client.
+- Add file tree, breadcrumbs, file viewer, README below the tree; nested URLs.
+- Add `CAD_FILE_MAX_BYTES`, `CAD_README_MAX_BYTES`, `CAD_TREE_MAX_ENTRIES`,
+  `CAD_DAG_INTRO_MS` config + `.env.example`.
+- Tests: tree navigation, file view, README, binary/oversize/missing,
+  path-traversal rejection, secret redaction/hiding, public-event bypass
+  attempts, no secret bytes in rendered HTML.
 
-### Session 4 — 3d
+### Session 4 — 3c: portfolio index + polish
 
-- Reuse the existing browser session + `Membership` roles.
-- Owner pin/unpin via POST + redirect (no LiveView needed).
-- Full DAG and `broken`/`sandbox` nodes for members only.
+- Turn `/` into the project index.
+- Canonical metadata/shareable URLs.
+- Public empty/error states; `broken`/`sandbox` presentation.
+- Remaining accessibility/responsive polish.
+
+### Session 5 — 3d: authenticated controls
+
+- Reuse `current_user` + `Membership` roles.
+- Owner pin/unpin; membership read views.
+- Explicit “reveal unfiltered” action for owner/trusted; public and default
+  authenticated renders stay filtered.
 - Tests: anonymous/owner/trusted/viewer authorization, CSRF, pin changes
-  preview, hidden-node leakage.
+  preview, filtered-vs-raw behavior.
 
-### Session 5 — close
+### Session 6 — close
 
 - Defer review/promotion UI to Phase 4.
 - Update spec §13/§16, `docs/README.md`, `docs/progress.md`.
-- Run the full suite and `MIX_ENV=prod mix compile --warnings-as-errors`.
+- Run full suite and `MIX_ENV=prod mix compile --warnings-as-errors`.
 
 ## Verification protocol
 
@@ -84,15 +124,20 @@ MIX_ENV=prod mix compile --warnings-as-errors
 ```
 
 Then update `docs/progress.md` and commit one conventional commit per session
-(`feat: Phase 3a — ...`).
+(`feat: Phase 3b-1 — ...`).
 
 ## Risks
 
-- No `Project.visibility` column yet; the portfolio index exposes every
-  project. Revisit if private projects are needed.
-- Public queries must filter to the preview node when the viewer is anonymous;
-  template hiding is not sufficient.
-- HEEx dead views need `phoenix_live_view` for `Phoenix.Component`, but no JS
-  bundle. Any real interactivity is a separate, spec-updated decision.
-- The Ash policy authorizer remains deferred; use controller-level checks.
+- **Secret filtering is best-effort**, not a guarantee. Regex/high-confidence
+  patterns can miss obfuscated or unknown credentials. Owners must rotate any
+  secret that was committed; the filter reduces accidental public exposure.
+- Full public DAG exposes `broken`/`sandbox` nodes and their snapshots. Recorded
+  as an open decision in spec §16.
+- Public queries must apply filtering server-side on every event, not just the
+  initial render; LiveView events are an attack surface for bypass attempts.
+- No `Project.visibility` column yet; the portfolio index exposes every project.
+- Syntax highlighting is undecided; a client-side highlighter must not receive
+  unfiltered content.
+- The Ash policy authorizer remains deferred; use server-side checks in the
+  LiveView/context.
 - Server tests require `CAD_TEST_DATABASE_URL` (default Postgres on 55432).

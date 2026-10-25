@@ -96,7 +96,8 @@ if config_env() != :test do
       port: public_uri.port,
       scheme: public_uri.scheme
     ],
-    secret_key_base: secret_key_base
+    secret_key_base: secret_key_base,
+    live_view: [signing_salt: System.get_env("CAD_LIVE_VIEW_SALT") || secret_key_base]
 
   git_store_path =
     System.get_env(
@@ -112,6 +113,7 @@ if config_env() != :test do
     token_signing_secret: System.get_env("CAD_TOKEN_SIGNING_SECRET") || secret_key_base,
     git_store_path: git_store_path,
     sync_pull_limit: String.to_integer(System.get_env("CAD_SYNC_PULL_LIMIT", "100")),
+    dag_intro_ms: String.to_integer(System.get_env("CAD_DAG_INTRO_MS", "1200")),
     oauth: [
       github: [
         client_id: System.get_env("CAD_OAUTH_GITHUB_CLIENT_ID"),
