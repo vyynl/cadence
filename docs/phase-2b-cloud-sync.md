@@ -1,13 +1,11 @@
 # Phase 2b — Cloud Sync (implementation plan)
 
-> **Status: 2b-4a through 2b-4c complete; 2b-4d next.** Server scaffold, auth,
+> **Status: Phase 2b complete (2b-1 through 2b-4e).** Server scaffold, auth,
 > Git object transfer, node push/pull, cursor pulls, the shared `NodeCodec`,
 > the daemon `SyncLedger`/`SyncClient`/`Sync`/`SyncWorker`, versioned
-> preferences, partial-batch isolation, and `POST /sync/projects` are in place.
-> Remaining 2b-4 work: the Phoenix Channels notification accelerator and the
-> two-daemon convergence pass. This document remains the cold-start brief for
-> the remaining milestones. The canonical contract is `docs/spec.md`
-> (especially §5, §10, §12, §13).
+> preferences, partial-batch isolation, the notification socket, two-machine
+> convergence coverage, and `POST /sync/projects` are in place. The canonical
+> contract is `docs/spec.md` (especially §5, §10, §12, §13).
 
 Phase 2b delivers the local↔cloud sync path: a Phoenix server that stores a
 project's DAG, token-authenticated push/pull endpoints, and the daemon's sync

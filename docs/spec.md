@@ -1317,6 +1317,9 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       `AshAuthentication` API key. No `mix` task or seeded token.
 - [x] **Pull cursor representation (Phase 2b):** resolved in 2b-1 — server-only
       `nodes.seq bigserial` plus an index. See phase-2b plan §5.
+- [ ] **Multi-node notification fan-out:** Phoenix Channels/PubSub broadcasts
+      are local to one server node. Revisit if the server runs multi-node;
+      polling remains the correctness fallback in the meantime.
 - [ ] **Ash policy authorizer / SAT solver:** server Ash resources currently
       rely on controller-level checks rather than `Ash.Policy.Authorizer`.
       Revisit when the web UI exposes Ash actions directly; enabling policies

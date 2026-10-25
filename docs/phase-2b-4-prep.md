@@ -1,8 +1,8 @@
 # Phase 2b-4 prep — Preferences, notification channel, resilience
 
-> Status: **2b-4a through 2b-4d complete/committed** (versioned preferences,
-> server transport, daemon push/apply, partial-batch isolation, notification
-> socket); 2b-4e next.
+> Status: **Phase 2b-4 complete** (2b-4a through 2b-4e). Versioned
+> preferences, server transport, daemon push/apply, partial-batch isolation,
+> notification socket, and convergence coverage are in place.
 > Cold-start brief: `docs/phase-2b-4b-prep.md` (completed). Canonical contract:
 > `docs/spec.md` §4.3, §10.5, §10.6, §11, §13.
 
@@ -104,7 +104,7 @@ preferences: %{active_heads, session_pointer, updated_at} | nil
 4. **2b-4d — Phoenix Channels accelerator. ✅ Done.**
    `{:slipstream, "~> 1.2"}` in the daemon, server socket/channel, daemon
    client, reconnection/fallback tests.
-5. **2b-4e — Convergence + docs.**
+5. **2b-4e — Convergence + docs. ✅ Done.**
    Two-daemon preference journey, socket-down fallback, spec/plan/progress
    finalization.
 

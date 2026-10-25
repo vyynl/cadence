@@ -11,6 +11,7 @@ defmodule Cadence.Daemon.SyncTest do
     Sync,
     SyncLedger,
     SyncPending,
+    SyncSocket,
     SyncWorker
   }
 
@@ -354,6 +355,71 @@ defmodule Cadence.Daemon.SyncTest do
     assert TestSyncServer.preferences(server, project.id)["session_pointer"] == node.id
   end
 
+  test "two machines converge on a shared session pointer and active heads", %{
+    project: project,
+    work_dir: work_dir,
+    git_dir: git_dir,
+    server: server
+  } do
+    original_user = Env.local_user_id()
+    machine_a = Ecto.UUID.generate()
+    machine_b = Ecto.UUID.generate()
+
+    on_exit(fn -> Application.put_env(:cadence_daemon, :local_user_id, original_user) end)
+    Application.put_env(:cadence_daemon, :local_user_id, machine_a)
+
+    queue = start_queue(project, work_dir, git_dir)
+    {:ok, parent} = commit(queue, work_dir, "parent")
+    {:ok, child} = CommitQueue.spawn(queue, "child")
+
+    Enum.each([parent, child], fn node ->
+      assert eventually(fn -> pending?(project.id, node.id) end)
+    end)
+
+    configure_sync()
+    assert :ok = Sync.sync(project.id)
+
+    assert TestSyncServer.preferences(server, project.id)["session_pointer"] == child.id
+
+    Application.put_env(:cadence_daemon, :local_user_id, machine_b)
+    assert Session.ensure_membership!(project.id).preferences_updated_at == nil
+
+    assert :ok = Sync.sync(project.id)
+
+    machine_b_state = membership(project.id)
+    assert machine_b_state.session_pointer == child.id
+    assert machine_b_state.active_heads == [parent.id]
+
+    Application.put_env(:cadence_daemon, :sync_enabled, false)
+    assert {:ok, _membership} = Session.switch(project.id, parent.id)
+    Application.put_env(:cadence_daemon, :sync_enabled, true)
+    assert :ok = Sync.sync(project.id)
+
+    Application.put_env(:cadence_daemon, :local_user_id, machine_a)
+    assert :ok = Sync.sync(project.id)
+    assert membership(project.id).session_pointer == parent.id
+  end
+
+  test "sync converges with the notification channel disabled", %{
+    project: project,
+    work_dir: work_dir,
+    git_dir: git_dir,
+    server: server
+  } do
+    queue = start_queue(project, work_dir, git_dir)
+    {:ok, node} = commit(queue, work_dir, "offline socket")
+    assert eventually(fn -> pending?(project.id, node.id) end)
+
+    configure_sync()
+    Application.put_env(:cadence_daemon, :sync_channel_enabled, false)
+
+    assert :ignore = SyncSocket.start_link([])
+    assert :ok = Sync.sync(project.id)
+
+    assert SyncLedger.pending(project.id) == []
+    assert Enum.any?(TestSyncServer.nodes(server), &(&1["id"] == node.id))
+  end
+
   test "a local switch wakes the worker and pushes preferences", %{
     project: project,
     work_dir: work_dir,
@@ -595,7 +661,8 @@ defmodule Cadence.Daemon.SyncTest do
         :auth_token,
         :sync_enabled,
         :sync_req_options,
-        :sync_request_timeout_ms
+        :sync_request_timeout_ms,
+        :sync_channel_enabled
       ],
       &Application.delete_env(:cadence_daemon, &1)
     )

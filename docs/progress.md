@@ -1,7 +1,7 @@
 # Cadence — Progress
 
 ## Current Phase
-Phase 2b-4d complete → 2b-4e (two-daemon convergence + docs)
+Phase 2b complete → Phase 3 (Web UI) planning
 
 ## Done
 - [x] Read spec + AGENTS.md; audited and resolved all scaffold blockers.
@@ -459,11 +459,18 @@ Phase 2b-4d complete → 2b-4e (two-daemon convergence + docs)
       broadcast-on-failure coverage. 264 tests total (108 shared + 113 daemon +
       43 server), all green; format and compile (dev/test/prod) clean.
 
+- [x] 2b-4e — convergence + docs: added a two-machine preference journey
+      (A pushes pointer/active heads → B applies → B moves the pointer → A
+      converges) and an explicit socket-disabled polling fallback test. Updated
+      the 2b-4/spec/progress docs and recorded the single-node PubSub
+      limitation as an open decision. 266 tests total (108 shared + 115 daemon +
+      43 server), all green; format and compile (dev/test/prod) clean.
+
 ## Next
-- **Read `docs/phase-2b-4-prep.md` §6 first.**
-- Start **2b-4e — convergence + docs**: two-daemon preference/node journey,
-  socket-down polling fallback acceptance, and final 2b-4 spec/plan/progress
-  cleanup.
+- Phase 2b is complete. Read `docs/spec.md` §7 and §13 Phase 3 before starting.
+- Plan **Phase 3a — web UI shell + DAG data source**: Phoenix LiveView routes,
+  server-side project/node queries, and the first read-only DAG renderer. Do
+  not start with public auth or pinning; those are later Phase 3 slices.
 - Deferred picker items: Telescope project picker (would add a dep to §11) and
   the `:CadOpen` short-sync attempt (can call `Sync.sync/1` with a short
   timeout now that orchestration exists).
@@ -605,9 +612,12 @@ Phase 2b-4d complete → 2b-4e (two-daemon convergence + docs)
 - The daemon selects push batches with `SyncLedger.pushable/3`: due nodes are
   sent parents-first, and children of a backed-off parent remain pending instead
   of being marked failed as out-of-order.
+- The notification socket relies on local Phoenix PubSub: broadcasts do not
+  fan out across multiple server nodes. Recorded in spec §16; polling remains
+  the correctness fallback.
 
 ## Last Updated
-2026-10-24 — 2b-4d notification socket implemented and verified. 264 Elixir
-tests green (108 shared + 113 daemon + 43 server); format and
+2026-10-24 — Phase 2b complete after 2b-4e convergence coverage and docs. 266
+Elixir tests green (108 shared + 115 daemon + 43 server); format and
 `mix compile --warnings-as-errors` clean in dev/test/prod. Next session starts
-2b-4e (two-daemon convergence + docs).
+Phase 3 planning (web UI shell + DAG data source).
