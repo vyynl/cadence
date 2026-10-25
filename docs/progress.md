@@ -1,7 +1,7 @@
 # Cadence — Progress
 
 ## Current Phase
-Phase 3 close-out — final docs + verification (3e deferred to Phase 4)
+Phase 4 — unions, proposals & review (planning)
 
 ## Done
 - [x] Read spec + AGENTS.md; audited and resolved all scaffold blockers.
@@ -553,15 +553,20 @@ Phase 3 close-out — final docs + verification (3e deferred to Phase 4)
       pin/unpin, raw reveal/toggle-off/reset, viewer event injection). 347 tests
       total (121 shared + 115 daemon + 111 server), all green; format, compile,
       and prod compile clean.
+- [x] Phase 3 close-out: deferred 3e review/promotion UI to Phase 4; marked the
+      roadmap complete; added `docs/phase-4-prep.md` (proposal model/API, meld
+      worker, review UI, convergence slices, decisions, security, tests); updated
+      spec §13/§16, docs index, and this handoff.
 
 ## Next
-- **Phase 3 close-out.** Defer the 3e review/promotion UI to Phase 4 (no backend
-  yet), update the roadmap/spec/progress, and run the final verification.
+- **Read `docs/phase-4-prep.md` first**, then spec §6.5/§6.6 and §13 Phase 4.
+- Resolve the Phase 4 decisions before coding: proposal model/quorum, promotion
+  target, meld flag validation baseline (recommended: `in-progress` until a real
+  validator exists), meld agent/prompt, proposal visibility, pin propagation.
+- Start with **4a — proposal model/API**; do not build review UI before 4a/4b.
 - Known gap: web pinning is server-side only; pin updates are not propagated to
-  daemons by the sync protocol yet (spec §16). Revisit before relying on web
+  daemons by the sync protocol yet (spec §16). Resolve before relying on web
   pins in the local picker.
-- Remaining open decisions: syntax highlighting, public `broken`/`sandbox`
-  visibility, secret-filter overrides, pin propagation, reveal auditing.
 
 ## Blocked
 - (none)
@@ -780,10 +785,12 @@ Phase 3 close-out — final docs + verification (3e deferred to Phase 4)
   as an open decision in spec §16.
 - LiveView flash messages are now rendered in the shared layout for unauthorized
   action feedback.
+- Phase 3e (review/promotion UI) was deliberately not implemented; there is no
+  proposal/meld backend yet. It is deferred to Phase 4, starting from
+  `docs/phase-4-prep.md`.
 
 ## Last Updated
-2026-10-24 — Phase 3d complete: owner pin/unpin, member read panel, and explicit
-owner/trusted raw view with server-side authorization. 347 tests green (121
-shared + 115 daemon + 111 server); format and compile (dev/test/prod) clean.
-Next session is the Phase 3 close-out; 3e (review/promotion UI) is deferred to
-Phase 4.
+2026-10-24 — Phase 3 complete and closed out. Added `docs/phase-4-prep.md`;
+slices 4a–4d and the open decisions are ready for planning/approval. 347 tests
+green (121 shared + 115 daemon + 111 server); format and compile (dev/test/prod)
+clean. 3e (review/promotion UI) is deferred to Phase 4.

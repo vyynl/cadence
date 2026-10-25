@@ -1369,10 +1369,16 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   the meld/proposal backend.
 
 **Phase 4 — Unions & review (week 14–15)**
-- Server-side meld worker.
-- Permission checks.
-- Proposal entity + approve/reject gate + shareable link (§6.6).
-- Broadcast + client refresh.
+- 4a — Proposal model/API: pending meld/promotion lifecycle, reviewers,
+  approve/reject, shareable token/URL, idempotent state transitions.
+- 4b — Server-side meld worker: permission checks, parent tree fetch, AI meld
+  prompt, resulting tree/commit, validation guard (no auto-`functioning`).
+- 4c — Review UI: parents/diff/tree/flags, approve/reject, shareable link,
+  server-side authorization.
+- 4d — Broadcast/pull convergence: approved meld reaches connected clients and
+  daemons; resolve web-pin propagation if promotion must be visible locally.
+- Proposal UI must not ship before 4a/4b exist; AI output stays reviewable and
+  reversible.
 
 **Phase 5 — Doc automation (week 16)**
 - Doc schema parsing.
@@ -1479,6 +1485,12 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       or a distinct "protected line" marker? (See §6.6.)
 - [ ] **Proposal model:** approve/reject policy — any single approver, or a
       quorum of N? Should a rejected proposal be re-submittable?
+- [ ] **Proposal visibility:** are shareable proposal links public (read-only)
+      or authenticated-member-only? If public, the Phase 3 secret filter and
+      raw-view rules must apply.
+- [ ] **Meld flag validation:** without Phase 6 actions there is no test runner.
+      Recommended baseline: AI meld starts `in-progress`; approval promotes/pins
+      the line; never auto-promote to `functioning` until a real validator exists.
 - [ ] **Team/supervisor schema:** exact shape and sync channel for the
       lightweight §4.6 relationships.
 - [ ] **Proposal link format:** URL scheme and what the shareable view renders

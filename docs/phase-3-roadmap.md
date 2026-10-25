@@ -1,6 +1,6 @@
 # Phase 3 roadmap — Web UI & Portfolio
 
-> Status: **approved 2026-10-24; Phase 3 slices 3a–3d complete; close next**. This is the
+> Status: **Phase 3 complete (2026-10-24); 3e deferred to Phase 4**. This is the
 > session-by-session plan for Phase 3. `docs/spec.md` §7/§13/§16 are canonical;
 > this file tracks execution order and acceptance. The cold-start build brief is
 > `docs/phase-3b-prep.md`.
@@ -32,7 +32,7 @@
 | 3 | 3b-2 | **Done** — file tree, file viewer, README/MDEx, public secret filter + quarantine | Repo pane browsable; no secret bytes in public HTML |
 | 4 | 3c | **Done** — portfolio index, canonical metadata, public-page polish | `/` lists projects; edge cases covered |
 | 5 | 3d | **Done** — owner pin/unpin, members read view, explicit unfiltered reveal | Owner controls work; public stays filtered |
-| 6 | Close | Final spec/progress update, full suite + prod compile | Handoff clean |
+| 6 | Close | **Done** — final spec/progress update, full suite + prod compile | Handoff clean |
 
 ### Session 2 — 3b-1: LiveView foundation + DAG + intro (done)
 
@@ -123,11 +123,11 @@ Original slice scope (implemented):
 - Tests: anonymous/owner/trusted/viewer authorization, CSRF, pin changes
   preview, filtered-vs-raw behavior.
 
-### Session 6 — close
+### Session 6 — close (done)
 
-- Defer review/promotion UI to Phase 4.
-- Update spec §13/§16, `docs/README.md`, `docs/progress.md`.
-- Run full suite and `MIX_ENV=prod mix compile --warnings-as-errors`.
+Completed: 3e review/promotion UI deferred to Phase 4; spec §13/§16, docs
+index, and progress updated; full suite and prod compile verified. Phase 4
+planning starts from `docs/phase-4-prep.md`.
 
 ## Verification protocol
 
