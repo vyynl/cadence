@@ -60,17 +60,16 @@ cadence/                        (umbrella root)
 ├── apps/
 │   ├── cadence_shared/         schemas, sync protocol, GitStore, LLM client
 │   ├── cadence_daemon/         local process: watcher, commit queue, Unix socket
-│   └── cadence_server/         Phoenix: web UI, sync endpoint, meld worker
+│   └── cadence_server/         Phoenix: sync endpoint (web UI Phase 3, meld worker Phase 4)
 ├── config/                     umbrella-level config
 ├── docs/
+│   ├── README.md               doc index + read order
 │   ├── spec.md                 CANONICAL CONTRACT
 │   ├── progress.md             SESSION HANDOFF (see §2)
-│   ├── architecture.md
-│   ├── daemon.md
-│   ├── server.md
-│   └── sync-protocol.md
+│   ├── phase-3-prep.md         current phase brief
+│   └── phase-2b-*.md           historical Phase 2b briefs
 ├── mix.exs                     umbrella root
-├── docker-compose.yml          server deployment
+├── docker-compose.yml          server deployment (planned, spec §12.4)
 └── AGENTS.md                   this file
 ```
 

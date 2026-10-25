@@ -506,15 +506,22 @@ See §16 for open questions on the exact promotion target and proposal model.
 
 ### 7.1 Public views (unauthenticated)
 
+- Portfolio index listing public projects.
 - Project landing page: title, description, preview node's README.
-- DAG visualization (read-only).
+- Preview-node summary with its flags and timestamp.
 - Markdown-rendered docs via `MDEx`.
 - Embedded Livebook notebooks for data-analysis projects (sandboxed).
 - Actions panel (if the project exposes read-only actions).
 
+Anonymous visitors see the **preview node only**. The full read-only DAG is
+reserved for authenticated project members (§7.2), so `broken` and `sandbox`
+work is never exposed publicly. This resolves the §16 visibility decision.
+
 ### 7.2 Owner/trusted views (authenticated)
 
 - All of the above, plus:
+- Full read-only DAG visualization (all nodes, including `broken` and
+  `sandbox`).
 - Pin/unpin nodes.
 - View all nodes, including `broken` and `sandbox`.
 - Trigger actions.
@@ -549,15 +556,18 @@ distance (e.g., `2 * |cx - px|` for ~63°).
 
 Edge `stroke` inherits the **child's** flag color.
 
-**Y-axis mapping:** time-clamped linear.
+**Y-axis mapping:** topological depth, with a fixed per-layer spacing.
 
 ```
-dy = clamp(days_since_parent, 0.25, 14) * scale
-y_child = y_parent + dy
+y_node = depth(node) * layer_height
 ```
 
-If a sqrt curve is preferred later, swap `clamp` for `sqrt` — the rest of the
-layout is unaffected. Start with clamped linear.
+`depth` is the longest path from any root (the same value served by the daemon's
+`GET /graph` and used by the Neovim picker). Real timestamps are shown in the
+hover/tooltip metadata rather than encoded into vertical distance. This keeps
+the web DAG consistent with the picker and bounded regardless of gaps between
+sessions. A time-clamped mapping remains a future option if historical spacing
+becomes a product requirement; it is not part of Phase 3.
 
 **Layout algorithm:** layered DAG (Sugiyama-style, simplified).
 
@@ -1223,9 +1233,15 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   failure isolation.
 
 **Phase 3 — Web UI (week 12–13)**
-- LiveView DAG renderer (SVG).
-- Markdown docs pages via `MDEx`.
-- Preview node logic + pinning.
+- 3a — UI foundation: direct web deps, layout/error HTML, `Portfolio` read
+  context, `GitStore` path reader, public `/p/:slug` preview-node page.
+- 3b — DAG renderer: depth-based server-side layout data and SVG component
+  (`/p/:slug` for members once authenticated views land).
+- 3c — Public portfolio index and README/Markdown rendering via `MDEx`.
+- 3d — Authenticated owner/trusted views: role checks, pin/unpin, full DAG and
+  `broken`/`sandbox` visibility.
+- Review/promotion UI is deferred to Phase 4; no approval actions ship before
+  the meld/proposal backend.
 
 **Phase 4 — Unions & review (week 14–15)**
 - Server-side meld worker.
@@ -1286,8 +1302,22 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 
 ## 16. Open Decisions
 
-- [ ] **Y-axis curve:** start with clamped linear; revisit sqrt if it feels
-      wrong.
+- [x] **Public DAG visibility (Phase 3):** resolved — anonymous visitors see
+      the preview node only (§7.1); authenticated project members see the full
+      read-only DAG (§7.2). The public page must filter server-side, not in the
+      template.
+- [x] **Web DAG Y-axis (Phase 3):** resolved — topological depth with fixed
+      layer spacing, consistent with the Neovim picker; timestamps appear in
+      hover metadata (§7.3). Time-clamped spacing is deferred.
+- [x] **Y-axis curve:** resolved for Phase 3 — depth-based spacing has no
+      curve. Revisit only if time-clamped spacing is adopted.
+- [ ] **Project visibility/publishing (Phase 3):** all projects are publicly
+      discoverable by default (portfolio index + `/p/:slug`). A per-project
+      `visibility`/`published` column and owner control are deferred until a
+      concrete need appears; adding them later requires a migration.
+- [ ] **Review/promotion UI placement:** the approval UI listed in §7.2 has no
+      backend until Phase 4. Phase 3 ships at most a read-only placeholder;
+      otherwise it is deferred entirely.
 - [ ] **Doc agent model:** which LLM(s) to support, and whether to allow
       per-project overrides.
 - [ ] **Local store:** SQLite via `ecto_sqlite3` is the obvious pick; confirm

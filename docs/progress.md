@@ -1,7 +1,7 @@
 # Cadence — Progress
 
 ## Current Phase
-Phase 2b complete → Phase 3 (Web UI) planning
+Phase 3a — UI foundation + read-only project page
 
 ## Done
 - [x] Read spec + AGENTS.md; audited and resolved all scaffold blockers.
@@ -466,18 +466,25 @@ Phase 2b complete → Phase 3 (Web UI) planning
       limitation as an open decision. 266 tests total (108 shared + 115 daemon +
       43 server), all green; format and compile (dev/test/prod) clean.
 
+- [x] Phase 3 docs preparation: added `docs/README.md` (doc index/read order)
+      and `docs/phase-3-prep.md` (server gaps, proposed 3a–3e slices, dependency
+      and security notes); corrected the stale docs tree in `AGENTS.md`; recorded
+      the public-DAG-visibility and web-Y-axis contradictions in spec §16. No
+      code or test-count changes (266 tests remain green).
+- [x] Phase 3 decisions approved: public pages show the preview node only,
+      authenticated members get the full DAG; depth-based web Y-axis; dead views
+      first; `/p/:slug` routing; README-only docs; all projects public by
+      default; review/promotion UI deferred to Phase 4. Updated spec §7.1/§7.2/
+      §7.3/§13/§16 and added `docs/phase-3-roadmap.md`.
+
 ## Next
-- Phase 2b is complete. Read `docs/spec.md` §7 and §13 Phase 3 before starting.
-- Plan **Phase 3a — web UI shell + DAG data source**: Phoenix LiveView routes,
-  server-side project/node queries, and the first read-only DAG renderer. Do
-  not start with public auth or pinning; those are later Phase 3 slices.
-- Deferred picker items: Telescope project picker (would add a dep to §11) and
-  the `:CadOpen` short-sync attempt (can call `Sync.sync/1` with a short
-  timeout now that orchestration exists).
-- Remaining audit items (lower priority): derive service timeouts from config
-  rather than literals; consider `.gitignore`-style patterns beyond `CAD_IGNORE`;
-  add a unique DB constraint for `project_locations.work_dir` (currently
-  enforced in app code only).
+- **3a — UI foundation + read-only project page.** Add direct `phoenix_html` +
+  `phoenix_live_view` server deps (dead views, no JS pipeline), HTML helpers/
+  layout/error renderer, `Cadence.Server.Portfolio`, a shared
+  `GitStore.read_path/3`, and public `GET /p/:slug`.
+- Confirm the page renders a seeded project's preview node without JavaScript;
+  add ConnTest/Portfolio/GitStore tests.
+- Then 3b (DAG renderer), 3c (portfolio+Markdown), 3d (auth views).
 
 ## Blocked
 - (none)
@@ -615,9 +622,14 @@ Phase 2b complete → Phase 3 (Web UI) planning
 - The notification socket relies on local Phoenix PubSub: broadcasts do not
   fan out across multiple server nodes. Recorded in spec §16; polling remains
   the correctness fallback.
+- Phase 3 decisions resolved in spec §16: public pages expose the preview node
+  only (full DAG for authenticated members), and the web DAG uses depth-based
+  vertical spacing with timestamps in hover metadata. Project visibility
+  (`visibility`/`published` column) and review/promotion UI placement remain
+  deferred/open.
 
 ## Last Updated
-2026-10-24 — Phase 2b complete after 2b-4e convergence coverage and docs. 266
-Elixir tests green (108 shared + 115 daemon + 43 server); format and
-`mix compile --warnings-as-errors` clean in dev/test/prod. Next session starts
-Phase 3 planning (web UI shell + DAG data source).
+2026-10-24 — Phase 2b complete; Phase 3 docs prepared (`docs/README.md`,
+`docs/phase-3-prep.md`, spec §16 decisions). 266 Elixir tests green (108 shared
++ 115 daemon + 43 server); no code changed. Next session starts Phase 3a after
++sign-off on the open decisions.
