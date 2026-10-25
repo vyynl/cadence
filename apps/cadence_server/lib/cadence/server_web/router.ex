@@ -35,6 +35,9 @@ defmodule Cadence.ServerWeb.Router do
     ash_authentication_live_session :project do
       live("/p/:slug", ProjectLive, :home)
       live("/p/:slug/n/:node_id", ProjectLive, :node)
+      live("/p/:slug/n/:node_id/tree", ProjectLive, :tree)
+      live("/p/:slug/n/:node_id/tree/*path", ProjectLive, :tree)
+      live("/p/:slug/n/:node_id/blob/*path", ProjectLive, :blob)
     end
 
     get("/auth/tokens/new", TokenController, :new)

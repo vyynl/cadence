@@ -1,8 +1,7 @@
 # Phase 3b prep — LiveView project home + repository browser
 
-> Status: **3b-1 implemented; 3b-2 ready for build.** `docs/spec.md`
-> §7/§13/§16 are canonical. This brief is the cold-start plan for 3b-1 and
-> 3b-2.
+> Status: **3b-1 and 3b-2 implemented.** `docs/spec.md` §7/§13/§16 are
+> canonical. This brief is the cold-start plan for 3b-1 and 3b-2.
 
 ## 1. Goal
 
@@ -234,8 +233,11 @@ Add to `config/runtime.exs` and `.env.example`:
 | `CAD_DAG_INTRO_MS` | `1200` | Intro animation duration |
 | `CAD_LIVE_VIEW_SALT` | `CAD_SECRET_KEY_BASE` | LiveView static-token signing salt |
 | `CAD_FILE_MAX_BYTES` | `524288` | File viewer content cap |
+| `CAD_FILE_MAX_LINES` | `2000` | File viewer line cap |
 | `CAD_README_MAX_BYTES` | `262144` | README content cap |
 | `CAD_TREE_MAX_ENTRIES` | `1000` | Directory listing cap |
+| `CAD_SCAN_MAX_FILES` | `10000` | Snapshot file-scan cap (exceed ⇒ quarantine) |
+| `CAD_SCAN_MAX_BYTES` | `16777216` | Snapshot byte-scan cap (exceed ⇒ quarantine) |
 
 No secret-filter disable switch. Filtering is mandatory for anonymous renders.
 

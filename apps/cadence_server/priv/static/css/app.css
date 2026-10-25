@@ -268,6 +268,155 @@ code {
   animation: cad-reveal 180ms ease-out;
 }
 
+.breadcrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  align-items: center;
+  margin-bottom: 0.9rem;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+}
+
+.crumb-sep {
+  color: var(--line);
+}
+
+.file-tree {
+  margin: 0 0 1.25rem;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  list-style: none;
+  overflow: hidden;
+}
+
+.file-tree li + li {
+  border-top: 1px solid var(--line);
+}
+
+.file-row {
+  display: flex;
+  gap: 0.7rem;
+  align-items: center;
+  padding: 0.55rem 0.75rem;
+  text-decoration: none;
+}
+
+.file-row:hover,
+.file-row:focus-visible {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.file-kind {
+  width: 2.4rem;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
+
+.file-name {
+  color: var(--fg);
+}
+
+.file-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin: 0 0 0.9rem;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+}
+
+.file-lines {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: color-mix(in srgb, var(--fg) 4%, var(--bg));
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.file-line {
+  display: grid;
+  grid-template-columns: 3.5rem minmax(0, 1fr);
+}
+
+.line-number {
+  padding: 0 0.6rem;
+  color: var(--muted);
+  text-align: right;
+  user-select: none;
+  border-right: 1px solid var(--line);
+}
+
+.line-text {
+  padding: 0 0.75rem;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.readme {
+  margin-top: 1.5rem;
+}
+
+.markdown {
+  overflow-wrap: anywhere;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3 {
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+}
+
+.markdown pre {
+  overflow-x: auto;
+  padding: 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--fg) 5%, var(--bg));
+}
+
+.markdown code {
+  padding: 0.1em 0.3em;
+  border-radius: 0.25em;
+  background: color-mix(in srgb, var(--fg) 7%, var(--bg));
+}
+
+.markdown pre code {
+  padding: 0;
+  background: none;
+}
+
+.markdown img {
+  max-width: 100%;
+}
+
+.markdown table {
+  border-collapse: collapse;
+}
+
+.markdown th,
+.markdown td {
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--line);
+}
+
+.quarantine-notice,
+.path-error {
+  padding: 1rem 0 0.25rem;
+}
+
+.path-error a {
+  text-decoration: none;
+}
+
 .node-header h2 {
   margin: 0.15rem 0 0.5rem;
 }

@@ -32,24 +32,45 @@ defmodule Cadence.Server.PublicContent do
     }
   ]
 
+  @sensitive_basename_patterns [
+    ~r/^\.env($|\.)/i,
+    ~r/\.(pem|key|p12|pfx|jks|keystore)$/i,
+    ~r/^id_(rsa|dsa|ecdsa|ed25519)/i,
+    ~r/\.ppk$/i,
+    ~r/^\.npmrc$/i,
+    ~r/^\.pypirc$/i,
+    ~r/^\.netrc$/i,
+    ~r/^\.git-credentials$/i,
+    ~r/^credentials/i,
+    ~r/^secrets?\./i,
+    ~r/\.secrets?$/i
+  ]
+
+  @example_patterns [~r/\.(example|sample|template)$/i]
+
   @doc """
   Redact high-confidence secret patterns from `text`.
 
   Returns `{redacted_text, findings}` where `findings` contains pattern names
-  only. Never log the input or output.
+  only. Never log the input or output. Invalid UTF-8 is returned unchanged
+  (binary files are handled separately).
   """
   @spec redact(String.t()) :: {String.t(), [atom()]}
   def redact(text) when is_binary(text) do
-    {redacted, findings} =
-      Enum.reduce(@patterns, {text, []}, fn %{name: name, regex: regex}, {acc, findings} ->
-        if Regex.match?(regex, acc) do
-          {Regex.replace(regex, acc, fn _match -> "[REDACTED]" end), [name | findings]}
-        else
-          {acc, findings}
-        end
-      end)
+    if String.valid?(text) do
+      {redacted, findings} =
+        Enum.reduce(@patterns, {text, []}, fn %{name: name, regex: regex}, {acc, findings} ->
+          if Regex.match?(regex, acc) do
+            {Regex.replace(regex, acc, fn _match -> "[REDACTED]" end), [name | findings]}
+          else
+            {acc, findings}
+          end
+        end)
 
-    {redacted, findings |> Enum.reverse() |> Enum.uniq()}
+      {redacted, findings |> Enum.reverse() |> Enum.uniq()}
+    else
+      {text, []}
+    end
   end
 
   @doc "Redact a commit message, returning `nil` for `nil`."
@@ -64,4 +85,56 @@ defmodule Cadence.Server.PublicContent do
   @doc "Return the pattern names detected in `text`."
   @spec findings(String.t()) :: [atom()]
   def findings(text) when is_binary(text), do: text |> redact() |> elem(1)
+
+  @doc "Return whether a path is a sensitive filename by basename."
+  @spec sensitive_path?(String.t()) :: boolean()
+  def sensitive_path?(path) when is_binary(path) do
+    basename = Path.basename(path)
+    Enum.any?(@sensitive_basename_patterns, &Regex.match?(&1, basename))
+  end
+
+  @doc """
+  Return whether a sensitive-looking filename is an allowed example/template.
+
+  Allowed examples are still content-scanned and redacted; they are not
+  quarantined solely because of their name.
+  """
+  @spec allowed_sensitive_path?(String.t()) :: boolean()
+  def allowed_sensitive_path?(path) when is_binary(path) do
+    basename = Path.basename(path)
+    Enum.any?(@example_patterns, &Regex.match?(&1, basename))
+  end
+
+  @doc "Filter entries, hiding sensitive paths except allowed examples."
+  @spec filter_entries([map()]) :: {[map()], non_neg_integer()}
+  def filter_entries(entries) when is_list(entries) do
+    {visible, hidden} =
+      Enum.split_with(entries, fn entry ->
+        not sensitive_path?(entry.path) or allowed_sensitive_path?(entry.path)
+      end)
+
+    {visible, length(hidden)}
+  end
+
+  @doc "Return whether content is binary (NUL or invalid UTF-8)."
+  @spec binary?(binary()) :: boolean()
+  def binary?(content) when is_binary(content) do
+    not String.valid?(content) or :binary.match(content, <<0>>) != :nomatch
+  end
+
+  @doc """
+  Return whether a snapshot must be quarantined.
+
+  Quarantine is triggered by a sensitive path that is not an allowed example or
+  by a high-confidence secret pattern in any text blob. The caller should also
+  quarantine when the snapshot cannot be fully scanned (file/byte caps).
+  """
+  @spec quarantine?([map()]) :: boolean()
+  def quarantine?([]), do: false
+
+  def quarantine?(blobs) when is_list(blobs) do
+    Enum.any?(blobs, fn %{path: path, content: content} ->
+      (sensitive_path?(path) and not allowed_sensitive_path?(path)) or sensitive?(content)
+    end)
+  end
 end

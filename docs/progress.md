@@ -1,7 +1,7 @@
 # Cadence — Progress
 
 ## Current Phase
-Phase 3b-2 — repository browser + README + public secret filtering
+Phase 3c — public portfolio index + polish
 
 ## Done
 - [x] Read spec + AGENTS.md; audited and resolved all scaffold blockers.
@@ -518,19 +518,32 @@ Phase 3b-2 — repository browser + README + public secret filtering
       coverage). 305 tests total (114 shared + 115 daemon + 76 server), all
       green; `mix format --check-formatted`, `mix compile --warnings-as-errors`,
       and `MIX_ENV=prod mix compile --warnings-as-errors` clean.
+- [x] Phase 3b-2 — repository browser, README, and secret hardening:
+      `GitStore.list_path/4` (directory listings, safe paths, truncation) and
+      `walk_blobs/3` (bounded snapshot scan); `Portfolio.list_dir/read_file/
+      read_readme/quarantine_status`; `MDEx` README rendering with raw HTML
+      disabled and sanitization; tree/file components with breadcrumbs, line
+      numbers, binary/oversize notices; nested `/tree/*path` and `/blob/*path`
+      LiveView routes.
+- [x] `PublicContent` extended with sensitive-path hiding, allowed examples,
+      binary detection, and node-level quarantine. A snapshot is quarantined
+      when a sensitive path (non-example) or high-confidence secret pattern is
+      found, or when scan caps are exceeded; the DAG node remains visible but
+      the public repo pane is hidden. Filtering is re-applied on every event.
+- [x] New config: `CAD_FILE_MAX_LINES` (2000), `CAD_SCAN_MAX_FILES` (10000),
+      `CAD_SCAN_MAX_BYTES` (16777216), plus the existing file/README/tree caps.
+      `.env.example` and spec §12.6 updated.
+- [x] 27 new tests (7 GitStore, 20 server/web including the repo browser and
+      secret-filter coverage). 332 tests total (121 shared + 115 daemon + 96
+      server), all green; format, compile, and prod compile clean.
 
 ## Next
-- **3b-2 — repository browser + README + secret hardening.** Add
-  `GitStore.list_path/4`, `Portfolio` snapshot reads, `MDEx`, file tree/file
-  viewer/README, nested tree/blob routes, and extend `PublicContent` to path
-  hiding, content redaction, binary suppression, commit-message redaction, and
-  node-level quarantine.
-- Add `CAD_FILE_MAX_BYTES`, `CAD_README_MAX_BYTES`, `CAD_TREE_MAX_ENTRIES` to
-  runtime config and `.env.example`.
-- Tests must prove no secret bytes reach anonymous HTML and that LiveView events
-  cannot bypass filtering/quarantine.
+- **3c — public portfolio index + polish.** Turn `/` into the project index,
+  add canonical/shareable metadata, improve empty/error states, and finish the
+  public-page responsive/accessibility pass.
+- Keep the 3c slice read-only; pin/unpin and member controls stay in 3d.
 - Open decisions: syntax highlighting (plain code for now), member raw-view
-  policy, public `broken`/`sandbox` visibility.
+  policy, public `broken`/`sandbox` visibility, secret-filter overrides.
 
 ## Blocked
 - (none)
@@ -697,9 +710,29 @@ Phase 3b-2 — repository browser + README + public secret filtering
   `config/config.exs` now sets `adapter: Bandit.PhoenixAdapter`; spec §12.3
   records it. The smoke test served `/p/:slug` and all four browser assets with
   200s.
-- Public commit messages are redacted in 3b-1 via `Cadence.Server.PublicContent`.
-  File/tree redaction and node-level quarantine are 3b-2; until then the repo
-  pane is a metadata placeholder and exposes no file content.
+- Public commit messages are redacted via `Cadence.Server.PublicContent`. In
+  3b-2 the same module also filters paths, scans snapshot content, and triggers
+  node-level quarantine. Quarantine is intentionally conservative: if a
+  snapshot cannot be fully scanned within `CAD_SCAN_MAX_FILES`/
+  `CAD_SCAN_MAX_BYTES`, the public repo pane is hidden.
+- The repository browser reads the selected node's Git commit snapshot through
+  `ProjectGit`/`GitStore`; it never reads a server working tree. Tree/blob URLs
+  are `/p/:slug/n/:node_id/tree/*path` and `/blob/*path`.
+- `MDEx` is now an actual server dependency (it was already in spec §11).
+  READMEs render with raw HTML disabled, dangerous URLs stripped, and
+  sanitization enabled; file content remains escaped plain code. Syntax
+  highlighting is still deferred.
+- 3b-2 added `CAD_FILE_MAX_LINES` (2000), `CAD_SCAN_MAX_FILES` (10000), and
+  `CAD_SCAN_MAX_BYTES` (16777216), plus the previously documented file/README/
+  tree caps. `.env.example` was updated.
+- The file viewer explicitly reports binary, oversized, line-truncated, and
+  redacted content rather than silently omitting it. Directory listings report
+  hidden entries and truncation.
+- LiveView tree/blob patches do not change `live_action`, so the repository
+  action is derived from the URL path; this keeps in-place navigation working.
+- Quarantine is computed when the selected node changes and reused while
+  browsing that node; subsequent tree/file events still re-apply per-render
+  filtering/redaction.
 
 - Phase 3a added `Cadence.Shared.GitStore.read_path/3` (commit-relative file
   reads with a 1 MiB default cap and path-traversal rejection). It is a read
@@ -715,9 +748,8 @@ Phase 3b-2 — repository browser + README + public secret filtering
 - `membership_for/2` is in place for the 3d authenticated controls.
 
 ## Last Updated
-2026-10-24 — Phase 3b-1 complete: LiveView project home, full public SVG DAG,
-lineage intro animation, hover tooltips, node selection via patch, and public
-commit-message redaction. Also fixed the missing Bandit endpoint adapter found
-during a live smoke test. 305 tests green (114 shared + 115 daemon + 76 server);
-format and compile (dev/test/prod) clean. Next session starts 3b-2 (repository
-browser + file/tree secret filtering + quarantine).
+2026-10-24 — Phase 3b-2 complete: repository browser, MDEx README rendering,
+nested tree/blob routes, file viewer, and mandatory public secret filtering +
+node quarantine. 332 tests green (121 shared + 115 daemon + 96 server); format
+and compile (dev/test/prod) clean. Next session starts 3c (portfolio index +
+public-page polish).

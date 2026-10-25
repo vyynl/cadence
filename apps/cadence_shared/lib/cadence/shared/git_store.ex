@@ -244,6 +244,156 @@ defmodule Cadence.Shared.GitStore do
   end
 
   @doc """
+  List entries in a directory of `commit_sha`'s tree.
+
+  `path` may be `""` or `"/"` for the root. Returns `{:ok, entries, truncated?}`
+  where entries are maps with `:name`, `:type` (`:tree` or `:blob`), and `:path`.
+  Directories sort before files, then by case-insensitive name.
+
+  `:max_entries` (default 1000) caps the result. `truncated?` is true when the
+  directory had more entries than the cap.
+  """
+  @spec list_path(t(), sha(), String.t() | nil, keyword()) ::
+          {:ok, [%{name: String.t(), type: :tree | :blob, path: String.t()}], boolean()}
+          | {:error, :not_found | :not_a_directory | :unsafe_path}
+  def list_path(repo, commit_sha, path, opts \\ []) do
+    max_entries = max(Keyword.get(opts, :max_entries, 1000), 0)
+
+    with {:ok, segments} <- split_dir_path(path),
+         %{tree: tree} <- read_commit(repo, commit_sha),
+         {:ok, tree_sha} <- resolve_dir(repo, tree, segments) do
+      case read_tree(repo, tree_sha) do
+        nil ->
+          {:error, :not_found}
+
+        entries ->
+          normalized =
+            entries
+            |> Enum.map(&%{name: &1.name, type: &1.type, path: join_path(path, &1.name)})
+            |> sort_entries()
+
+          {:ok, Enum.take(normalized, max_entries), length(normalized) > max_entries}
+      end
+    else
+      nil -> {:error, :not_found}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  @doc """
+  Walk every blob reachable from `commit_sha`, returning path/content/size.
+
+  Caps at `:max_files` (default 1000) and `:max_bytes` (default 4 MiB). Returns
+  `{:error, :too_many_files | :too_many_bytes}` when a cap is exceeded, which
+  callers should treat as "cannot verify this snapshot".
+  """
+  @spec walk_blobs(t(), sha(), keyword()) ::
+          {:ok, [%{path: String.t(), ref: sha(), size: non_neg_integer(), content: binary()}]}
+          | {:error, :missing_object | :not_a_commit | :too_many_files | :too_many_bytes}
+  def walk_blobs(repo, commit_sha, opts \\ []) do
+    max_files = max(Keyword.get(opts, :max_files, 1000), 0)
+    max_bytes = max(Keyword.get(opts, :max_bytes, 4_194_304), 0)
+
+    case read_object(repo, commit_sha) do
+      {:commit, _data} ->
+        commit = read_commit(repo, commit_sha)
+        walk_tree_blobs(repo, commit.tree, "", max_files, max_bytes, [], 0, 0)
+
+      {_other, _data} ->
+        {:error, :not_a_commit}
+
+      nil ->
+        {:error, :missing_object}
+    end
+  end
+
+  defp walk_tree_blobs(repo, tree_sha, prefix, max_files, max_bytes, acc, count, bytes) do
+    case read_tree(repo, tree_sha) do
+      nil ->
+        {:error, :missing_object}
+
+      entries ->
+        entries
+        |> Enum.reduce_while({:ok, acc, count, bytes}, fn entry, {:ok, acc, count, bytes} ->
+          path = join_path(prefix, entry.name)
+
+          case entry.type do
+            :tree ->
+              case walk_tree_blobs(
+                     repo,
+                     entry.ref,
+                     path,
+                     max_files,
+                     max_bytes,
+                     acc,
+                     count,
+                     bytes
+                   ) do
+                {:ok, acc, count, bytes} -> {:cont, {:ok, acc, count, bytes}}
+                error -> {:halt, error}
+              end
+
+            :blob ->
+              case read_blob(repo, entry.ref) do
+                nil ->
+                  {:halt, {:error, :missing_object}}
+
+                content ->
+                  count = count + 1
+                  bytes = bytes + byte_size(content)
+
+                  cond do
+                    count > max_files ->
+                      {:halt, {:error, :too_many_files}}
+
+                    bytes > max_bytes ->
+                      {:halt, {:error, :too_many_bytes}}
+
+                    true ->
+                      item = %{
+                        path: path,
+                        ref: entry.ref,
+                        size: byte_size(content),
+                        content: content
+                      }
+
+                      {:cont, {:ok, [item | acc], count, bytes}}
+                  end
+              end
+          end
+        end)
+        |> case do
+          {:ok, acc, _count, _bytes} -> {:ok, Enum.sort_by(acc, & &1.path)}
+          error -> error
+        end
+    end
+  end
+
+  defp split_dir_path(nil), do: {:ok, []}
+  defp split_dir_path(path) when path in ["", "/"], do: {:ok, []}
+  defp split_dir_path(path) when is_binary(path), do: split_path(path)
+  defp split_dir_path(_path), do: {:error, :unsafe_path}
+
+  defp resolve_dir(_repo, tree_sha, []), do: {:ok, tree_sha}
+
+  defp resolve_dir(repo, tree_sha, [name | rest]) do
+    case find_entry(repo, tree_sha, name) do
+      %{type: :tree, ref: ref} -> resolve_dir(repo, ref, rest)
+      %{type: :blob} -> {:error, :not_a_directory}
+      nil -> {:error, :not_found}
+    end
+  end
+
+  defp join_path(path, name) when path in [nil, "", "/"], do: name
+  defp join_path(path, name), do: String.trim_trailing(path, "/") <> "/" <> name
+
+  defp sort_entries(entries) do
+    Enum.sort_by(entries, fn entry ->
+      {if(entry.type == :tree, do: 0, else: 1), String.downcase(entry.name), entry.name}
+    end)
+  end
+
+  @doc """
   Collect a commit and every tree/blob reachable from it.
 
   Returns the commit object first, followed by its tree and blobs in

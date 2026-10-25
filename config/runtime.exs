@@ -114,6 +114,12 @@ if config_env() != :test do
     git_store_path: git_store_path,
     sync_pull_limit: String.to_integer(System.get_env("CAD_SYNC_PULL_LIMIT", "100")),
     dag_intro_ms: String.to_integer(System.get_env("CAD_DAG_INTRO_MS", "1200")),
+    file_max_bytes: String.to_integer(System.get_env("CAD_FILE_MAX_BYTES", "524288")),
+    file_max_lines: String.to_integer(System.get_env("CAD_FILE_MAX_LINES", "2000")),
+    readme_max_bytes: String.to_integer(System.get_env("CAD_README_MAX_BYTES", "262144")),
+    tree_max_entries: String.to_integer(System.get_env("CAD_TREE_MAX_ENTRIES", "1000")),
+    scan_max_files: String.to_integer(System.get_env("CAD_SCAN_MAX_FILES", "10000")),
+    scan_max_bytes: String.to_integer(System.get_env("CAD_SCAN_MAX_BYTES", "16777216")),
     oauth: [
       github: [
         client_id: System.get_env("CAD_OAUTH_GITHUB_CLIENT_ID"),

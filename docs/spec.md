@@ -643,9 +643,12 @@ filesystem working tree.
 - **URLs:** `/p/:slug/n/:node_id/tree/*path` for directories and
   `/p/:slug/n/:node_id/blob/*path` for files. LiveView patches these URLs so
   node/file views are shareable and survive reloads.
-- **Limits:** file reads, README reads, and directory listings are bounded
-  (`CAD_FILE_MAX_BYTES`, `CAD_README_MAX_BYTES`, `CAD_TREE_MAX_ENTRIES`).
-  Truncation is explicit in the UI, never silent.
+- **Limits:** file reads, README reads, directory listings, and the quarantine
+  scan are bounded (`CAD_FILE_MAX_BYTES`, `CAD_FILE_MAX_LINES`,
+  `CAD_README_MAX_BYTES`, `CAD_TREE_MAX_ENTRIES`, `CAD_SCAN_MAX_FILES`,
+  `CAD_SCAN_MAX_BYTES`). Truncation is explicit in the UI, never silent. A
+  snapshot that exceeds the scan caps is quarantined rather than shown
+  unverified.
 
 Code syntax highlighting is an open decision (§16); the first implementation
 renders escaped, readable plain code. If highlighting is added, it must run
@@ -1185,8 +1188,11 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_SYNC_PULL_LIMIT` | no | `100` | Max nodes returned per pull batch |
 | `CAD_DAG_INTRO_MS` | no | `1200` | First-load DAG/repo intro animation duration |
 | `CAD_FILE_MAX_BYTES` | no | `524288` | Max bytes rendered in the public file viewer |
+| `CAD_FILE_MAX_LINES` | no | `2000` | Max lines rendered in the public file viewer |
 | `CAD_README_MAX_BYTES` | no | `262144` | Max README bytes rendered publicly |
 | `CAD_TREE_MAX_ENTRIES` | no | `1000` | Max directory entries returned by the repo browser |
+| `CAD_SCAN_MAX_FILES` | no | `10000` | Max files scanned for secret quarantine |
+| `CAD_SCAN_MAX_BYTES` | no | `16777216` | Max snapshot bytes scanned for secret quarantine |
 | `CAD_ARTIFACT_PATH` | no | `/data/artifacts` | Action outputs |
 | `CAD_OAUTH_GITHUB_CLIENT_ID` | no | — | GitHub OAuth |
 | `CAD_OAUTH_GITHUB_CLIENT_SECRET` | no | — | GitHub OAuth |

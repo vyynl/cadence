@@ -227,6 +227,84 @@ defmodule Cadence.Shared.GitStoreTest do
     end
   end
 
+  describe "list_path/4" do
+    setup %{dir: dir, repo: repo} do
+      tree =
+        build_file_tree(repo, Path.join(dir, "list_path"), %{
+          "README.md" => "# Cadence\n",
+          "docs/guide.md" => "nested\n",
+          "docs/extra.txt" => "extra\n"
+        })
+
+      commit = GitStore.write_commit(repo, tree, [], %{name: "a", email: "a@b"}, "root")
+      %{commit: commit}
+    end
+
+    test "lists the root with directories first", %{repo: repo, commit: commit} do
+      assert {:ok, entries, false} = GitStore.list_path(repo, commit, "")
+
+      assert Enum.map(entries, & &1.name) == ["docs", "README.md"]
+      assert Enum.map(entries, & &1.type) == [:tree, :blob]
+      assert Enum.map(entries, & &1.path) == ["docs", "README.md"]
+    end
+
+    test "lists a nested directory", %{repo: repo, commit: commit} do
+      assert {:ok, entries, false} = GitStore.list_path(repo, commit, "docs")
+
+      assert Enum.map(entries, & &1.path) == ["docs/extra.txt", "docs/guide.md"]
+      assert Enum.all?(entries, &(&1.type == :blob))
+    end
+
+    test "returns errors for missing, file, and unsafe paths", %{repo: repo, commit: commit} do
+      assert GitStore.list_path(repo, commit, "missing") == {:error, :not_found}
+      assert GitStore.list_path(repo, commit, "README.md") == {:error, :not_a_directory}
+      assert GitStore.list_path(repo, commit, "../docs") == {:error, :unsafe_path}
+      assert GitStore.list_path(repo, String.duplicate("0", 40), "") == {:error, :not_found}
+    end
+
+    test "caps entries and reports truncation", %{repo: repo, commit: commit} do
+      assert {:ok, entries, true} = GitStore.list_path(repo, commit, "", max_entries: 1)
+      assert length(entries) == 1
+    end
+  end
+
+  describe "walk_blobs/3" do
+    setup %{dir: dir, repo: repo} do
+      tree =
+        build_file_tree(repo, Path.join(dir, "walk"), %{
+          "README.md" => "# Cadence\n",
+          "docs/guide.md" => "nested\n"
+        })
+
+      commit = GitStore.write_commit(repo, tree, [], %{name: "a", email: "a@b"}, "root")
+      %{commit: commit}
+    end
+
+    test "returns every blob with path and content", %{repo: repo, commit: commit} do
+      assert {:ok, blobs} = GitStore.walk_blobs(repo, commit)
+
+      assert Enum.map(blobs, &{&1.path, &1.content}) == [
+               {"README.md", "# Cadence\n"},
+               {"docs/guide.md", "nested\n"}
+             ]
+
+      assert Enum.all?(blobs, &(&1.size == byte_size(&1.content)))
+    end
+
+    test "enforces file and byte caps", %{repo: repo, commit: commit} do
+      assert GitStore.walk_blobs(repo, commit, max_files: 1) == {:error, :too_many_files}
+      assert GitStore.walk_blobs(repo, commit, max_bytes: 3) == {:error, :too_many_bytes}
+    end
+
+    test "rejects non-commits and missing commits", %{repo: repo} do
+      blob = GitStore.write_blob(repo, "not a commit")
+      assert GitStore.walk_blobs(repo, blob) == {:error, :not_a_commit}
+
+      assert GitStore.walk_blobs(repo, String.duplicate("0", 40)) ==
+               {:error, :missing_object}
+    end
+  end
+
   describe "checkout/3" do
     test "materializes the tree at a commit into a directory", %{dir: dir, repo: repo} do
       path = Path.join(dir, "work")

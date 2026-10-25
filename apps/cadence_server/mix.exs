@@ -26,6 +26,7 @@ defmodule Cadence.Server.MixProject do
       {:phoenix_html, "~> 4.3"},
       {:phoenix_live_view, "~> 1.2"},
       {:phoenix_pubsub, "~> 2.4"},
+      {:mdex, "~> 0.14"},
       {:bandit, "~> 1.13"},
       {:plug, "~> 1.20"},
       {:ecto_sql, "~> 3.14"},

@@ -1,6 +1,6 @@
 # Phase 3 roadmap — Web UI & Portfolio
 
-> Status: **approved 2026-10-24; 3a and 3b-1 complete; 3b-2 next**. This is the
+> Status: **approved 2026-10-24; 3a and 3b complete; 3c next**. This is the
 > session-by-session plan for Phase 3. `docs/spec.md` §7/§13/§16 are canonical;
 > this file tracks execution order and acceptance. The cold-start build brief is
 > `docs/phase-3b-prep.md`.
@@ -29,7 +29,7 @@
 | 0 | Decisions + docs | Spec updates, roadmap, docs commit | **Done** |
 | 1 | 3a | Public project page, `Portfolio`, `GitStore.read_path`, HTML shell | **Done** |
 | 2 | 3b-1 | **Done** — LiveView project home, DAG SVG, node routes, message redaction, intro animation | Full DAG/interaction works; tests green |
-| 3 | 3b-2 | File tree, file viewer, README/MDEx, public secret filter + quarantine | Repo pane browsable; no secret bytes in public HTML |
+| 3 | 3b-2 | **Done** — file tree, file viewer, README/MDEx, public secret filter + quarantine | Repo pane browsable; no secret bytes in public HTML |
 | 4 | 3c | Portfolio index, canonical metadata, public-page polish | `/` lists projects; edge cases covered |
 | 5 | 3d | Owner pin/unpin, role checks, explicit unfiltered reveal | Owner controls work; public stays filtered |
 | 6 | Close | Final spec/progress update, full suite + prod compile | Handoff clean |
@@ -64,7 +64,11 @@ Original slice scope (implemented):
 - Tests: pure layout (linear/branch/meld/wide/lineage), LiveView mount and node
   selection, route/URL patching, public visibility, animation attributes.
 
-### Session 3 — 3b-2: repository browser + README + secret filter
+### Session 3 — 3b-2: repository browser + README + secret filter (done)
+
+Implemented: `GitStore.list_path/4` + `walk_blobs/3`, `Portfolio` snapshot reads, `MDEx` README rendering, tree/file components, nested tree/blob routes, redaction, and node quarantine. The repo pane is browsable and the public HTML never contains detected secret values.
+
+Original slice scope (implemented):
 
 - Add `Cadence.Shared.GitStore.list_path/4` (directory listing from a commit
   tree, safe paths, sorted dirs-first) and tests.
