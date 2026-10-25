@@ -1,8 +1,23 @@
 <article>
-  <p class="eyebrow">Cadence</p>
-  <h1>Version control for sessions</h1>
-  <p class="note">
-    The public project portfolio arrives in the next slice. Project pages are
-    available at <code>/p/&lt;slug&gt;</code>.
-  </p>
+  <header class="portfolio-header">
+    <p class="eyebrow">Portfolio</p>
+    <h1>Cadence</h1>
+    <p class="note">Local-first project histories, readable in the browser.</p>
+  </header>
+
+  <section :if={@projects != []} class="project-grid" aria-label="Projects">
+    <a
+      :for={%{project: project, node_count: node_count} <- @projects}
+      href={"/p/#{project.slug}"}
+      class="project-card"
+    >
+      <h2>{project.name}</h2>
+      <p class="slug">/{project.slug}</p>
+      <p class="note">
+        {node_count} {if node_count == 1, do: "node", else: "nodes"}
+      </p>
+    </a>
+  </section>
+
+  <p :if={@projects == []} class="empty">No public projects yet.</p>
 </article>

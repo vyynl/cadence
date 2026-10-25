@@ -49,6 +49,7 @@ defmodule Cadence.ServerWeb.Components.DAG do
                 class={node_classes(node, @selected_id, @layout.default_id)}
                 style={node_style(node, @layout)}
                 aria-label={node_label(node)}
+                aria-current={if node.id == @selected_id, do: "true"}
               >
                 <circle
                   class={"node-dot flag-#{node.flag || "unknown"}"}

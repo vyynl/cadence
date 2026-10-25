@@ -101,6 +101,19 @@ defmodule Cadence.ServerWeb.ProjectLiveTest do
     assert file_html =~ "src/app.ex"
   end
 
+  test "renders canonical metadata for project and tree URLs", %{
+    conn: conn,
+    functioning: functioning
+  } do
+    {:ok, _view, html} = live(conn, "/p/demo")
+
+    assert html =~ ~s(rel="canonical" href="http://localhost:4000/p/demo")
+    assert html =~ ~s(name="description")
+
+    {:ok, _view, tree_html} = live(conn, "/p/demo/n/#{functioning.id}/tree/src")
+    assert tree_html =~ "http://localhost:4000/p/demo/n/#{functioning.id}/tree/src"
+  end
+
   test "renders tree and blob URLs directly", %{conn: conn, functioning: functioning} do
     {:ok, _view, tree_html} = live(conn, "/p/demo/n/#{functioning.id}/tree/src")
     assert tree_html =~ "app.ex"

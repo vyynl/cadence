@@ -10,6 +10,29 @@ defmodule Cadence.Server.PortfolioTest do
     :ok
   end
 
+  describe "list_projects/0" do
+    test "lists projects newest first with node counts" do
+      older = insert_project_with_created_at("older", ~U[2026-10-20 00:00:00Z])
+      newer = insert_project_with_created_at("newer", ~U[2026-10-24 00:00:00Z])
+
+      insert_node(older, %{message: "older node"})
+      insert_node(newer, %{message: "newer one"})
+      insert_node(newer, %{message: "newer two"})
+
+      assert [
+               %{project: %{id: newer_id}, node_count: 2},
+               %{project: %{id: older_id}, node_count: 1}
+             ] = Portfolio.list_projects()
+
+      assert newer_id == newer.id
+      assert older_id == older.id
+    end
+
+    test "returns an empty list when there are no projects" do
+      assert Portfolio.list_projects() == []
+    end
+  end
+
   describe "get_project_by_slug/1" do
     test "returns the project" do
       project = insert_project("demo")
@@ -275,6 +298,17 @@ defmodule Cadence.Server.PortfolioTest do
       name: "Demo",
       slug: slug,
       owner_id: Ecto.UUID.generate()
+    })
+    |> Repo.insert!()
+  end
+
+  defp insert_project_with_created_at(slug, created_at) do
+    %Project{}
+    |> Project.changeset(%{
+      name: String.capitalize(slug),
+      slug: slug,
+      owner_id: Ecto.UUID.generate(),
+      created_at: created_at
     })
     |> Repo.insert!()
   end

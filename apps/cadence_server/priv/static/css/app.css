@@ -46,6 +46,77 @@ a {
   border-bottom: 1px solid var(--line);
 }
 
+.skip-link {
+  position: fixed;
+  top: 0.5rem;
+  left: 0.5rem;
+  z-index: 10;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--accent);
+  border-radius: 0.4rem;
+  background: var(--bg);
+  color: var(--accent);
+  transform: translateY(-150%);
+  transition: transform 120ms ease;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+main:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.portfolio-header {
+  margin-bottom: 1.5rem;
+}
+
+.portfolio-header h1 {
+  margin: 0;
+}
+
+.project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 1rem;
+}
+
+.project-card {
+  display: block;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  color: var(--fg);
+  text-decoration: none;
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+
+.project-card:hover,
+.project-card:focus-visible {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.project-card h2 {
+  margin: 0 0 0.3rem;
+  font-size: 1.15rem;
+}
+
+.project-card .slug {
+  margin: 0;
+}
+
+.project-card .note {
+  margin: 0.6rem 0 0;
+  font-size: 0.85rem;
+}
+
 .site-header nav {
   max-width: 88rem;
   margin: 0 auto;

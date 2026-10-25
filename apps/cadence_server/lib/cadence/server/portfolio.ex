@@ -39,6 +39,34 @@ defmodule Cadence.Server.Portfolio do
   end
 
   @doc """
+  List public projects for the portfolio index, newest first.
+
+  Returns `%{project: Project.t(), node_count: non_neg_integer()}` entries.
+  """
+  @spec list_projects() :: [%{project: Project.t(), node_count: non_neg_integer()}]
+  def list_projects do
+    projects =
+      Repo.all(
+        from(p in Project,
+          order_by: [desc: p.created_at, desc: p.id]
+        )
+      )
+
+    counts =
+      Repo.all(
+        from(n in Node,
+          group_by: n.project_id,
+          select: {n.project_id, count(n.id)}
+        )
+      )
+      |> Map.new()
+
+    Enum.map(projects, fn project ->
+      %{project: project, node_count: Map.get(counts, project.id, 0)}
+    end)
+  end
+
+  @doc """
   List a project's nodes, newest first with a deterministic tie-break.
 
   Used by the full public DAG and the preview resolver.

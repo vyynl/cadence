@@ -1,7 +1,7 @@
 # Cadence — Progress
 
 ## Current Phase
-Phase 3c — public portfolio index + polish
+Phase 3d — authenticated owner/trusted controls
 
 ## Done
 - [x] Read spec + AGENTS.md; audited and resolved all scaffold blockers.
@@ -536,12 +536,21 @@ Phase 3c — public portfolio index + polish
 - [x] 27 new tests (7 GitStore, 20 server/web including the repo browser and
       secret-filter coverage). 332 tests total (121 shared + 115 daemon + 96
       server), all green; format, compile, and prod compile clean.
+- [x] Phase 3c — public portfolio index + polish: `Portfolio.list_projects/0`
+      (newest first with node counts); `/` now lists project cards with node
+      counts; empty state; canonical + Open Graph metadata for the index and
+      project/tree URLs via `Cadence.ServerWeb.Metadata`; skip link, focus
+      styles, responsive project grid.
+- [x] 5 new tests (2 Portfolio list, 2 portfolio page, 1 LiveView canonical
+      metadata). 337 tests total (121 shared + 115 daemon + 101 server), all
+      green; format, compile, and prod compile clean.
 
 ## Next
-- **3c — public portfolio index + polish.** Turn `/` into the project index,
-  add canonical/shareable metadata, improve empty/error states, and finish the
-  public-page responsive/accessibility pass.
-- Keep the 3c slice read-only; pin/unpin and member controls stay in 3d.
+- **3d — authenticated owner/trusted controls.** Reuse the existing browser
+  session + `Membership` roles; add owner pin/unpin, membership read views, and
+  an explicit unfiltered reveal for owner/trusted users. Public/default renders
+  stay filtered.
+- Keep authorization server-side; do not rely on hiding controls in HTML.
 - Open decisions: syntax highlighting (plain code for now), member raw-view
   policy, public `broken`/`sandbox` visibility, secret-filter overrides.
 
@@ -738,18 +747,20 @@ Phase 3c — public portfolio index + polish
   reads with a 1 MiB default cap and path-traversal rejection). It is a read
   helper beyond the object operations enumerated in §5.2/§13; `Portfolio` and
   the README slice use it.
-- Phase 3a added `GET /` (placeholder landing page) and `GET /p/:slug`
-  (preview-only project page) on the browser pipeline. The 3c slice will turn
-  `/` into the project index; the route already exists so the layout/header link
-  is never dead.
+- Phase 3a added `GET /` and `GET /p/:slug` on the browser pipeline. 3c turned
+  `/` into the public project index; the route was already present so the
+  layout/header link never went dead.
+- 3c added canonical/Open Graph metadata via `Cadence.ServerWeb.Metadata`.
+  Canonical URLs use `CAD_PUBLIC_URL` + the current path; the index canonical is
+  `/`, project pages use `/p/:slug`, and tree/blob views use their nested path.
 - The server now declares `phoenix_html` and `phoenix_live_view` directly even
   though both were already present transitively. 3b starts using LiveView for the
   project home; 3a's dead-view page is superseded.
 - `membership_for/2` is in place for the 3d authenticated controls.
 
 ## Last Updated
-2026-10-24 — Phase 3b-2 complete: repository browser, MDEx README rendering,
-nested tree/blob routes, file viewer, and mandatory public secret filtering +
-node quarantine. 332 tests green (121 shared + 115 daemon + 96 server); format
-and compile (dev/test/prod) clean. Next session starts 3c (portfolio index +
-public-page polish).
+2026-10-24 — Phase 3c complete: public portfolio index with node counts,
+canonical/Open Graph metadata, skip link and responsive project cards. 337 tests
+green (121 shared + 115 daemon + 101 server); format and compile
+(dev/test/prod) clean. Next session starts 3d (authenticated owner/trusted
+controls).

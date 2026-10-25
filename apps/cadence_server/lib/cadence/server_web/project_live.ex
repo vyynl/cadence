@@ -8,6 +8,7 @@ defmodule Cadence.ServerWeb.ProjectLive do
   alias Cadence.Server.{Portfolio, PublicContent}
   alias Cadence.ServerWeb.Components.{DAG, Repo}
   alias Cadence.ServerWeb.DAGLayout
+  alias Cadence.ServerWeb.Metadata
 
   @impl true
   def mount(_params, _session, socket) do
@@ -56,9 +57,14 @@ defmodule Cadence.ServerWeb.ProjectLive do
               intro_ms: dag_intro_ms()
             )
 
+          path = URI.parse(uri).path || "/p/#{project.slug}"
+
           socket =
             assign(socket,
               page_title: project.name,
+              page_description:
+                "#{project.name} on Cadence — session history and repository snapshot.",
+              canonical_url: Metadata.canonical(path),
               project: project,
               dag_layout: dag_layout,
               selected_node: selected_node,
@@ -71,10 +77,17 @@ defmodule Cadence.ServerWeb.ProjectLive do
         end
 
       {:error, :not_found} ->
+        path = URI.parse(uri).path || "/"
+
         {:noreply,
          socket
          |> assign(base_assigns())
-         |> assign(page_title: "Project not found", not_found: true)}
+         |> assign(
+           page_title: "Project not found",
+           page_description: "Project not found on Cadence.",
+           canonical_url: Metadata.canonical(path),
+           not_found: true
+         )}
     end
   end
 
@@ -185,6 +198,8 @@ defmodule Cadence.ServerWeb.ProjectLive do
   defp base_assigns do
     [
       page_title: "Cadence",
+      page_description: nil,
+      canonical_url: nil,
       project: nil,
       dag_layout: DAGLayout.layout([]),
       selected_node: nil,

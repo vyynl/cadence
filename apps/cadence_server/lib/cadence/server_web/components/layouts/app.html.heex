@@ -5,13 +5,26 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="csrf-token" content={Plug.CSRFProtection.get_csrf_token()} />
     <title>{assigns[:page_title] || "Cadence"}</title>
+    <meta
+      name="description"
+      content={assigns[:page_description] || "Cadence — local-first project history, readable in the browser."}
+    />
+    <link :if={assigns[:canonical_url]} rel="canonical" href={assigns[:canonical_url]} />
+    <meta property="og:title" content={assigns[:page_title] || "Cadence"} />
+    <meta
+      property="og:description"
+      content={assigns[:page_description] || "Cadence — local-first project history, readable in the browser."}
+    />
+    <meta :if={assigns[:canonical_url]} property="og:url" content={assigns[:canonical_url]} />
+    <meta property="og:type" content="website" />
     <link rel="stylesheet" href="/assets/css/app.css" />
   </head>
   <body>
+    <a class="skip-link" href="#main">Skip to content</a>
     <header class="site-header">
       <nav><a class="brand" href="/">Cadence</a></nav>
     </header>
-    <main>
+    <main id="main" tabindex="-1">
       <%= if assigns[:inner_content] do %>
         {@inner_content}
       <% else %>

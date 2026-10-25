@@ -1,6 +1,6 @@
 # Phase 3 roadmap — Web UI & Portfolio
 
-> Status: **approved 2026-10-24; 3a and 3b complete; 3c next**. This is the
+> Status: **approved 2026-10-24; 3a–3c complete; 3d next**. This is the
 > session-by-session plan for Phase 3. `docs/spec.md` §7/§13/§16 are canonical;
 > this file tracks execution order and acceptance. The cold-start build brief is
 > `docs/phase-3b-prep.md`.
@@ -30,7 +30,7 @@
 | 1 | 3a | Public project page, `Portfolio`, `GitStore.read_path`, HTML shell | **Done** |
 | 2 | 3b-1 | **Done** — LiveView project home, DAG SVG, node routes, message redaction, intro animation | Full DAG/interaction works; tests green |
 | 3 | 3b-2 | **Done** — file tree, file viewer, README/MDEx, public secret filter + quarantine | Repo pane browsable; no secret bytes in public HTML |
-| 4 | 3c | Portfolio index, canonical metadata, public-page polish | `/` lists projects; edge cases covered |
+| 4 | 3c | **Done** — portfolio index, canonical metadata, public-page polish | `/` lists projects; edge cases covered |
 | 5 | 3d | Owner pin/unpin, role checks, explicit unfiltered reveal | Owner controls work; public stays filtered |
 | 6 | Close | Final spec/progress update, full suite + prod compile | Handoff clean |
 
@@ -94,11 +94,17 @@ Original slice scope (implemented):
   path-traversal rejection, secret redaction/hiding, public-event bypass
   attempts, no secret bytes in rendered HTML.
 
-### Session 4 — 3c: portfolio index + polish
+### Session 4 — 3c: portfolio index + polish (done)
+
+Implemented: `/` lists projects newest first with node counts, canonical/OG
+metadata for the index and project/tree URLs, skip link, focus styles, and
+responsive project cards.
+
+Original slice scope (implemented):
 
 - Turn `/` into the project index.
 - Canonical metadata/shareable URLs.
-- Public empty/error states; `broken`/`sandbox` presentation.
+- Public empty/error states.
 - Remaining accessibility/responsive polish.
 
 ### Session 5 — 3d: authenticated controls
