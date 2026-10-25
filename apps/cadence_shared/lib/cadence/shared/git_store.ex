@@ -172,6 +172,78 @@ defmodule Cadence.Shared.GitStore do
   end
 
   @doc """
+  Read a regular file from the tree of `commit_sha` at a slash-separated path.
+
+  Returns `{:ok, content}` or `{:error, reason}`, where `reason` is one of
+  `:not_found`, `:not_a_file`, `:too_large`, or `:unsafe_path`. Content larger
+  than `:max_bytes` (default 1 MiB) is rejected before it is returned.
+
+  Paths are resolved inside the commit tree; absolute paths, `.`, `..`, empty
+  segments, and backslashes are rejected so untrusted path input cannot escape
+  the tree.
+  """
+  @spec read_path(t(), sha(), String.t(), keyword()) ::
+          {:ok, binary()}
+          | {:error, :not_found | :not_a_file | :too_large | :unsafe_path}
+  def read_path(repo, commit_sha, path, opts \\ []) do
+    max_bytes = Keyword.get(opts, :max_bytes, 1_048_576)
+
+    with {:ok, segments} <- split_path(path),
+         %{tree: tree} <- read_commit(repo, commit_sha) do
+      read_path_segments(repo, tree, segments, max_bytes)
+    else
+      nil -> {:error, :not_found}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp split_path(path) when is_binary(path) do
+    segments = String.split(path, "/")
+
+    if segments != [] and Enum.all?(segments, &non_empty_safe_name?/1) do
+      {:ok, segments}
+    else
+      {:error, :unsafe_path}
+    end
+  end
+
+  defp split_path(_path), do: {:error, :unsafe_path}
+
+  defp non_empty_safe_name?(name), do: name != "" and safe_name?(name)
+
+  defp read_path_segments(repo, tree_sha, [name], max_bytes) do
+    case find_entry(repo, tree_sha, name) do
+      %{type: :blob, ref: ref} ->
+        case read_blob(repo, ref) do
+          nil -> {:error, :not_found}
+          data when byte_size(data) <= max_bytes -> {:ok, data}
+          _data -> {:error, :too_large}
+        end
+
+      %{type: :tree} ->
+        {:error, :not_a_file}
+
+      nil ->
+        {:error, :not_found}
+    end
+  end
+
+  defp read_path_segments(repo, tree_sha, [name | rest], max_bytes) do
+    case find_entry(repo, tree_sha, name) do
+      %{type: :tree, ref: ref} -> read_path_segments(repo, ref, rest, max_bytes)
+      %{type: :blob} -> {:error, :not_found}
+      nil -> {:error, :not_found}
+    end
+  end
+
+  defp find_entry(repo, tree_sha, name) do
+    case read_tree(repo, tree_sha) do
+      nil -> nil
+      entries -> Enum.find(entries, &(&1.name == name))
+    end
+  end
+
+  @doc """
   Collect a commit and every tree/blob reachable from it.
 
   Returns the commit object first, followed by its tree and blobs in

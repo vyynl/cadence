@@ -517,6 +517,10 @@ Anonymous visitors see the **preview node only**. The full read-only DAG is
 reserved for authenticated project members (§7.2), so `broken` and `sandbox`
 work is never exposed publicly. This resolves the §16 visibility decision.
 
+Public routes: `/` is the portfolio index, `/p/:slug` is a project landing
+page, and `/p/:slug/n/:id` is a single-node view. `/auth`, `/sync`, `/health`,
+and static paths are reserved.
+
 ### 7.2 Owner/trusted views (authenticated)
 
 - All of the above, plus:

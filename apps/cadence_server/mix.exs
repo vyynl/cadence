@@ -23,6 +23,8 @@ defmodule Cadence.Server.MixProject do
     [
       {:cadence_shared, in_umbrella: true},
       {:phoenix, "~> 1.8"},
+      {:phoenix_html, "~> 4.3"},
+      {:phoenix_live_view, "~> 1.2"},
       {:phoenix_pubsub, "~> 2.4"},
       {:bandit, "~> 1.13"},
       {:plug, "~> 1.20"},

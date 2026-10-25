@@ -1,8 +1,8 @@
 # Phase 3 roadmap — Web UI & Portfolio
 
-> Status: **approved 2026-10-24**. This is the session-by-session plan for
-> Phase 3. `docs/spec.md` §7/§13/§16 are canonical; this file tracks the
-> execution order and per-session acceptance.
+> Status: **approved 2026-10-24; 3a complete**. This is the session-by-session
+> plan for Phase 3. `docs/spec.md` §7/§13/§16 are canonical; this file tracks
+> the execution order and per-session acceptance.
 
 ## Decisions (approved)
 
@@ -21,7 +21,7 @@
 | Session | Slice | Deliverable | Exit criteria |
 |---|---|---|---|
 | 0 | Decisions + docs | Spec updates, this roadmap, docs commit | Docs committed; no app code |
-| 1 | 3a | Public `/p/:slug` page, `Portfolio`, `GitStore` path reader, HTML layout/errors | Seeded project renders HTML; tests green |
+| 1 | 3a | **Done** — public `/p/:slug` page, `Portfolio`, `GitStore` path reader, HTML layout/errors | Seeded project renders HTML; tests green |
 | 2 | 3b | Pure DAG layout + server-rendered SVG | Branch/meld/wrap tested; visibility applied |
 | 3 | 3c | Portfolio index + README via `MDEx` | Index lists projects; safe Markdown; edge cases |
 | 4 | 3d | Session/role gating, owner pin/unpin | Owner can pin; anonymous cannot; no leakage |

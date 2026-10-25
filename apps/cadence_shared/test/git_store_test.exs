@@ -180,6 +180,53 @@ defmodule Cadence.Shared.GitStoreTest do
     end
   end
 
+  describe "read_path/3" do
+    setup %{dir: dir, repo: repo} do
+      tree =
+        build_file_tree(repo, Path.join(dir, "read_path"), %{
+          "README.md" => "# Cadence\n",
+          "docs/guide.md" => "nested\n"
+        })
+
+      commit = GitStore.write_commit(repo, tree, [], %{name: "a", email: "a@b"}, "root")
+      %{commit: commit}
+    end
+
+    test "reads a root file", %{repo: repo, commit: commit} do
+      assert GitStore.read_path(repo, commit, "README.md") == {:ok, "# Cadence\n"}
+    end
+
+    test "reads a nested file", %{repo: repo, commit: commit} do
+      assert GitStore.read_path(repo, commit, "docs/guide.md") == {:ok, "nested\n"}
+    end
+
+    test "returns :not_found for missing files and commits", %{repo: repo, commit: commit} do
+      assert GitStore.read_path(repo, commit, "docs/missing.md") == {:error, :not_found}
+      assert GitStore.read_path(repo, commit, "missing/file.md") == {:error, :not_found}
+
+      assert GitStore.read_path(repo, String.duplicate("0", 40), "README.md") ==
+               {:error, :not_found}
+    end
+
+    test "returns :not_a_file for directory paths", %{repo: repo, commit: commit} do
+      assert GitStore.read_path(repo, commit, "docs") == {:error, :not_a_file}
+    end
+
+    test "rejects unsafe path input", %{repo: repo, commit: commit} do
+      for path <- ["../README.md", "/etc/passwd", "docs//guide.md", "docs\\guide.md", "."] do
+        assert GitStore.read_path(repo, commit, path) == {:error, :unsafe_path}
+      end
+    end
+
+    test "enforces the byte cap", %{repo: repo, commit: commit} do
+      assert GitStore.read_path(repo, commit, "README.md", max_bytes: 3) ==
+               {:error, :too_large}
+
+      assert GitStore.read_path(repo, commit, "README.md", max_bytes: 10) ==
+               {:ok, "# Cadence\n"}
+    end
+  end
+
   describe "checkout/3" do
     test "materializes the tree at a commit into a directory", %{dir: dir, repo: repo} do
       path = Path.join(dir, "work")

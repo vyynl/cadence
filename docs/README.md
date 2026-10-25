@@ -16,7 +16,7 @@ there, resolve it in the spec (or add it to §16) before implementing.
 | Phase 1 — local daemon, commits, DAG picker, AI messages | Complete |
 | Phase 2a — DAG structure, Neovim picker, diffs | Complete |
 | Phase 2b — cloud sync, auth, preferences, notifications | Complete |
-| Phase 3 — web UI & portfolio | **In progress (3a)** |
+| Phase 3 — web UI & portfolio | **In progress (3b)** |
 | Phase 4+ — unions, doc automation, actions, storage | Not started |
 
 ## Doc map

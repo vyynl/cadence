@@ -476,15 +476,31 @@ Phase 3a — UI foundation + read-only project page
       first; `/p/:slug` routing; README-only docs; all projects public by
       default; review/promotion UI deferred to Phase 4. Updated spec §7.1/§7.2/
       §7.3/§13/§16 and added `docs/phase-3-roadmap.md`.
+- [x] Phase 3a — UI foundation + read-only project page:
+      `Cadence.Shared.GitStore.read_path/3` (slash paths, commit → tree → blob,
+      1 MiB default cap, `:not_found`/`:not_a_file`/`:too_large`/`:unsafe_path`)
+      with 6 tests; direct server deps `phoenix_html` + `phoenix_live_view`
+      (dead views, no JS pipeline); `Cadence.ServerWeb` HTML helpers and
+      `:controller` layout wiring; `Layouts` + `ErrorHTML`; HTML error rendering
+      in the endpoint config.
+- [x] `Cadence.Server.Portfolio` read context: `get_project_by_slug/1`,
+      deterministic `list_nodes/1`, SQL preview resolution (pinned → functioning
+      → newest), `membership_for/2`. Public `GET /` landing page and
+      `GET /p/:slug` project page showing only the preview node; unknown projects
+      return the HTML 404.
+- [x] 21 new tests (6 GitStore, 10 Portfolio, 5 web). 287 tests total (114 shared
+      + 115 daemon + 58 server), all green; `mix format --check-formatted`,
+      `mix compile --warnings-as-errors`, and `MIX_ENV=prod mix compile
+      --warnings-as-errors` clean.
 
 ## Next
-- **3a — UI foundation + read-only project page.** Add direct `phoenix_html` +
-  `phoenix_live_view` server deps (dead views, no JS pipeline), HTML helpers/
-  layout/error renderer, `Cadence.Server.Portfolio`, a shared
-  `GitStore.read_path/3`, and public `GET /p/:slug`.
-- Confirm the page renders a seeded project's preview node without JavaScript;
-  add ConnTest/Portfolio/GitStore tests.
-- Then 3b (DAG renderer), 3c (portfolio+Markdown), 3d (auth views).
+- **3b — DAG renderer.** Build `Cadence.ServerWeb.DAGLayout` (depth-based layers,
+  elbow edges, wrap/break marker) and a server-rendered SVG component. Public
+  output remains preview-only; full-DAG rendering comes with authenticated views
+  in 3d.
+- Add pure layout tests (linear/branch/meld/wide layer) and a component/ConnTest
+  assertion for flag colors, pinned ring, and child-flag edge colors.
+- Then 3c (portfolio index + README/MDEx) and 3d (auth views + pinning).
 
 ## Blocked
 - (none)
@@ -628,8 +644,23 @@ Phase 3a — UI foundation + read-only project page
   (`visibility`/`published` column) and review/promotion UI placement remain
   deferred/open.
 
+- Phase 3a added `Cadence.Shared.GitStore.read_path/3` (commit-relative file
+  reads with a 1 MiB default cap and path-traversal rejection). It is a read
+  helper beyond the object operations enumerated in §5.2/§13; `Portfolio` and
+  the README slice use it.
+- Phase 3a added `GET /` (placeholder landing page) and `GET /p/:slug`
+  (preview-only project page) on the browser pipeline. The 3c slice will turn
+  `/` into the project index; the route already exists so the layout/header link
+  is never dead.
+- The server now declares `phoenix_html` and `phoenix_live_view` directly even
+  though both were already present transitively. They are used for dead views
+  (`Phoenix.Component`/HEEx) only; there is still no JS asset pipeline.
+- Public preview projection is server-side in `Cadence.Server.Portfolio`; the
+  project page never loads non-preview nodes. `membership_for/2` is in place for
+  the 3d authenticated views.
+
 ## Last Updated
-2026-10-24 — Phase 2b complete; Phase 3 docs prepared (`docs/README.md`,
-`docs/phase-3-prep.md`, spec §16 decisions). 266 Elixir tests green (108 shared
-+ 115 daemon + 43 server); no code changed. Next session starts Phase 3a after
-+sign-off on the open decisions.
+2026-10-24 — Phase 3a complete: public preview-only project page, `/` landing,
+`Portfolio` read context, HTML layout/errors, and `GitStore.read_path/3`.
+287 Elixir tests green (114 shared + 115 daemon + 58 server); format and compile
+(dev/test/prod) clean. Next session starts 3b (DAG renderer).

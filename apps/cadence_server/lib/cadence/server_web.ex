@@ -10,10 +10,20 @@ defmodule Cadence.ServerWeb do
 
   def controller do
     quote do
-      use Phoenix.Controller, formats: [:html, :json]
+      use Phoenix.Controller,
+        formats: [:html, :json],
+        layouts: [html: Cadence.ServerWeb.Layouts]
 
       import Plug.Conn
       import Cadence.ServerWeb.JSON
+    end
+  end
+
+  def html do
+    quote do
+      use Phoenix.Component
+      import Phoenix.HTML
+      alias Phoenix.HTML.Tag
     end
   end
 

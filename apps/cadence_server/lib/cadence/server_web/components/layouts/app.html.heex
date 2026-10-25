@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{assigns[:page_title] || "Cadence"}</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #fbfaf7;
+        --fg: #1f2328;
+        --muted: #57606a;
+        --line: #d8dee4;
+        --accent: #0969da;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0d1117;
+          --fg: #e6edf3;
+          --muted: #8d96a0;
+          --line: #30363d;
+          --accent: #58a6ff;
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font: 16px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+
+      a {
+        color: var(--accent);
+      }
+
+      .site-header {
+        border-bottom: 1px solid var(--line);
+      }
+
+      .site-header nav {
+        max-width: 72rem;
+        margin: 0 auto;
+        padding: 1rem 1.5rem;
+      }
+
+      .brand {
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        text-decoration: none;
+      }
+
+      main {
+        max-width: 72rem;
+        margin: 0 auto;
+        padding: 2.5rem 1.5rem 4rem;
+      }
+
+      .eyebrow {
+        margin: 0 0 0.25rem;
+        color: var(--muted);
+        font-size: 0.75rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .slug,
+      .note,
+      .empty {
+        color: var(--muted);
+      }
+
+      .preview {
+        margin-top: 2rem;
+        padding: 1.25rem 1.5rem;
+        border: 1px solid var(--line);
+        border-radius: 0.75rem;
+      }
+
+      .preview h2 {
+        margin-top: 0;
+      }
+
+      dl {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 0.5rem 1rem;
+      }
+
+      dt {
+        color: var(--muted);
+      }
+
+      dd {
+        margin: 0;
+      }
+
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.9em;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="site-header">
+      <nav><a class="brand" href="/">Cadence</a></nav>
+    </header>
+    <main>
+      {@inner_content}
+    </main>
+  </body>
+</html>

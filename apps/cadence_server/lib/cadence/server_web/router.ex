@@ -10,6 +10,7 @@ defmodule Cadence.ServerWeb.Router do
   end
 
   pipeline :browser do
+    plug(:accepts, ["html"])
     plug(:fetch_session)
     plug(:protect_from_forgery)
     plug(:put_secure_browser_headers)
@@ -28,6 +29,9 @@ defmodule Cadence.ServerWeb.Router do
 
   scope "/", Cadence.ServerWeb do
     pipe_through(:browser)
+
+    get("/", PortfolioController, :index)
+    get("/p/:slug", ProjectController, :show)
 
     get("/auth/tokens/new", TokenController, :new)
     post("/auth/tokens", TokenController, :create)

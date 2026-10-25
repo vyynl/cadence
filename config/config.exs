@@ -10,7 +10,10 @@ config :cadence_server,
 config :cadence_server, Cadence.ServerWeb.Endpoint,
   url: [host: "localhost"],
   pubsub_server: Cadence.Server.PubSub,
-  render_errors: [formats: [json: Cadence.ServerWeb.ErrorJSON], layout: false]
+  render_errors: [
+    formats: [html: Cadence.ServerWeb.ErrorHTML, json: Cadence.ServerWeb.ErrorJSON],
+    layout: [html: {Cadence.ServerWeb.Layouts, :app}]
+  ]
 
 config :phoenix, :json_library, Jason
 
