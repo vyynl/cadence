@@ -5,6 +5,11 @@ defmodule Cadence.ServerWeb.Endpoint do
 
   use Phoenix.Endpoint, otp_app: :cadence_server
 
+  socket("/socket", Cadence.ServerWeb.UserSocket,
+    websocket: [connect_info: [:x_headers]],
+    longpoll: false
+  )
+
   @session_options [
     store: :cookie,
     key: "_cadence_key",

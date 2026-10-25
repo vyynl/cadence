@@ -17,6 +17,24 @@ defmodule Cadence.Server.Accounts do
   end
 
   @doc """
+  Verifies a daemon API key and returns its user.
+
+  Used by the websocket socket, where there is no `Plug.Conn` for the HTTP
+  API-key plug to operate on.
+  """
+  @spec authenticate_api_key(term()) :: {:ok, Ash.Resource.record()} | {:error, :invalid_api_key}
+  def authenticate_api_key(api_key) when is_binary(api_key) and api_key != "" do
+    case Cadence.Server.Accounts.User
+         |> Ash.Query.for_read(:sign_in_with_api_key, %{api_key: api_key})
+         |> Ash.read_one(domain: __MODULE__) do
+      {:ok, %Cadence.Server.Accounts.User{} = user} -> {:ok, user}
+      _ -> {:error, :invalid_api_key}
+    end
+  end
+
+  def authenticate_api_key(_api_key), do: {:error, :invalid_api_key}
+
+  @doc """
   Issues a personal access token for a daemon.
 
   The plaintext key is available exactly once in

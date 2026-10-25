@@ -27,6 +27,7 @@ defmodule Cadence.ServerWeb.SyncPreferencesTest do
     plaintext: plaintext
   } do
     Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "project:#{project.id}")
+    Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "sync:user:#{user.id}")
 
     active_heads = [Ecto.UUID.generate(), Ecto.UUID.generate()]
     pointer = Ecto.UUID.generate()
@@ -53,6 +54,7 @@ defmodule Cadence.ServerWeb.SyncPreferencesTest do
     assert_receive {:preferences_updated, project_id, user_id}
     assert project_id == project.id
     assert user_id == user.id
+    assert_receive {:sync_available, ^project_id}
 
     pull =
       authed_conn(plaintext)
@@ -84,6 +86,7 @@ defmodule Cadence.ServerWeb.SyncPreferencesTest do
     assert first["active_heads"] == [newer_head]
 
     Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "project:#{project.id}")
+    Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "sync:user:#{user.id}")
 
     assert %{"preferences" => second} =
              authed_conn(plaintext)
@@ -100,6 +103,7 @@ defmodule Cadence.ServerWeb.SyncPreferencesTest do
            ]
 
     refute_receive {:preferences_updated, _, _}, 100
+    refute_receive {:sync_available, _}, 100
   end
 
   test "viewers and outsiders cannot push preferences", %{

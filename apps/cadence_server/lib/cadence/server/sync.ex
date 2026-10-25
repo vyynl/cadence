@@ -32,6 +32,7 @@ defmodule Cadence.Server.Sync do
          {:ok, mappings} <-
            Repo.transaction(fn -> insert_nodes(parsed, project_id, role) end) do
       broadcast(project_id, Enum.map(mappings, & &1.cloud_id))
+      broadcast_sync_available(user.id, project_id)
       {:ok, %{mappings: mappings}}
     end
   end
@@ -396,6 +397,7 @@ defmodule Cadence.Server.Sync do
     case membership |> Membership.changeset(attrs) |> Repo.update() do
       {:ok, membership} ->
         broadcast_preferences(project_id, user.id)
+        broadcast_sync_available(user.id, project_id)
         {:ok, %{preferences: preferences_json(membership)}}
 
       {:error, _changeset} ->
@@ -444,6 +446,14 @@ defmodule Cadence.Server.Sync do
   end
 
   defp parse_updated_at(_value), do: {:error, :invalid_updated_at}
+
+  defp broadcast_sync_available(user_id, project_id) do
+    Phoenix.PubSub.broadcast(
+      Cadence.Server.PubSub,
+      "sync:user:#{user_id}",
+      {:sync_available, project_id}
+    )
+  end
 
   defp broadcast_preferences(project_id, user_id) do
     Phoenix.PubSub.broadcast(

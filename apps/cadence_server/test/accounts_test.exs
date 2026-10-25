@@ -84,6 +84,18 @@ defmodule Cadence.Server.AccountsTest do
     assert user.confirmed_at
   end
 
+  test "authenticates API keys outside the HTTP plug" do
+    user = Ash.Seed.seed!(User, %{email: "socket-auth@example.com"})
+    assert {:ok, api_key} = Accounts.create_api_key(user, "socket")
+    plaintext = api_key.__metadata__.plaintext_api_key
+
+    assert {:ok, authenticated} = Accounts.authenticate_api_key(plaintext)
+    assert authenticated.id == user.id
+
+    assert {:error, :invalid_api_key} = Accounts.authenticate_api_key("cad_not_a_real_key")
+    assert {:error, :invalid_api_key} = Accounts.authenticate_api_key(nil)
+  end
+
   defp sign_in(api_key) do
     User
     |> Ash.Query.for_read(:sign_in_with_api_key, %{api_key: api_key})

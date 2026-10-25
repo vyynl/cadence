@@ -191,6 +191,7 @@ defmodule Cadence.ServerWeb.SyncNodesTest do
     other_project = insert_project(user, "other")
     insert_membership(user, other_project, :owner)
     dag = build_dag(tmp_dir())
+    Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "sync:user:#{user.id}")
 
     mixed = %{
       "nodes" => [
@@ -220,6 +221,7 @@ defmodule Cadence.ServerWeb.SyncNodesTest do
              |> json_response(422)
 
     assert failed_local_id == dag.child_id
+    refute_receive {:sync_available, _project_id}, 100
   end
 
   test "rejects duplicate IDs, conflicting nodes, and tampered objects", %{
@@ -326,11 +328,13 @@ defmodule Cadence.ServerWeb.SyncNodesTest do
 
   test "broadcasts successful pushes", %{
     conn: conn,
+    user: user,
     project: project,
     plaintext: plaintext
   } do
     project_id = project.id
     Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "project:#{project_id}")
+    Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "sync:user:#{user.id}")
     dag = build_dag(tmp_dir())
 
     payload = %{"nodes" => [node_payload(project, dag.root_id, dag.root, [], dag.repo, "root")]}
@@ -342,6 +346,7 @@ defmodule Cadence.ServerWeb.SyncNodesTest do
              |> json_response(200)
 
     assert_receive {:nodes_pushed, ^project_id, [^cloud_id]}
+    assert_receive {:sync_available, ^project_id}
   end
 
   ## Helpers

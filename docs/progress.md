@@ -1,7 +1,7 @@
 # Cadence — Progress
 
 ## Current Phase
-Phase 2b-4c complete → 2b-4d (`slipstream` Phoenix Channels accelerator)
+Phase 2b-4d complete → 2b-4e (two-daemon convergence + docs)
 
 ## Done
 - [x] Read spec + AGENTS.md; audited and resolved all scaffold blockers.
@@ -445,13 +445,25 @@ Phase 2b-4c complete → 2b-4d (`slipstream` Phoenix Channels accelerator)
       (108 shared + 105 daemon + 37 server), all green; format and compile
       (dev/test/prod) clean.
 
+- [x] 2b-4d — Phoenix Channels accelerator: server `UserSocket` +
+      `SyncChannel` with `x-cadence-token` header auth, own-user-topic join, and
+      `sync_available` forwarding; `Accounts.authenticate_api_key/1`; endpoint
+      websocket declaration; `Sync` broadcasts after successful node pushes and
+      accepted preference writes.
+- [x] Daemon `SyncSocket` (`slipstream ~> 1.2`) with async connect, user-topic
+      join, delayed join until `/sync/me` caches the server user, project-
+      validated `SyncWorker.wake/1`, reconnect/rejoin defaults, and
+      `CAD_SYNC_CHANNEL_ENABLED` + derived websocket URL config.
+- [x] Real local websocket integration test via a test-only endpoint and
+      test-only server `slipstream` dependency; channel/auth tests and no-
+      broadcast-on-failure coverage. 264 tests total (108 shared + 113 daemon +
+      43 server), all green; format and compile (dev/test/prod) clean.
+
 ## Next
 - **Read `docs/phase-2b-4-prep.md` §6 first.**
-- Start **2b-4d — Phoenix Channels accelerator**: add `slipstream`, the server
-  socket/channel for `sync:user:<server_user_id>`, daemon connect/join with the
-  `x-cadence-token` header, `sync_available` → `SyncWorker.wake/1`, and
-  reconnection/fallback tests. Polling remains the correctness path.
-- Then **2b-4e** two-daemon convergence/docs.
+- Start **2b-4e — convergence + docs**: two-daemon preference/node journey,
+  socket-down polling fallback acceptance, and final 2b-4 spec/plan/progress
+  cleanup.
 - Deferred picker items: Telescope project picker (would add a dep to §11) and
   the `:CadOpen` short-sync attempt (can call `Sync.sync/1` with a short
   timeout now that orchestration exists).
@@ -567,9 +579,14 @@ Phase 2b-4c complete → 2b-4d (`slipstream` Phoenix Channels accelerator)
 - The server still accepts preference node IDs without verifying they exist;
   the daemon filters unknown `active_heads` and ignores unknown pointers when
   applying remote preferences.
-- Spec §11 now names `slipstream` as the notification-channel client, but the
-  dependency is not added until 2b-4d. The channel carries only
-  `sync_available` hints; polling remains the correctness fallback.
+- `CAD_SYNC_CHANNEL_ENABLED` (default `true`) disables only the notification
+  socket; sync/polling continue. The socket is also skipped when sync is
+  disabled or credentials are absent.
+- The server broadcasts `sync_available` only on the writer's `sync:user:<id>`
+  topic; other project members converge through polling.
+- `cadence_server` has a **test-only** `slipstream` dependency solely for the
+  real local websocket integration test; production server code does not depend
+  on it.
 - `last_seen_at` is now set on accepted preference writes (previously unused).
 - Pre-existing local preferences with a `nil` `preferences_updated_at` are not
   force-pushed until the next switch/commit/spawn. This follows the 2b-4b brief:
@@ -590,7 +607,7 @@ Phase 2b-4c complete → 2b-4d (`slipstream` Phoenix Channels accelerator)
   of being marked failed as out-of-order.
 
 ## Last Updated
-2026-10-24 — 2b-4c partial-batch node failure isolation implemented and
-verified. 250 Elixir tests green (108 shared + 105 daemon + 37 server); format
-and `mix compile --warnings-as-errors` clean in dev/test/prod. Next session
-starts 2b-4d (`slipstream` Phoenix Channels accelerator).
+2026-10-24 — 2b-4d notification socket implemented and verified. 264 Elixir
+tests green (108 shared + 113 daemon + 43 server); format and
+`mix compile --warnings-as-errors` clean in dev/test/prod. Next session starts
+2b-4e (two-daemon convergence + docs).

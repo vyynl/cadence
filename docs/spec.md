@@ -797,10 +797,13 @@ Remote preferences are applied only after the node batch is imported;
 an unknown node is ignored (the local pointer is retained). Applied remote
 versions are recorded as both remote and pushed so they are not echoed back.
 
-The server also broadcasts a notification when preferences change. The daemon’s
-optional Phoenix Channels connection (Phase 2b-4) is a **latency accelerator
-only**: it carries a `sync_available` hint, never DAG/preference state, and
-polling remains the correctness fallback.
+The server broadcasts `{:sync_available, project_id}` after successful node
+pushes and accepted preference writes. Daemons connect to `/socket/websocket`,
+authenticate with an `x-cadence-token` header (never a query parameter), and join
+`sync:user:<server_user_id>`. The channel is a **latency accelerator only**: it
+carries a `sync_available` hint with `%{project_id}`, never DAG or preference
+state, and polling remains the correctness fallback. `CAD_SYNC_CHANNEL_ENABLED=false`
+disables the socket without disabling sync.
 
 ### 10.6 Message formats
 
@@ -1098,6 +1101,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_GIT_AUTHOR_NAME` | no | `cadence` | Author name written into local Git commits |
 | `CAD_GIT_AUTHOR_EMAIL` | no | `cadence@local` | Author email written into local Git commits |
 | `CAD_SYNC_ENABLED` | no | `true` | Enable automatic background sync |
+| `CAD_SYNC_CHANNEL_ENABLED` | no | `true` | Enable the optional notification socket (polling remains active) |
 | `CAD_SYNC_TIMEOUT_MS` | no | `500` | Picker sync attempt |
 | `CAD_SYNC_REQUEST_TIMEOUT_MS` | no | `5000` | Background sync HTTP request timeout |
 | `CAD_SYNC_INTERVAL_MS` | no | `30000` | Delay between background sync passes |

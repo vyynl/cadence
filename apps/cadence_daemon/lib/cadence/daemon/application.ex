@@ -15,7 +15,8 @@ defmodule Cadence.Daemon.Application do
         {Task.Supervisor, name: Cadence.Daemon.SyncTasks},
         {Registry, keys: :unique, name: Cadence.Daemon.Queues},
         Cadence.Daemon.ProjectRegistry,
-        Cadence.Daemon.SyncWorker
+        Cadence.Daemon.SyncWorker,
+        Cadence.Daemon.SyncSocket
       ] ++ api_children()
 
     opts = [strategy: :one_for_one, name: Cadence.Daemon.Supervisor]

@@ -46,6 +46,7 @@ if config_env() != :test do
     server_url: System.get_env("CAD_SERVER_URL"),
     auth_token: System.get_env("CAD_AUTH_TOKEN"),
     sync_enabled: System.get_env("CAD_SYNC_ENABLED", "true") == "true",
+    sync_channel_enabled: System.get_env("CAD_SYNC_CHANNEL_ENABLED", "true") == "true",
     sync_request_timeout_ms:
       String.to_integer(System.get_env("CAD_SYNC_REQUEST_TIMEOUT_MS", "5000")),
     sync_interval_ms: String.to_integer(System.get_env("CAD_SYNC_INTERVAL_MS", "30000")),

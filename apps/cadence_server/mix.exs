@@ -33,7 +33,8 @@ defmodule Cadence.Server.MixProject do
       {:ash_postgres, "~> 2.14"},
       {:ash_authentication, "~> 4.15"},
       {:ash_authentication_phoenix, "~> 2.17"},
-      {:sourceror, "~> 1.7", only: [:dev, :test]}
+      {:sourceror, "~> 1.7", only: [:dev, :test]},
+      {:slipstream, "~> 1.2", only: [:dev, :test]}
     ]
   end
 

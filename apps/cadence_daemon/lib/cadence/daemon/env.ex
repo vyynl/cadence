@@ -52,6 +52,34 @@ defmodule Cadence.Daemon.Env do
   @spec sync_enabled?() :: boolean()
   def sync_enabled?, do: Application.get_env(:cadence_daemon, :sync_enabled, true)
 
+  @doc "Whether the optional notification channel is enabled (default `true`)."
+  @spec sync_channel_enabled?() :: boolean()
+  def sync_channel_enabled? do
+    Application.get_env(:cadence_daemon, :sync_channel_enabled, true)
+  end
+
+  @doc "The websocket URL derived from `server_url`, or `nil` when offline."
+  @spec sync_socket_url() :: String.t() | nil
+  def sync_socket_url do
+    case server_url() do
+      url when is_binary(url) and url != "" ->
+        uri = URI.parse(url)
+
+        scheme =
+          case uri.scheme do
+            "http" -> "ws"
+            "https" -> "wss"
+            other -> other
+          end
+
+        %{uri | scheme: scheme, path: "/socket/websocket", query: nil, fragment: nil}
+        |> URI.to_string()
+
+      _ ->
+        nil
+    end
+  end
+
   @doc "Background HTTP request timeout in milliseconds."
   @spec sync_request_timeout_ms() :: pos_integer()
   def sync_request_timeout_ms do

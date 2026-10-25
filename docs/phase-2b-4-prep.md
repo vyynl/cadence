@@ -1,7 +1,8 @@
 # Phase 2b-4 prep — Preferences, notification channel, resilience
 
-> Status: **2b-4a through 2b-4c complete/committed** (versioned preferences,
-> server transport, daemon push/apply, partial-batch isolation); 2b-4d next.
+> Status: **2b-4a through 2b-4d complete/committed** (versioned preferences,
+> server transport, daemon push/apply, partial-batch isolation, notification
+> socket); 2b-4e next.
 > Cold-start brief: `docs/phase-2b-4b-prep.md` (completed). Canonical contract:
 > `docs/spec.md` §4.3, §10.5, §10.6, §11, §13.
 
@@ -100,7 +101,7 @@ preferences: %{active_heads, session_pointer, updated_at} | nil
    Ledger dirty/version state, `Session` dirty marking, push/apply, tests.
 3. **2b-4c — Partial batches. ✅ Done.**
    `failed_local_id`, isolate bad nodes, preserve parents-first retry behavior.
-4. **2b-4d — Phoenix Channels accelerator.**
+4. **2b-4d — Phoenix Channels accelerator. ✅ Done.**
    `{:slipstream, "~> 1.2"}` in the daemon, server socket/channel, daemon
    client, reconnection/fallback tests.
 5. **2b-4e — Convergence + docs.**

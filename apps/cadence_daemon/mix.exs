@@ -30,7 +30,8 @@ defmodule Cadence.Daemon.MixProject do
       {:bandit, "~> 1.12"},
       {:plug, "~> 1.20"},
       {:hammer, "~> 7.5"},
-      {:jason, "~> 1.4"}
+      {:jason, "~> 1.4"},
+      {:slipstream, "~> 1.2"}
     ]
   end
 
