@@ -3,7 +3,7 @@
 > Status: **Phase 2b-4 complete** (2b-4a through 2b-4e). Versioned
 > preferences, server transport, daemon push/apply, partial-batch isolation,
 > notification socket, and convergence coverage are in place.
-> Cold-start brief: `docs/phase-2b-4b-prep.md` (completed). Canonical contract:
+> Cold-start brief: `docs/archive/phase-2b-4b-prep.md` (completed). Canonical contract:
 > `docs/spec.md` §4.3, §10.5, §10.6, §11, §13.
 
 Phase 2b-4 makes multi-machine continuity real and tightens sync failure

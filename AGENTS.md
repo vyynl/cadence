@@ -66,8 +66,8 @@ cadence/                        (umbrella root)
 │   ├── README.md               doc index + read order
 │   ├── spec.md                 CANONICAL CONTRACT
 │   ├── progress.md             SESSION HANDOFF (see §2)
-│   ├── phase-3-prep.md         current phase brief
-│   └── phase-2b-*.md           historical Phase 2b briefs
+│   ├── phase-4-prep.md         current phase brief
+│   └── archive/                historical briefs + full Phase 1–3 log
 ├── mix.exs                     umbrella root
 ├── docker-compose.yml          server deployment (planned, spec §12.4)
 └── AGENTS.md                   this file
@@ -306,8 +306,9 @@ Phase 1b — Shared schemas + GitStore
 
 ### Notes on maintaining this file
 
-- **Done** is cumulative. Do not delete completed items from previous
-  sessions; append this session's completions. The file is a running log.
+- **Done** is a concise current-phase summary. The full running log lives in
+  `docs/archive/progress-history.md`; add to it only when archiving a phase, not
+  every session. Do not delete unresolved items from **Spec Deltas**.
 - **Next** is replaced each session. It should describe *one* immediate step,
   not a phase.
 - **Blocked** is replaced each session. If empty, write `(none)` explicitly —

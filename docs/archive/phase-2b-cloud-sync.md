@@ -137,7 +137,7 @@ stop re-pushing; for 2b, send all objects per node (dedup by the store).
 
 ## 7. Daemon: ledger + client
 
-> Detailed cold-start notes for 2b-3 live in `docs/phase-2b-3-prep.md`.
+> Detailed cold-start notes for 2b-3 live in `docs/archive/phase-2b-3-prep.md`.
 
 New modules (spec §5.2):
 - `Cadence.Daemon.SyncLedger` (GenServer, persistent): per-project pull cursor and
@@ -263,7 +263,7 @@ source (`~/.config/cadence/env`).
    preferences in node pulls. Next: daemon dirty/apply behavior, partial-batch
    failure isolation, and a notification-only Phoenix Channels socket
    (`slipstream` in the daemon, `sync:user:<id>` topic, `sync_available`
-   hints) with polling as fallback. See `docs/phase-2b-4-prep.md`.
+   hints) with polling as fallback. See `docs/archive/phase-2b-4-prep.md`.
    *Acceptance:* session pointer/active heads travel A→B without stale writes
    clobbering newer state; channel notifications wake the right project;
    polling still converges when the socket is down.

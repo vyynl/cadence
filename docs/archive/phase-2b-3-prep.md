@@ -7,7 +7,7 @@
 > Cold-start notes written after 2b-2. The deliverable is the daemon side of
 > sync: persistent pending/cursor state, an HTTP client, and the boot/commit
 > integration. This is **not** a spec replacement; see `docs/spec.md` §10 and
-> `docs/phase-2b-cloud-sync.md` §7/§12.
+> `docs/archive/phase-2b-cloud-sync.md` §7/§12.
 
 ## 1. Current state
 

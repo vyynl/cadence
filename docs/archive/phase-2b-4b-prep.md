@@ -2,7 +2,7 @@
 
 > Status: **2b-4b complete**. This was the cold-start brief for the slice.
 > 2b-4a is committed (`25d6dfb`). Read `docs/spec.md` §4.3/§10.5/§10.6,
-> `docs/phase-2b-4-prep.md`, and `docs/progress.md` for the current handoff.
+> `docs/archive/phase-2b-4-prep.md`, and `docs/progress.md` for the current handoff.
 > This slice was daemon-only plus fake-server tests; `slipstream` is not added
 > until 2b-4d.
 

@@ -3,7 +3,7 @@
 > Status: **Phase 3 complete (2026-10-24); 3e deferred to Phase 4**. This is the
 > session-by-session plan for Phase 3. `docs/spec.md` §7/§13/§16 are canonical;
 > this file tracks execution order and acceptance. The cold-start build brief is
-> `docs/phase-3b-prep.md`.
+> `docs/archive/phase-3b-prep.md`.
 
 ## Decisions
 

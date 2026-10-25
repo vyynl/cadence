@@ -5,9 +5,12 @@ there, resolve it in the spec (or add it to §16) before implementing.
 
 ## Read order
 
-1. `progress.md` — current phase, completed work, next step, blockers.
-2. The phase brief named in **Next** (currently `phase-4-prep.md`).
+1. `progress.md` — current phase, summary, next step, blockers.
+2. `phase-4-prep.md` — current phase brief.
 3. `spec.md` — the relevant sections for the task.
+
+Completed-phase briefs and the full Phase 1–3 log live in `archive/`; they are
+history, not current instructions.
 
 ## Current status
 
@@ -20,31 +23,20 @@ there, resolve it in the spec (or add it to §16) before implementing.
 | Phase 4 — unions & review | **Planning / next** |
 | Phase 5+ — doc automation, actions, storage | Not started |
 
-## Doc map
+## Current docs
 
 | File | Purpose |
 |---|---|
 | `spec.md` | Canonical product/technical contract |
-| `progress.md` | Session handoff and implementation log |
-| `phase-3-prep.md` | Cold-start brief for Phase 3 |
-| `phase-3-roadmap.md` | Approved Phase 3 session plan and decisions |
-| `phase-3b-prep.md` | Historical 3b LiveView/DAG/repo-browser build brief |
-| `phase-4-prep.md` | Phase 4 unions/proposals/review cold-start brief |
-| `phase-2b-cloud-sync.md` | Historical Phase 2b implementation plan |
-| `phase-2b-3-prep.md` | Historical 2b-3 daemon sync brief |
-| `phase-2b-4-prep.md` | Historical 2b-4 preferences/channel plan |
-| `phase-2b-4b-prep.md` | Historical 2b-4b daemon-preference brief |
-
-The separate `architecture.md`, `daemon.md`, `server.md`, and
-`sync-protocol.md` files referenced in older notes were never created. Their
-subject matter lives in `spec.md` §2, §5, §7, §10, and §12.
+| `progress.md` | Current handoff and session summary |
+| `phase-4-prep.md` | Phase 4 unions/proposals/review plan |
+| `archive/` | Completed-phase briefs and historical progress log |
 
 ## Adding a phase brief
 
 - Name it `phase-<n>-prep.md` for the next phase, or
   `phase-<n><letter>-prep.md` for a slice.
-- State scope, current verified state, dependencies, proposed slices, tests,
-  acceptance, and open questions.
-- Mark it complete at the top when the phase/slice ships, and point to the
-  next brief from `progress.md`.
-- Keep historical briefs; they are useful context for why a design changed.
+- State scope, verified state, dependencies, proposed slices, tests, acceptance,
+  decisions, and risks.
+- When the phase/slice ships, move the brief to `archive/` and update
+  `progress.md` to point at the next brief.
