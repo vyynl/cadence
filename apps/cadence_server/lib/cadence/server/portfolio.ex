@@ -8,7 +8,7 @@ defmodule Cadence.Server.Portfolio do
 
   import Ecto.Query
 
-  alias Cadence.Server.{ProjectGit, PublicContent, Repo}
+  alias Cadence.Server.{Incidents, ProjectGit, PublicContent, Repo}
   alias Cadence.Shared.{GitStore, Membership, Node, Project, UUID}
 
   @doc "Fetch a project by its URL slug."
@@ -164,9 +164,12 @@ defmodule Cadence.Server.Portfolio do
   @doc """
   Return `:quarantined` when the node's public snapshot must be hidden.
 
-  A snapshot is quarantined when a high-confidence secret or non-example
-  sensitive path is found, or when the snapshot cannot be fully scanned within
-  the configured caps.
+  An open critical node incident isolates the snapshot first (spec §6.7), so
+  isolation persists until the incident is resolved. Otherwise a snapshot is
+  quarantined when a high-confidence secret or non-example sensitive path is
+  found, or when the snapshot cannot be fully scanned within the configured
+  caps. The read-time scan runs even after an incident is resolved: a real
+  secret in an immutable snapshot stays hidden.
   """
   @spec quarantine_status(Project.t(), Node.t() | nil, keyword()) :: :ok | :quarantined
   def quarantine_status(project, node, opts \\ [])
@@ -174,6 +177,14 @@ defmodule Cadence.Server.Portfolio do
   def quarantine_status(_project, nil, _opts), do: :quarantined
 
   def quarantine_status(project, node, opts) do
+    if Incidents.blocking_node?(project.id, node.id) do
+      :quarantined
+    else
+      scan_quarantine_status(project, node, opts)
+    end
+  end
+
+  defp scan_quarantine_status(project, node, opts) do
     %{max_files: default_max_files, max_bytes: default_max_bytes} = scan_limits()
     max_files = Keyword.get(opts, :max_files) || default_max_files
     max_bytes = Keyword.get(opts, :max_bytes) || default_max_bytes

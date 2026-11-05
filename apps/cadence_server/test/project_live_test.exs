@@ -4,7 +4,7 @@ defmodule Cadence.ServerWeb.ProjectLiveTest do
   import Phoenix.ConnTest
   import Phoenix.LiveViewTest
 
-  alias Cadence.Server.{ProjectGit, Repo}
+  alias Cadence.Server.{Incidents, ProjectGit, Repo}
   alias Cadence.Server.Accounts.User
   alias Cadence.Shared.{GitStore, Membership, Node, Project}
 
@@ -176,6 +176,76 @@ defmodule Cadence.ServerWeb.ProjectLiveTest do
 
     assert html =~ ".env.example"
     refute html =~ "Snapshot hidden for review"
+  end
+
+  describe "node incidents" do
+    test "an open critical incident hides a clean snapshot", %{conn: conn} do
+      project = insert_project("incident-project")
+      clean = insert_node(project, %{message: "clean node"}, %{"README.md" => "# Clean\n"})
+      open_secret_incident(project, clean)
+
+      {:ok, view, _html} = live(conn, "/p/incident-project")
+      html = render_patch(view, "/p/incident-project/n/#{clean.id}")
+
+      assert html =~ "Snapshot hidden for review"
+      refute html =~ "README.md"
+    end
+
+    test "resolving the incident makes the clean snapshot visible again", %{conn: conn} do
+      owner = seed_user("incident-resolve@example.com", "Owner")
+      project = insert_project("incident-resolve", owner.id)
+      insert_membership(project, owner, :owner)
+
+      clean =
+        insert_node(project, %{message: "clean node"}, %{"README.md" => "# Clean\n"})
+
+      incident = open_secret_incident(project, clean)
+      assert {:ok, _resolved} = Incidents.resolve(%{id: owner.id}, project.id, incident.id)
+
+      {:ok, view, _html} = live(conn, "/p/incident-resolve")
+      html = render_patch(view, "/p/incident-resolve/n/#{clean.id}")
+
+      refute html =~ "Snapshot hidden for review"
+      assert html =~ "README.md"
+    end
+
+    test "a secret snapshot stays hidden after its incident is resolved", %{conn: conn} do
+      owner = seed_user("incident-secret@example.com", "Owner")
+      project = insert_project("incident-secret", owner.id)
+      insert_membership(project, owner, :owner)
+
+      secret =
+        insert_node(project, %{message: "secret node"}, %{
+          "config.txt" => "token: ghp_abcdefghijklmnopqrstuvwxyz0123456789\n"
+        })
+
+      incident = open_secret_incident(project, secret)
+      assert {:ok, _resolved} = Incidents.resolve(%{id: owner.id}, project.id, incident.id)
+
+      {:ok, view, _html} = live(conn, "/p/incident-secret")
+      html = render_patch(view, "/p/incident-secret/n/#{secret.id}")
+
+      assert html =~ "Snapshot hidden for review"
+      refute html =~ "config.txt"
+    end
+
+    test "owner raw view still bypasses incident-driven quarantine", %{conn: conn} do
+      owner = seed_user("incident-owner@example.com", "Owner")
+      project = insert_project("incident-raw", owner.id)
+      insert_membership(project, owner, :owner)
+
+      clean = insert_node(project, %{message: "clean node"}, %{"README.md" => "# Clean\n"})
+      open_secret_incident(project, clean)
+
+      {:ok, view, html} = live(signed_conn(conn, owner), "/p/incident-raw/n/#{clean.id}")
+      assert html =~ "Snapshot hidden for review"
+      refute html =~ "README.md"
+
+      html = render_click(view, "toggle_raw", %{})
+      assert html =~ "Raw view — unfiltered content."
+      assert html =~ "README.md"
+      refute html =~ "Snapshot hidden for review"
+    end
   end
 
   test "does not render raw HTML from a README", %{conn: conn} do
@@ -383,6 +453,20 @@ defmodule Cadence.ServerWeb.ProjectLiveTest do
 
   defp seed_user(email, name) do
     Ash.Seed.seed!(User, %{email: email, name: name})
+  end
+
+  defp open_secret_incident(project, node) do
+    {:ok, incident} =
+      Incidents.open(%{
+        project_id: project.id,
+        node_id: node.id,
+        kind: :secret_detected,
+        severity: :critical,
+        title: "Secret detected",
+        details: %{patterns: [:github_token]}
+      })
+
+    incident
   end
 
   defp insert_membership(project, user, role) do

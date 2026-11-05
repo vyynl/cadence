@@ -5,11 +5,15 @@ defmodule Cadence.Server.Sync do
   Nodes keep the daemon's UUID as their cloud ID (identity mapping), which
   makes retries idempotent. Pushes are fail-fast and must be parents-first;
   melds remain server-side-only (spec §10.4, phase-2b plan §8).
+
+  Newly inserted snapshots are scanned after the push transaction commits, so
+  incidents never roll back a successful push and retries stay idempotent.
+  Scanning is best-effort: see `Cadence.Server.NodeScans` (spec §6.7).
   """
 
   import Ecto.Query
 
-  alias Cadence.Server.{ProjectGit, Repo}
+  alias Cadence.Server.{NodeScans, ProjectGit, Repo}
   alias Cadence.Shared.{GitStore, Membership, Node, Project, UUID}
   alias Cadence.Shared.Sync.NodeCodec
 
@@ -29,8 +33,10 @@ defmodule Cadence.Server.Sync do
     with {:ok, project_id} <- single_project(nodes),
          {:ok, role} <- authorize(user, project_id),
          {:ok, parsed} <- parse_nodes(nodes, project_id, user),
-         {:ok, mappings} <-
+         {:ok, {mappings, created_nodes}} <-
            Repo.transaction(fn -> insert_nodes(parsed, project_id, role) end) do
+      # Post-commit and best-effort: alerting must never fail the push.
+      NodeScans.scan_nodes(project_id, created_nodes)
       broadcast(project_id, Enum.map(mappings, & &1.cloud_id))
       broadcast_sync_available(user.id, project_id)
       {:ok, %{mappings: mappings}}
@@ -290,16 +296,25 @@ defmodule Cadence.Server.Sync do
     store = ProjectGit.init(project_id)
 
     result =
-      Enum.reduce_while(parsed, {:ok, []}, fn node, {:ok, mappings} ->
+      Enum.reduce_while(parsed, {:ok, [], []}, fn node, {:ok, mappings, created_nodes} ->
         case insert_node(store, node, project_id, role) do
-          {:ok, mapping} -> {:cont, {:ok, [mapping | mappings]}}
-          {:error, reason} -> {:halt, {:error, {:node_error, node.local_id, reason}}}
+          {:ok, mapping, nil} ->
+            {:cont, {:ok, [mapping | mappings], created_nodes}}
+
+          {:ok, mapping, %Node{} = inserted} ->
+            {:cont, {:ok, [mapping | mappings], [inserted | created_nodes]}}
+
+          {:error, reason} ->
+            {:halt, {:error, {:node_error, node.local_id, reason}}}
         end
       end)
 
     case result do
-      {:ok, mappings} -> Enum.reverse(mappings)
-      {:error, reason} -> Repo.rollback(reason)
+      {:ok, mappings, created_nodes} ->
+        {Enum.reverse(mappings), Enum.reverse(created_nodes)}
+
+      {:error, reason} ->
+        Repo.rollback(reason)
     end
   end
 
@@ -309,14 +324,14 @@ defmodule Cadence.Server.Sync do
         with :ok <- import_objects(store, node.objects),
              :ok <- ensure_complete(store, node.attrs.git_commit_sha),
              :ok <- check_parents(node.attrs.parents, project_id),
-             {:ok, _node} <- insert_node_row(node.attrs, role) do
-          {:ok, %{local_id: node.local_id, cloud_id: node.local_id}}
+             {:ok, inserted} <- insert_node_row(node.attrs, role) do
+          {:ok, %{local_id: node.local_id, cloud_id: node.local_id}, inserted}
         end
 
       %Node{project_id: ^project_id} = existing ->
         if existing.git_commit_sha == node.attrs.git_commit_sha and
              existing.parents == node.attrs.parents do
-          {:ok, %{local_id: node.local_id, cloud_id: node.local_id}}
+          {:ok, %{local_id: node.local_id, cloud_id: node.local_id}, nil}
         else
           {:error, :conflict}
         end

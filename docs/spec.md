@@ -530,7 +530,13 @@ status (`open | resolved`), a redacted title, and scanner metadata only
   on every public render, in addition to the scan-based quarantine in §7.6.
 - **Resolution** — owner or granted approver may resolve an incident. Resolution
   re-runs verification; if the risk persists the incident stays open. There is
-  no assignee or comment-thread workflow in Phase 4.
+  no assignee or comment-thread workflow in Phase 4. Node snapshots are
+  immutable, so a node incident resolves by **acknowledgment** (4b-2): no
+  verification callback runs, and resolving it never bypasses the read-time
+  scan in §7.6. A node whose snapshot genuinely contains a secret stays
+  quarantined after its incident is resolved; the fix is to rotate the secret
+  and push a new node. The review panel (4c) owns the resolution UX and must
+  present this as rotate/resolve, not restore.
 - **Authority** — the deterministic scanner is authoritative. LLM output may
   flag risk, but never decides whether content is safe.
 

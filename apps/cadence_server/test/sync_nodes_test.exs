@@ -4,11 +4,14 @@ defmodule Cadence.ServerWeb.SyncNodesTest do
   import Phoenix.ConnTest
   import Plug.Conn
 
-  alias Cadence.Server.{Accounts, ProjectGit, Repo}
+  import Ecto.Query
+
+  alias Cadence.Server.{Accounts, Incident, Incidents, Portfolio, ProjectGit, Repo}
   alias Cadence.Server.Accounts.User
   alias Cadence.Shared.{GitStore, Membership, Node, Project}
 
   @author %{name: "Sync Test", email: "sync@example.com"}
+  @secret "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
 
   setup do
     user = seed_user("owner")
@@ -349,6 +352,148 @@ defmodule Cadence.ServerWeb.SyncNodesTest do
     assert_receive {:sync_available, ^project_id}
   end
 
+  describe "push scan" do
+    test "pushing a snapshot with a secret returns 200 and quarantines the node", %{
+      project: project,
+      plaintext: plaintext
+    } do
+      dir = tmp_dir()
+
+      {repo, commit} =
+        snapshot_with(dir, "secret", %{
+          "README.md" => "# Secret\n",
+          "config.txt" => "token: #{@secret}\n"
+        })
+
+      node_id = Ecto.UUID.generate()
+
+      push =
+        authed_conn(plaintext)
+        |> post_json("/sync/nodes", %{
+          "nodes" => [node_payload(project, node_id, commit, [], repo, "secret")]
+        })
+
+      assert %{"mappings" => [%{"cloud_id" => ^node_id}]} = json_response(push, 200)
+
+      assert [incident] = open_node_incidents(project)
+      assert incident.kind == :secret_detected
+      assert incident.severity == :critical
+      assert incident.node_id == node_id
+      assert incident.details["stage"] == "push_scan"
+      assert Incidents.blocking_node?(project.id, node_id)
+      assert Portfolio.quarantine_status(project, Repo.get!(Node, node_id)) == :quarantined
+      refute inspect(incident.details) =~ @secret
+    end
+
+    test "a clean push opens no incident", %{project: project, plaintext: plaintext} do
+      {repo, commit} =
+        snapshot_with(tmp_dir(), "clean", %{
+          "README.md" => "# Clean\n",
+          "src/app.ex" => "defmodule App do\nend\n"
+        })
+
+      node_id = Ecto.UUID.generate()
+
+      assert %{"mappings" => [%{"cloud_id" => ^node_id}]} =
+               authed_conn(plaintext)
+               |> post_json("/sync/nodes", %{
+                 "nodes" => [node_payload(project, node_id, commit, [], repo, "clean")]
+               })
+               |> json_response(200)
+
+      assert open_node_incidents(project) == []
+      refute Incidents.blocking_node?(project.id, node_id)
+    end
+
+    test "a capped scan still returns 200 and quarantines the node", %{
+      project: project,
+      plaintext: plaintext
+    } do
+      previous = Application.get_env(:cadence_server, :scan_max_files)
+      Application.put_env(:cadence_server, :scan_max_files, 1)
+      on_exit(fn -> restore_env(:scan_max_files, previous) end)
+
+      {repo, commit} =
+        snapshot_with(tmp_dir(), "two-files", %{
+          "README.md" => "# Clean\n",
+          "src/a.txt" => "a\n"
+        })
+
+      node_id = Ecto.UUID.generate()
+
+      assert %{"mappings" => [%{"cloud_id" => ^node_id}]} =
+               authed_conn(plaintext)
+               |> post_json("/sync/nodes", %{
+                 "nodes" => [node_payload(project, node_id, commit, [], repo, "clean")]
+               })
+               |> json_response(200)
+
+      assert [incident] = open_node_incidents(project)
+      assert incident.kind == :scan_incomplete
+      assert incident.severity == :critical
+      assert incident.details["reason"] == "too_many_files"
+      assert Incidents.blocking_node?(project.id, node_id)
+    end
+
+    test "a mixed batch maps both nodes but only incidents the risky one", %{
+      project: project,
+      plaintext: plaintext
+    } do
+      dir = tmp_dir()
+      repo = GitStore.init(Path.join(dir, "origin"), bare: true)
+
+      clean = snapshot_in(repo, dir, "clean", %{"README.md" => "# Clean\n"})
+      secret = snapshot_in(repo, dir, "secret", %{"config.txt" => "token: #{@secret}\n"})
+
+      clean_id = Ecto.UUID.generate()
+      secret_id = Ecto.UUID.generate()
+
+      push =
+        authed_conn(plaintext)
+        |> post_json("/sync/nodes", %{
+          "nodes" => [
+            node_payload(project, clean_id, clean, [], repo, "clean"),
+            node_payload(project, secret_id, secret, [], repo, "secret")
+          ]
+        })
+
+      assert %{"mappings" => mappings} = json_response(push, 200)
+      assert Enum.map(mappings, & &1["cloud_id"]) == [clean_id, secret_id]
+
+      assert [incident] = open_node_incidents(project)
+      assert incident.node_id == secret_id
+      refute Incidents.blocking_node?(project.id, clean_id)
+      assert Incidents.blocking_node?(project.id, secret_id)
+    end
+
+    test "retrying the same push keeps mappings and a single incident", %{
+      project: project,
+      plaintext: plaintext
+    } do
+      {repo, commit} =
+        snapshot_with(tmp_dir(), "secret", %{"config.txt" => "token: #{@secret}\n"})
+
+      node_id = Ecto.UUID.generate()
+
+      payload = %{"nodes" => [node_payload(project, node_id, commit, [], repo, "secret")]}
+
+      assert %{"mappings" => first_mappings} =
+               authed_conn(plaintext)
+               |> post_json("/sync/nodes", payload)
+               |> json_response(200)
+
+      assert %{"mappings" => second_mappings} =
+               authed_conn(plaintext)
+               |> post_json("/sync/nodes", payload)
+               |> json_response(200)
+
+      assert first_mappings == second_mappings
+      assert [incident] = open_node_incidents(project)
+      assert incident.node_id == node_id
+      assert Repo.aggregate(Incident, :count) == 1
+    end
+  end
+
   ## Helpers
 
   defp authed_conn(plaintext) do
@@ -434,6 +579,28 @@ defmodule Cadence.ServerWeb.SyncNodesTest do
 
     GitStore.build_tree(repo, dir)
   end
+
+  defp snapshot_with(dir, label, files) do
+    repo = GitStore.init(Path.join(dir, "origin"), bare: true)
+    {repo, snapshot_in(repo, dir, label, files)}
+  end
+
+  defp snapshot_in(repo, dir, label, files) do
+    tree = build_tree(repo, Path.join(dir, "work-#{label}"), files)
+    GitStore.write_commit(repo, tree, [], @author, label)
+  end
+
+  defp open_node_incidents(project) do
+    Repo.all(
+      from(i in Incident,
+        where: i.project_id == ^project.id and i.status == :open,
+        order_by: [asc: i.id]
+      )
+    )
+  end
+
+  defp restore_env(key, nil), do: Application.delete_env(:cadence_server, key)
+  defp restore_env(key, value), do: Application.put_env(:cadence_server, key, value)
 
   defp node_payload(project, local_id, commit, parents, repo, message) do
     %{

@@ -1,8 +1,8 @@
 # Cadence — Progress
 
 ## Current Phase
-Phase 4 — unions, proposals & review. 4a-1, 4a-2, and 4b are complete; 4b-2
-(server push scan + node incidents) is next.
+Phase 4 — unions, proposals & review. 4a-1, 4a-2, 4b, and 4b-2 are complete;
+4c (review UI + incident panel + approve/reject) is next.
 
 ## Done (summary)
 
@@ -50,7 +50,16 @@ Phase 4 — unions, proposals & review. 4a-1, 4a-2, and 4b are complete; 4b-2
   `secret_detected` critical; `:context_too_large` opens a critical
   `scan_incomplete` without calling the model. Spec §6.5/§6.7/§10.6/§11/§12.6
   updated. 19 new tests.
-- 472 tests green (161 shared + 115 daemon + 196 server);
+- **Phase 4b-2 (server push scan + node incidents)** — new
+  `Cadence.Server.NodeScans` scans only newly inserted snapshots after the push
+  transaction commits (best-effort, capped by `scan_max_files`/`scan_max_bytes`)
+  and opens node-linked incidents: `secret_detected`/`scan_incomplete` critical,
+  `missing_objects` high, clean → none. `Sync.push_nodes/2` keeps its response
+  and scans before broadcasting; `Portfolio.quarantine_status/3` now checks an
+  open critical node incident first and falls back to the read-time scan.
+  Spec §6.7 records acknowledgment resolution for immutable snapshots. 18 new
+  tests.
+- 490 tests green (161 shared + 115 daemon + 214 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean.
 - **Tooling (OpenCode)** — vendored skill checkout + restore script
@@ -62,14 +71,10 @@ Phase 4 — unions, proposals & review. 4a-1, 4a-2, and 4b are complete; 4b-2
 
 ## Next
 
-1. Execute **4b-2 — server push scan + node incidents** from
-   `.claude/plans/push-scan-4b2/plan.md` (approved 2026-11-05; 10 tasks across
-   P0–P4; scratchpad alongside). Decisions: scan only newly inserted nodes after
-   commit, synchronous capped scan, node incidents resolve by acknowledgment.
-   No daemon/response/template/config changes.
-2. Then **4c — review UI + incident panel + approve/reject** (must also add the
-   `meld_commit_sha` ↔ `result_tree_sha` cross-check before exposing approval).
-3. Then 4d (broadcast/pull + daemon convergence).
+1. **4c — review UI + incident panel + approve/reject** (must also add the
+   `meld_commit_sha` ↔ `result_tree_sha` cross-check before exposing approval,
+   and obtain the resolution endpoints/UX that 4b-2 deliberately left out).
+2. Then 4d (broadcast/pull + daemon convergence).
 
 ## Blocked
 
@@ -92,8 +97,18 @@ Phase 4 — unions, proposals & review. 4a-1, 4a-2, and 4b are complete; 4b-2
 - The public proposal page lives in the `:browser` pipeline, so its body
   includes a per-request CSRF token (session-free and cacheable output would
   need a dedicated pipeline).
-- `Incidents.blocking_node?/2` exists but has no caller yet; it is wired when
-  4b-2 adds the server push scan.
+- **Push scan cost (4b-2)** — every new snapshot is scanned synchronously in the
+  push request with one capped `walk_blobs/3` per inserted node, so a large
+  snapshot pays that cost once per node. Only newly inserted
+  nodes are scanned; re-pushes of existing nodes are not rescanned, and a later
+  store corruption is caught by the read path, not by a new incident.
+- **Node incident resolution is acknowledgment (4b-2)** — resolving does not
+  bypass the read-time scan, so a genuine secret stays quarantined until a new
+  node carries the rotated content. 4c's panel must not present resolution as
+  "restore". Recorded in spec §6.7.
+- **Push-scan alerting is best-effort (4b-2)** — a failed incident insert never
+  fails the push; the read-path scan still quarantines the content, but the
+  alert is lost until the next event.
 - Proposal JSON representation, line-level diffs, file content, and parent
   selection are deferred to 4c.
 - `format_time/1` and `format_flags/2` now exist in three web modules
@@ -131,8 +146,7 @@ Phase 4 — unions, proposals & review. 4a-1, 4a-2, and 4b are complete; 4b-2
   UI is optional 4c work.
 
 ## Last Updated
-2026-11-05 — 4b complete (session A + review fixes + session B P2/P3/P4):
-`Melds.propose/3` pipeline, incidents on failure, spec updated. 472 tests green.
-Run artifacts: `.claude/plans/meld-worker-4b/{plan,progress}.md`,
-`reviews/meld-worker-4b-triage.md`. Next: 4b-2 (push scan + node incidents),
-then 4c.
+2026-11-05 — 4b-2 complete: server push scan (`NodeScans`), node-linked
+incidents, incident-first quarantine, spec §6.7 resolution nuance. 490 tests
+green. Run artifacts: `.claude/plans/push-scan-4b2/{plan,progress}.md`.
+Next: 4c.
