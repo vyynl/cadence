@@ -106,6 +106,12 @@ Phase 4 — unions, proposals & review. 4a-1, 4a-2, 4b, and 4b-2 are complete;
   bypass the read-time scan, so a genuine secret stays quarantined until a new
   node carries the rotated content. 4c's panel must not present resolution as
   "restore". Recorded in spec §6.7.
+- **Cached `quarantine` assign (4b-2 discovery)** — `ProjectLive.handle_params/3`
+  reuses the previous `:quarantined` assign when the selected node id is
+  unchanged, so an incident opened while a member is viewing is not reflected
+  until they select another node (a fresh mount always recomputes). 4c should
+  drop the short-circuit or invalidate on incident changes via PubSub. Captured
+  in `.claude/solutions/liveview-issues/quarantine-assign-cache-project-live-20261105.md`.
 - **Push-scan alerting is best-effort (4b-2)** — a failed incident insert never
   fails the push; the read-path scan still quarantines the content, but the
   alert is lost until the next event.
