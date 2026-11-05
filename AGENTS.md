@@ -331,25 +331,28 @@ git-ignored). That is **run** state: research, scratchpads, review output.
 3. Check `connected?/1` before subscribing to PubSub.
 4. Match `{:error, %Ecto.Changeset{}}` explicitly; a bare `{:error, _}` hides
    form errors.
+5. Key a cached assign on **every** input that can change it. If the value also
+   depends on mutable server state (incidents, policies, preferences), recompute
+   or invalidate it — never cache on the selected record alone.
 
 **Ecto**
-5. No `:float` for money → `:decimal` or integer cents.
-6. Pin values with `^` in queries; never interpolate.
-7. Separate queries for `has_many`, JOIN for `belongs_to`.
+6. No `:float` for money → `:decimal` or integer cents.
+7. Pin values with `^` in queries; never interpolate.
+8. Separate queries for `has_many`, JOIN for `belongs_to`.
 
 **Security**
-8. No `String.to_atom/1` on user input.
-9. Authorize every `handle_event`; mount auth is not enough.
-10. No `raw/1` on untrusted content.
+9. No `String.to_atom/1` on user input.
+10. Authorize every `handle_event`; mount auth is not enough.
+11. No `raw/1` on untrusted content.
 
 **OTP**
-11. No process without a concurrency, state, or isolation reason.
-12. Mix tasks: `Mix.Task.run("app.config")` +
+12. No process without a concurrency, state, or isolation reason.
+13. Mix tasks: `Mix.Task.run("app.config")` +
     `Application.ensure_all_started/1`, never `app.start`.
-13. Capture the Gettext/CLDR locale before spawning a Task or GenServer.
+14. Capture the Gettext/CLDR locale before spawning a Task or GenServer.
 
 **Style**
-14. Comments hold durable facts (footguns, quirks) — not change reasoning or
+15. Comments hold durable facts (footguns, quirks) — not change reasoning or
     issue tags. That belongs in the commit/PR.
 
 ### Ash (`cadence_server` only)
