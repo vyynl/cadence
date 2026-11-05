@@ -1,8 +1,8 @@
 # Cadence — Progress
 
 ## Current Phase
-Phase 4 — unions, proposals & review. 4a-1 and 4a-2 are complete; 4b session A
-(P0 + P1) is complete, session B (P2–P4) is next.
+Phase 4 — unions, proposals & review. 4a-1, 4a-2, and 4b are complete; 4b-2
+(server push scan + node incidents) is next.
 
 ## Done (summary)
 
@@ -41,7 +41,16 @@ Phase 4 — unions, proposals & review. 4a-1 and 4a-2 are complete; 4b session A
   `{:ok, prompt} | {:error, :context_too_large}` instead of silently dropping
   conflicts, `put_files/2` rejects `.git` segments, `TestMeldLLM.setup/0`
   fixes ETS ownership.
-- 453 tests green (161 shared + 115 daemon + 177 server);
+- **4b session B (P2 + P3 + P4)** — `Cadence.Server.Melds.propose/3` ships the
+  full pipeline: authorization, project-scoped parent loading, capped walks,
+  deterministic union, conflict-only agent call, strict parse/apply, binary and
+  Elixir-syntax guards, result tree/commit, pending proposal +
+  `result_metadata`, and secret detection. Failure mapping: `meld_failed` /
+  `agent_output_invalid` / `missing_objects` high, `scan_incomplete` and
+  `secret_detected` critical; `:context_too_large` opens a critical
+  `scan_incomplete` without calling the model. Spec §6.5/§6.7/§10.6/§11/§12.6
+  updated. 19 new tests.
+- 472 tests green (161 shared + 115 daemon + 196 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean.
 - **Tooling (OpenCode)** — vendored skill checkout + restore script
@@ -53,14 +62,12 @@ Phase 4 — unions, proposals & review. 4a-1 and 4a-2 are complete; 4b session A
 
 ## Next
 
-1. Execute **4b session B — P2 + P3 + P4** from
-   `.claude/plans/meld-worker-4b/plan.md` (P0/P1 checked; ledger in that
-   folder's `progress.md`). P2 is `Cadence.Server.Melds.propose/3`:
-   parent fetch/scan → union → conflict-only LLM → parse/apply → validation
-   guard → `put_files` tree/commit → proposal + `result_metadata` → secret
-   incident. Then P3 spec updates (§6.5, §6.7, §10.6, §11/§12.6) and P4 final
-   verification.
-2. Then 4b-2 (server push scan + node incidents), then 4c (review UI).
+1. Execute **4b-2 — server push scan + node incidents**: scan incoming pushed
+   snapshots, open/quarantine node incidents, and wire
+   `Incidents.blocking_node?/2` into the public node render. No daemon changes.
+2. Then **4c — review UI + incident panel + approve/reject** (must also add the
+   `meld_commit_sha` ↔ `result_tree_sha` cross-check before exposing approval).
+3. Then 4d (broadcast/pull + daemon convergence).
 
 ## Blocked
 
@@ -108,13 +115,9 @@ Phase 4 — unions, proposals & review. 4a-1 and 4a-2 are complete; 4b session A
   cannot set 404 after render); proposal pages do return a real 404.
 - `Project.visibility`/publishing is deferred; all projects are public by
   default.
-- **4b session A** — `Shared.Meld.apply_ops/3` and `LLM.Meld.build_prompt/3`/
+- **4b shared caps** — `Shared.Meld.apply_ops/3` and `LLM.Meld.build_prompt/3`/
   `parse/3` take caps as options (the shared app must not read server config);
-  the server passes `CAD_MELD_*` values. Record in spec §6.5/§11 during P3.
-- **P2 must map `{:error, :context_too_large}`** from `MeldWorker.resolve/2` to
-  a critical `scan_incomplete` incident (no model call). Prompt conflict-set
-  omission is now an error, not a silent truncation; per-version content may
-  still be truncated.
+  the server passes `CAD_MELD_*` values. Documented in spec §6.5/§11.
 - **4b has no trigger surface or job durability.** `Sync.Union` /
   `UnionResponse` remain unrouted, and the response shape (proposal token vs
   node) is unresolved until 4d.
@@ -126,9 +129,8 @@ Phase 4 — unions, proposals & review. 4a-1 and 4a-2 are complete; 4b session A
   UI is optional 4c work.
 
 ## Last Updated
-2026-11-05 — 4b session A (P0 + P1) shipped and reviewed (`PASS WITH
-WARNINGS`); all four review findings fixed. 453 tests green. Run artifacts:
-`.claude/plans/meld-worker-4b/{plan,progress}.md` and
-`.claude/plans/meld-worker-4b/reviews/meld-worker-4b-triage.md`. Next: session B
-(P2 pipeline incl. `:context_too_large` → critical `scan_incomplete`, P3 spec,
-P4 verification).
+2026-11-05 — 4b complete (session A + review fixes + session B P2/P3/P4):
+`Melds.propose/3` pipeline, incidents on failure, spec updated. 472 tests green.
+Run artifacts: `.claude/plans/meld-worker-4b/{plan,progress}.md`,
+`reviews/meld-worker-4b-triage.md`. Next: 4b-2 (push scan + node incidents),
+then 4c.

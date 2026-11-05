@@ -1,8 +1,9 @@
 # Phase 4 prep — Unions, proposals & review
 
-> Status: **4a-1 complete.** Proposal + incident schemas/contexts and tests
-> ship; 4a-2 is next. `docs/spec.md` §6.5, §6.6, §6.7, and §13 remain canonical.
-> This is the cold-start handoff for Phase 4.
+> Status: **4a and 4b complete.** Proposals, public proposal pages, the meld
+> worker/prompt/parser, and the `Melds.propose/3` pipeline ship; 4b-2 is next.
+> `docs/spec.md` §6.5, §6.6, §6.7, and §13 remain canonical. This is the
+> cold-start handoff for Phase 4.
 
 ## 0. Start here
 
@@ -44,9 +45,9 @@ Turn union/meld into a reviewed server-side flow:
 | Session | Slice | Deliverable | Exit criteria |
 |---|---|---|---|
 | 1 | 4a-1 | **Done.** Proposal + incident schema, migration, contexts, tests | Create/list/token/transition/blocking tested; roles enforced |
-| 2 | 4a-2 | Public read-only proposal route + shareable token | Stable URL; filtered render; auth-gated actions |
-| 3 | 4b | Meld worker + prompt + validation guard | Mocked LLM; pending proposal produced; incidents on failure; no auto-`functioning` |
-| 4 | 4b-2 | Server push scan + node incidents | Isolation persists until resolve; no daemon changes |
+| 2 | 4a-2 | **Done.** Public read-only proposal route + shareable token | Stable URL; filtered render; auth-gated actions |
+| 3 | 4b | **Done.** Meld primitives, worker, prompt/parser, `Melds.propose/3` | Mocked LLM; pending proposal produced; incidents on failure; no auto-`functioning` |
+| 4 | 4b-2 | **Next.** Server push scan + node incidents | Isolation persists until resolve; no daemon changes |
 | 5 | 4c | Review UI + incident panel + approve/reject | Owner/approver flow; idempotent approval; viewer denied |
 | 6 | 4d | Broadcast/pull + daemon convergence | Two-client + offline-daemon tests; pin propagation resolved |
 

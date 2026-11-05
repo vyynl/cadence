@@ -442,42 +442,42 @@ first (Telescope integration), then the DAG picker.
 
 Union is **server-first**. Offline union is disallowed (command greys out).
 
-Server pipeline:
+The server pipeline **proposes, it does not create**:
 
-1. Validate caller role (`owner` or `trusted`).
-2. Fetch the Git trees for all selected parent nodes.
-3. Run the AI meld agent with all trees + commit messages + flags.
-4. Create the new node with `parents = selected_nodes`.
-5. Set flag from agent output (`functioning` only if tests pass; otherwise
-   `in-progress` or `broken`).
-6. Persist, broadcast via `Phoenix.PubSub`.
-7. All connected clients pull the new node.
+1. Validate the caller's role (`owner` or `trusted`) and load the parent nodes
+   (at least two distinct nodes, all belonging to the project).
+2. Walk each parent snapshot under the public scan caps; a cap overflow or a
+   missing object is an incident, never a partial meld.
+3. Compute the deterministic union: paths on which every containing parent
+   agrees are merged without AI involvement; only paths with differing blob
+   SHAs are conflicts. Presence-versus-absence is not a conflict.
+4. Run the meld agent **only on conflicting paths**, with a bounded prompt and
+   a strict, allowlisted output format.
+5. Validate the agent's file operations (conflict paths only, operation/file
+   caps, no binary content, Elixir syntax for `.ex`/`.exs`) and materialize the
+   result tree and commit. The commit's parents are the selected parent
+   commits.
+6. Create a **pending proposal** (§6.6) carrying the result tree/commit and
+   reproducible agent metadata (provider, model, prompt version, counts).
+7. Scan the result content for secrets; a finding keeps the proposal but opens
+   a critical incident and isolates the result until resolved.
 
-The invoking user's session pointer advances to the meld node. Other users'
-pointers stay where they are.
+No node is created and no flag is promoted at this stage. `intended_flag` is
+always `in-progress`; `functioning` remains validator-owned (§3.1). Approval
+(4c) attaches/creates the node and moves the line. The proposing user's session
+pointer does not move.
 
-**Meld agent prompt template (initial):**
+**Meld agent prompt contract (initial, `meld-v1`):**
 
-```
-You are merging N divergent versions of the same project into a single
-consolidated version. You have been given the full file trees of each
-parent version and their commit messages.
-
-Produce a single unified file tree that:
-- Preserves all non-conflicting changes from every parent.
-- Resolves conflicts by preferring the more complete implementation.
-- Does not introduce syntax errors.
-- Does not remove functionality present in any parent unless two parents
-  directly contradict.
-
-Output format: a series of file operations (CREATE / MODIFY / DELETE)
-followed by the file contents for each.
-
-Parents:
-<parent 1 message> <parent 1 tree>
-<parent 2 message> <parent 2 tree>
-...
-```
+- Input: parent messages/flags plus every version of each conflicting path.
+- Output: `MELD_BEGIN`, then `FILE CREATE|MODIFY path` with a `<<<`/`>>>`
+  content block, or `FILE DELETE path`, then `MELD_END`.
+- Rules: only conflicting paths, each at most once, complete contents, preserve
+  non-conflicting changes, prefer the more complete implementation, introduce
+  no syntax errors, and remove no functionality unless two parents directly
+  contradict.
+- If the conflicts cannot all fit the context budget, the pipeline fails with a
+  critical `scan_incomplete` incident rather than silently omitting paths.
 
 ### 6.6 Proposals, review & promotion
 
@@ -510,13 +510,20 @@ human approves it.
 
 Security and correctness findings are persisted as server-side **incidents**
 rather than only being recomputed on read. An incident may reference a proposal,
-a node, or both, and carries a kind (`secret_detected`, `scan_incomplete`,
-`meld_failed`, `agent_output_invalid`, `missing_objects`), severity
-(`critical | high`), status (`open | resolved`), a redacted title, and scanner
-metadata only (pattern names/counts; never secret values or file content).
+a node, both, or **neither** (project-scoped), and carries a kind
+(`secret_detected`, `scan_incomplete`, `meld_failed`,
+`agent_output_invalid`, `missing_objects`), severity (`critical | high`),
+status (`open | resolved`), a redacted title, and scanner metadata only
+(pattern names/counts; never secret values or file content).
 
 - **Automatic creation** — server-side detection opens incidents when a meld
-  proposal is built and when pushed node snapshots are scanned.
+  proposal is built (4b) and when pushed node snapshots are scanned (4b-2).
+  Meld failures can be project-scoped because no proposal exists yet.
+- **Scope and severity** — `secret_detected` and `scan_incomplete` are
+  `critical`: they isolate result content and block approval. `meld_failed`,
+  `agent_output_invalid`, and `missing_objects` are `high`: visible alerts that
+  do not isolate anything (there is no proposal to isolate). Only a
+  proposal-linked critical incident isolates result content.
 - **Isolation** — an open critical incident references the risky proposal or
   node. Proposal result content renders as a generic "hidden for review" notice
   and cannot be approved. A node with an open critical incident is quarantined
@@ -999,7 +1006,10 @@ SyncMessage.PushPreferences
 
 SyncMessage.Union
   project_id, parent_node_ids: [uuid]
-  response: %{meld_node_id}
+  # Defined but unmatched in Phase 4b: union is a server-side context call
+  # (`Cadence.Server.Melds.propose/3`). The routed response becomes a proposal
+  # reference (`proposal_id` / `proposal_token`) in 4d; `meld_node_id` predates
+  # proposals and is no longer the response shape.
 ```
 
 Node push errors are returned as `%{error: message, failed_local_id: uuid}` when
@@ -1024,7 +1034,7 @@ inserts); the daemon can mark only that node failed and retry the rest.
 | Ash DSL formatting / codegen | `sourceror` (dev/test only) |
 | LiveView test DOM | `lazy_html` (test only; required by `Phoenix.LiveViewTest`) |
 | Docker API | `ex_docker_api` |
-| Rate limiting | `Hammer` (declared in `cadence_shared`, used by the daemon's `LLMRateLimit`) |
+| Rate limiting | `Hammer` (declared in `cadence_shared`; used by the daemon's `LLMRateLimit` and the server's `LLMRateLimit` / `MeldWorker`) |
 | Graph model | `libgraph` |
 | TUI (optional, daemon-side) | `ExRatatui` |
 | Neovim plugin | Lua + plenary.nvim |
@@ -1238,6 +1248,14 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_PROPOSAL_MAX_FILES` | no | `200` | Max changed files listed on a public proposal page |
 | `CAD_SCAN_MAX_FILES` | no | `10000` | Max files scanned for secret quarantine |
 | `CAD_SCAN_MAX_BYTES` | no | `16777216` | Max snapshot bytes scanned for secret quarantine |
+| `CAD_MELD_TIMEOUT_MS` | no | `60000` | Meld agent request timeout |
+| `CAD_MELD_RATE_LIMIT` | no | `5` | Meld agent calls per server rate window |
+| `CAD_MELD_RATE_SCALE` | no | `60000` | Meld rate window in milliseconds |
+| `CAD_MELD_MAX_OPS` | no | `50` | Max file operations accepted from the agent |
+| `CAD_MELD_MAX_FILE_BYTES` | no | `262144` | Max bytes per agent-written file |
+| `CAD_MELD_CONTEXT_BYTES` | no | `65536` | Max rendered parent/conflict context in the meld prompt |
+| `CAD_MELD_RETRY_ATTEMPTS` | no | `1` | Retries after a transient meld provider error |
+| `CAD_MELD_RETRY_BACKOFF_MS` | no | `500` | Delay between meld retries |
 | `CAD_ARTIFACT_PATH` | no | `/data/artifacts` | Action outputs |
 | `CAD_OAUTH_GITHUB_CLIENT_ID` | no | — | GitHub OAuth |
 | `CAD_OAUTH_GITHUB_CLIENT_SECRET` | no | — | GitHub OAuth |
