@@ -62,9 +62,11 @@ Phase 4 — unions, proposals & review. 4a-1, 4a-2, and 4b are complete; 4b-2
 
 ## Next
 
-1. Execute **4b-2 — server push scan + node incidents**: scan incoming pushed
-   snapshots, open/quarantine node incidents, and wire
-   `Incidents.blocking_node?/2` into the public node render. No daemon changes.
+1. Execute **4b-2 — server push scan + node incidents** from
+   `.claude/plans/push-scan-4b2/plan.md` (approved 2026-11-05; 10 tasks across
+   P0–P4; scratchpad alongside). Decisions: scan only newly inserted nodes after
+   commit, synchronous capped scan, node incidents resolve by acknowledgment.
+   No daemon/response/template/config changes.
 2. Then **4c — review UI + incident panel + approve/reject** (must also add the
    `meld_commit_sha` ↔ `result_tree_sha` cross-check before exposing approval).
 3. Then 4d (broadcast/pull + daemon convergence).
