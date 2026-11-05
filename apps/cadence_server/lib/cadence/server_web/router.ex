@@ -31,6 +31,7 @@ defmodule Cadence.ServerWeb.Router do
     pipe_through(:browser)
 
     get("/", PortfolioController, :index)
+    get("/proposals/:token", ProposalController, :show, log: false)
 
     ash_authentication_live_session :project do
       live("/p/:slug", ProjectLive, :home)

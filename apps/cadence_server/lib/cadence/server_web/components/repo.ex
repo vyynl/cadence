@@ -119,14 +119,19 @@ defmodule Cadence.ServerWeb.Components.Repo do
     """
   end
 
+  attr(:eyebrow, :string, default: "Protected snapshot")
+  attr(:title, :string, default: "Snapshot hidden for review")
+
+  attr(:body, :string,
+    default: "This node's repository is hidden while it is reviewed for sensitive content."
+  )
+
   def quarantine(assigns) do
     ~H"""
     <div class="quarantine-notice">
-      <p class="eyebrow">Protected snapshot</p>
-      <h2>Snapshot hidden for review</h2>
-      <p class="note">
-        This node's repository is hidden while it is reviewed for sensitive content.
-      </p>
+      <p class="eyebrow">{@eyebrow}</p>
+      <h2>{@title}</h2>
+      <p class="note">{@body}</p>
     </div>
     """
   end

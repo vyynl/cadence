@@ -25,6 +25,15 @@ defmodule Cadence.Shared.LLM do
   end
 
   @doc """
+  The configured provider name as a string (`"deepseek"`, `"openai"`,
+  `"anthropic"`), recorded alongside the model in AI result metadata.
+  """
+  @spec provider() :: String.t()
+  def provider do
+    config()[:provider] || "deepseek"
+  end
+
+  @doc """
   Sends `prompt` to the configured provider and returns `{:ok, text}` on
   success or `{:error, reason}` on failure.
   """

@@ -118,8 +118,17 @@ if config_env() != :test do
     file_max_lines: String.to_integer(System.get_env("CAD_FILE_MAX_LINES", "2000")),
     readme_max_bytes: String.to_integer(System.get_env("CAD_README_MAX_BYTES", "262144")),
     tree_max_entries: String.to_integer(System.get_env("CAD_TREE_MAX_ENTRIES", "1000")),
+    proposal_max_files: String.to_integer(System.get_env("CAD_PROPOSAL_MAX_FILES", "200")),
     scan_max_files: String.to_integer(System.get_env("CAD_SCAN_MAX_FILES", "10000")),
     scan_max_bytes: String.to_integer(System.get_env("CAD_SCAN_MAX_BYTES", "16777216")),
+    meld_timeout_ms: String.to_integer(System.get_env("CAD_MELD_TIMEOUT_MS", "60000")),
+    meld_rate_limit: String.to_integer(System.get_env("CAD_MELD_RATE_LIMIT", "5")),
+    meld_rate_scale: String.to_integer(System.get_env("CAD_MELD_RATE_SCALE", "60000")),
+    meld_max_ops: String.to_integer(System.get_env("CAD_MELD_MAX_OPS", "50")),
+    meld_max_file_bytes: String.to_integer(System.get_env("CAD_MELD_MAX_FILE_BYTES", "262144")),
+    meld_context_bytes: String.to_integer(System.get_env("CAD_MELD_CONTEXT_BYTES", "65536")),
+    meld_retry_attempts: String.to_integer(System.get_env("CAD_MELD_RETRY_ATTEMPTS", "1")),
+    meld_retry_backoff_ms: String.to_integer(System.get_env("CAD_MELD_RETRY_BACKOFF_MS", "500")),
     oauth: [
       github: [
         client_id: System.get_env("CAD_OAUTH_GITHUB_CLIENT_ID"),

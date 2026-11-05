@@ -101,6 +101,61 @@ defmodule Cadence.Shared.GitStoreTest do
     end
   end
 
+  describe "put_files/2" do
+    test "writes nested trees from path => content", %{repo: repo} do
+      assert {:ok, tree} =
+               GitStore.put_files(repo, %{
+                 "README.md" => "# hi\n",
+                 "src/app.ex" => "defmodule App do\nend\n",
+                 "src/nested/deep.txt" => "deep\n"
+               })
+
+      commit = GitStore.write_commit(repo, tree, [], %{name: "a", email: "a@b"}, "root")
+
+      assert {:ok, "# hi\n"} = GitStore.read_path(repo, commit, "README.md")
+      assert {:ok, "defmodule App do\nend\n"} = GitStore.read_path(repo, commit, "src/app.ex")
+      assert {:ok, "deep\n"} = GitStore.read_path(repo, commit, "src/nested/deep.txt")
+      assert {:error, :not_found} = GitStore.read_path(repo, commit, "src/missing.txt")
+      assert {:error, :not_found} = GitStore.read_path(repo, commit, "nested")
+    end
+
+    test "an empty map writes the canonical empty tree", %{repo: repo} do
+      assert GitStore.put_files(repo, %{}) ==
+               {:ok, "4b825dc642cb6eb9a060e54bf8d69288fbee4904"}
+    end
+
+    test "identical content shares one blob", %{repo: repo} do
+      assert {:ok, tree} =
+               GitStore.put_files(repo, %{"a.txt" => "same", "dir/b.txt" => "same"})
+
+      [%{ref: root_ref}] =
+        Enum.filter(GitStore.read_tree(repo, tree), &(&1.name == "a.txt"))
+
+      dir = Enum.find(GitStore.read_tree(repo, tree), &(&1.name == "dir"))
+      [%{ref: nested_ref}] = GitStore.read_tree(repo, dir.ref)
+
+      assert root_ref == nested_ref
+    end
+
+    test "does not create directories that contain no files", %{repo: repo} do
+      assert {:ok, tree} = GitStore.put_files(repo, %{"src/app.ex" => "x"})
+
+      assert [%{name: "src", type: :tree}] = GitStore.read_tree(repo, tree)
+    end
+
+    test "rejects unsafe names, non-binary content, and path conflicts", %{repo: repo} do
+      assert GitStore.put_files(repo, %{"../escape.txt" => "x"}) == {:error, :unsafe_path}
+      assert GitStore.put_files(repo, %{"/abs.txt" => "x"}) == {:error, :unsafe_path}
+      assert GitStore.put_files(repo, %{"a//b.txt" => "x"}) == {:error, :unsafe_path}
+      assert GitStore.put_files(repo, %{".git/config" => "x"}) == {:error, :unsafe_path}
+      assert GitStore.put_files(repo, %{"nested/.git" => "x"}) == {:error, :unsafe_path}
+      assert GitStore.put_files(repo, %{"a.txt" => 123}) == {:error, :invalid_content}
+
+      assert GitStore.put_files(repo, %{"a" => "file", "a/b.txt" => "x"}) ==
+               {:error, :path_conflict}
+    end
+  end
+
   describe "build_tree/2" do
     test "hashes a directory tree and round-trips via read_tree", %{dir: dir, repo: repo} do
       path = Path.join(dir, "src")

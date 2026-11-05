@@ -1,7 +1,8 @@
 # Cadence — Progress
 
 ## Current Phase
-Phase 4 — unions, proposals & review (planning). Phase 3 is complete.
+Phase 4 — unions, proposals & review. 4a-1 and 4a-2 are complete; 4b session A
+(P0 + P1) is complete, session B (P2–P4) is next.
 
 ## Done (summary)
 
@@ -15,47 +16,119 @@ Phase 4 — unions, proposals & review (planning). Phase 3 is complete.
   MDEx README rendering, public secret filtering + node quarantine, portfolio
   index, canonical metadata, owner pin/unpin, member read panel, explicit
   owner/trusted raw view.
-- 347 tests green (121 shared + 115 daemon + 111 server);
+- **Phase 4a-1** — server-only `Proposal` + `Incident` schemas/migration,
+  `Proposals` context (create/list/token/approve/reject, single approver,
+  idempotent transitions), `Incidents` context (open/list/resolve, critical
+  blocking checks), shared `Authorization` role helpers, and 21 focused tests.
+- **Phase 4a-2** — public read-only `GET /proposals/:token`:
+  `Cadence.Server.ProposalView` (first-parent file-level diff via capped
+  `GitStore.walk_blobs/3`, sensitive-path filtering + `hidden_count`,
+  content-secret quarantine, incident isolation), controller + HTML templates,
+  real 404s for unknown token/missing project, no mutation routes, no
+  identities, no raw toggle, token kept out of access logs. `Repo.quarantine/1`
+  gained optional `eyebrow`/`title`/`body`. 33 new tests.
+- **Phase 4b session A (P0 + P1)** — shared primitives: `GitStore.put_files/2`
+  (in-memory path/content → tree), pure `Cadence.Shared.Meld` (deterministic
+  union + conflict-only op application), `Cadence.Shared.LLM.Meld` +
+  `priv/prompts/meld.txt` (`meld-v1`, strict parser, bounded prompt), and
+  `LLM.provider/0`. Server infra: `result_metadata` jsonb migration, project-
+  scoped incidents (+ partial unique index and dedupe), `LLMRateLimit`,
+  supervised `MeldWorker` (timeout, bounded retry, injectable `:meld_llm`),
+  `CAD_MELD_*` config, and `hammer` declared directly. 50 new tests.
+- **4b session A review** — `PASS WITH WARNINGS`; all 4 findings fixed
+  (see `.claude/plans/meld-worker-4b/reviews/meld-worker-4b-triage.md`):
+  UTF-8 truncation crash guard, `build_prompt/3` now returns
+  `{:ok, prompt} | {:error, :context_too_large}` instead of silently dropping
+  conflicts, `put_files/2` rejects `.git` segments, `TestMeldLLM.setup/0`
+  fixes ETS ownership.
+- 453 tests green (161 shared + 115 daemon + 177 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean.
+- **Tooling (OpenCode)** — vendored skill checkout + restore script
+  (`scripts/setup-opencode.sh`, 51 skills), project `opencode.jsonc` (mix
+  formatter, destructive-command guards), AGENTS.md §12 (routing, Iron Laws,
+  state/artifact mapping), `docs/opencode.md`.
 - Full session-by-session history is frozen in
   `docs/archive/progress-history.md`.
 
 ## Next
 
-1. Read `docs/phase-4-prep.md`, then spec §6.5/§6.6/§13/§16.
-2. Resolve the Phase 4 decisions before code:
-   - proposal model/quorum and re-submission policy;
-   - promotion target (`pinned` vs `functioning` vs protected marker);
-   - meld validation baseline (recommended: start `in-progress`, never
-     auto-promote to `functioning` without a real validator);
-   - meld agent/prompt/versioning;
-   - proposal visibility (public vs authenticated);
-   - pin propagation to daemons.
-3. Start **4a — proposal model/API**. Do not build 4b/4c review UI before the
-   proposal and meld backends exist.
+1. Execute **4b session B — P2 + P3 + P4** from
+   `.claude/plans/meld-worker-4b/plan.md` (P0/P1 checked; ledger in that
+   folder's `progress.md`). P2 is `Cadence.Server.Melds.propose/3`:
+   parent fetch/scan → union → conflict-only LLM → parse/apply → validation
+   guard → `put_files` tree/commit → proposal + `result_metadata` → secret
+   incident. Then P3 spec updates (§6.5, §6.7, §10.6, §11/§12.6) and P4 final
+   verification.
+2. Then 4b-2 (server push scan + node incidents), then 4c (review UI).
 
 ## Blocked
 
-- Phase 4 decisions above gate implementation. No other blockers.
+- (none) The Phase 4 gating decisions are resolved in spec §6.6/§6.7/§16 and
+  `docs/phase-4-prep.md` §5.
 
 ## Spec Deltas / Open Items
 
+- **Proposal result quarantine scope** (4a-2): paths are filtered + counted; a
+  secret value in a *visible* result file quarantines the whole result, so a
+  secret behind a hidden path name is not content-scanned. Recorded in spec
+  §7.6 ("Proposal results (4a-2)"). **4c must revisit this** before rendering
+  file content on the proposal page.
+- Proposal result integrity: `ProposalView` diffs `meld_commit_sha` and does not
+  yet assert it matches `result_tree_sha`. Approval acts on `result_tree_sha`,
+  so 4c must add the check before exposing approve/reject.
+- Public proposal reads are uncached: two capped blob walks plus a full regex
+  scan per GET, with no rate limit. If latency matters, 4c can materialize a
+  stored diff keyed by result commit.
+- The public proposal page lives in the `:browser` pipeline, so its body
+  includes a per-request CSRF token (session-free and cacheable output would
+  need a dedicated pipeline).
+- `Incidents.blocking_node?/2` exists but has no caller yet; it is wired when
+  4b-2 adds the server push scan.
+- Proposal JSON representation, line-level diffs, file content, and parent
+  selection are deferred to 4c.
+- `format_time/1` and `format_flags/2` now exist in three web modules
+  (`ProjectLive`, `DAG`, `ProposalHTML`); extraction is deferred tech debt.
 - Web pinning is server-side only; the sync protocol does not propagate pinned
-  flags to daemons. See spec §16.
-- Proposal model, proposal visibility, and meld validation are open decisions
-  (spec §16); see `docs/phase-4-prep.md`.
+  flags to daemons. Approval will set `pinned`, but daemons will not see it
+  until 4d resolves propagation. See spec §16.
+- Proposal decisions are resolved (spec §6.6/§16): single approver, promotion
+  via `pinned`, public read-only links with filtering/quarantine, and meld
+  results materialized at proposal creation.
+- Incidents (§6.7) ship as open/resolved alerts only. Assignee, comments, and
+  external issue-tracker integrations are deferred.
+- Public proposal links must respect project visibility if/when per-project
+  publishing lands.
 - Syntax highlighting remains deferred; file content is escaped plain code.
 - Public `broken`/`sandbox` nodes and snapshots are visible; revisit if that
   proves undesirable.
 - Secret filtering is best-effort, not a guarantee. Per-project overrides and
   reveal auditing are deferred; owners must rotate leaked secrets.
 - Unknown project pages render HTTP 200 with a not-found view (LiveView mount
-  cannot set 404 after render); revisit if search-engine semantics matter.
+  cannot set 404 after render); proposal pages do return a real 404.
 - `Project.visibility`/publishing is deferred; all projects are public by
   default.
+- **4b session A** — `Shared.Meld.apply_ops/3` and `LLM.Meld.build_prompt/3`/
+  `parse/3` take caps as options (the shared app must not read server config);
+  the server passes `CAD_MELD_*` values. Record in spec §6.5/§11 during P3.
+- **P2 must map `{:error, :context_too_large}`** from `MeldWorker.resolve/2` to
+  a critical `scan_incomplete` incident (no model call). Prompt conflict-set
+  omission is now an error, not a silent truncation; per-version content may
+  still be truncated.
+- **4b has no trigger surface or job durability.** `Sync.Union` /
+  `UnionResponse` remain unrouted, and the response shape (proposal token vs
+  node) is unresolved until 4d.
+- Concurrent duplicate meld proposals for the same parents are accepted (two
+  LLM calls, two proposals) until 4d adds queue dedupe.
+- Meld validation syntax-checks only `.ex`/`.exs`; other languages are
+  reviewer-checked in 4c.
+- `result_metadata` is server-owned and never cast; surfacing it in the review
+  UI is optional 4c work.
 
 ## Last Updated
-2026-10-24 — Phase 3 closed out; Phase 4 planning prepared in
-`docs/phase-4-prep.md`. Completed-phase docs archived under `docs/archive/`.
-No code changed this session; 347 tests remain green.
+2026-11-05 — 4b session A (P0 + P1) shipped and reviewed (`PASS WITH
+WARNINGS`); all four review findings fixed. 453 tests green. Run artifacts:
+`.claude/plans/meld-worker-4b/{plan,progress}.md` and
+`.claude/plans/meld-worker-4b/reviews/meld-worker-4b-triage.md`. Next: session B
+(P2 pipeline incl. `:context_too_large` → critical `scan_incomplete`, P3 spec,
+P4 verification).

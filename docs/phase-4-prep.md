@@ -1,7 +1,8 @@
 # Phase 4 prep — Unions, proposals & review
 
-> Status: **planning only; no code.** `docs/spec.md` §6.5, §6.6, and §13 remain
-> canonical. This is the cold-start handoff for Phase 4.
+> Status: **4a-1 complete.** Proposal + incident schemas/contexts and tests
+> ship; 4a-2 is next. `docs/spec.md` §6.5, §6.6, §6.7, and §13 remain canonical.
+> This is the cold-start handoff for Phase 4.
 
 ## 0. Start here
 
@@ -42,14 +43,15 @@ Turn union/meld into a reviewed server-side flow:
 
 | Session | Slice | Deliverable | Exit criteria |
 |---|---|---|---|
-| 1 | 4a-1 | Proposal schema + migration + `Proposals` context | Create/list/fetch/transition tested; roles enforced |
-| 2 | 4a-2 | Proposal JSON/route + shareable token | Stable URL; unauthorized access tested |
-| 3 | 4b | Meld worker + prompt + validation guard | Mocked LLM; pending proposal produced; no auto-`functioning` |
-| 4 | 4c | Review UI + approve/reject + shareable page | Owner/approver flow; idempotent approval; viewer denied |
-| 5 | 4d | Broadcast/pull + daemon convergence | Two-client + offline-daemon tests; pin propagation resolved |
+| 1 | 4a-1 | **Done.** Proposal + incident schema, migration, contexts, tests | Create/list/token/transition/blocking tested; roles enforced |
+| 2 | 4a-2 | Public read-only proposal route + shareable token | Stable URL; filtered render; auth-gated actions |
+| 3 | 4b | Meld worker + prompt + validation guard | Mocked LLM; pending proposal produced; incidents on failure; no auto-`functioning` |
+| 4 | 4b-2 | Server push scan + node incidents | Isolation persists until resolve; no daemon changes |
+| 5 | 4c | Review UI + incident panel + approve/reject | Owner/approver flow; idempotent approval; viewer denied |
+| 6 | 4d | Broadcast/pull + daemon convergence | Two-client + offline-daemon tests; pin propagation resolved |
 
-4a is the only slice that should be started before the decisions in §5 are
-settled. 4b/4c depend on the proposal representation; 4d depends on approval.
+4b/4c depend on the proposal representation; 4b-2 depends on the incident
+context (done); 4d depends on approval.
 
 ## 4. Scope
 
@@ -57,6 +59,8 @@ settled. 4b/4c depend on the proposal representation; 4d depends on approval.
 
 **First-session checklist**
 
+- **Done in 4a-1.** Also add the server-only `Cadence.Server.Incident` +
+  `Incidents` context so critical findings can block approval from the start.
 - Add server-only `Cadence.Server.Proposal` + `Proposals` context (do not put
   this in `cadence_shared`; daemons do not consume proposals).
 - Migration `create_proposals`: `token` (unique), `project_id`, `proposer_id`,
@@ -111,21 +115,24 @@ settled. 4b/4c depend on the proposal representation; 4d depends on approval.
 - Resolve the web-pin propagation gap if promotion should be visible locally.
 - Tests: two-client convergence, offline daemon then pull, duplicate approval.
 
-## 5. Decisions needed before building
+## 5. Decisions (resolved)
 
-1. **Proposal model:** single approver vs quorum; can a rejected proposal be
-   re-submitted; who is the reviewer of record?
-2. **Promotion target:** does approval set `pinned`, `functioning`, or a
-   distinct protected marker? (§16)
-3. **Meld flag/validation:** without Phase 6 actions there is no test runner.
-   Recommended: AI meld starts `in-progress`; approval promotes/pins; never
-   auto-`functioning`. Confirm.
-4. **Meld agent:** model, prompt version, output format, retry/rate limits.
-5. **Proposal visibility:** public shareable view vs authenticated-only.
-6. **Pin propagation:** how daemons learn about web pins/promotions (sync field,
-   update message, or pull-side merge) before promotion is useful locally.
-7. **Parent semantics:** meld proposals reference existing parent nodes; the
-   resulting commit/tree may be stored before approval or created on approval.
+1. **Proposal model:** single approver (owner, or trusted with `approver`);
+   terminal states immutable; rejected work is re-submitted as a new proposal.
+2. **Promotion target:** approval sets `pinned`; `functioning` stays
+   validator-owned.
+3. **Meld flag/validation:** meld starts `in-progress`; approval promotes/pins;
+   never auto-`functioning`.
+4. **Meld agent:** still to decide in 4b (model, prompt version, output format,
+   retry/rate limits). Must use the injectable LLM pattern and mocked tests.
+5. **Proposal visibility:** public read-only by default, with §7.6
+   filtering/quarantine; actions require auth and project roles.
+6. **Pin propagation:** still open; 4d must resolve before local promotion is
+   fully useful.
+7. **Parent semantics:** meld result tree/commit are materialized at proposal
+   creation (required for reviewable diffs); approval attaches the node.
+8. **Incidents:** server-only, automatic on meld/push detection, critical
+   incidents block approval and isolate content; open/resolved only.
 
 ## 6. Security and correctness constraints
 
@@ -133,10 +140,11 @@ settled. 4b/4c depend on the proposal representation; 4d depends on approval.
 - AI output is reviewable and reversible; never the final authority.
 - Meld flag and promotion are separate: approval moves the line, validation sets
   the flag (§6.6).
-- Shareable links must not expose private proposals or raw secrets to
-  unauthorized viewers; reuse the Phase 3 filtering/raw-view rules where
-  applicable.
-- Approval must be idempotent and race-safe.
+- Shareable links are public read-only, but must never expose raw secrets or
+  unfiltered result content; reuse the Phase 3 filtering/quarantine rules and
+  provide no raw toggle on proposal views.
+- Approval must be idempotent and race-safe, and must fail closed while a
+  critical incident is open.
 - Do not log proposal content, tokens, or raw secrets.
 
 ## 7. Tests / verification

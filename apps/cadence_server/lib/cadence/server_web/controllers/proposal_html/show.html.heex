@@ -1,0 +1,101 @@
+<article>
+  <header class="project-header">
+    <p class="eyebrow">Proposal</p>
+    <h1>{kind_title(@proposal.kind)}</h1>
+    <p class="slug">
+      <a href={"/p/#{@project.slug}"}>{@project.name}</a>
+      <span class="note">#{short_token(@proposal.token)}</span>
+    </p>
+    <p class="node-meta">
+      <span class="flag-badge">{@proposal.status}</span>
+      <span :if={@proposal.created_at}>
+        created
+        <time datetime={DateTime.to_iso8601(@proposal.created_at)}>
+          {format_time(@proposal.created_at)}
+        </time>
+      </span>
+      <span :if={@proposal.decided_at}>
+        decided
+        <time datetime={DateTime.to_iso8601(@proposal.decided_at)}>
+          {format_time(@proposal.decided_at)}
+        </time>
+      </span>
+    </p>
+  </header>
+
+  <section class="proposal-parents">
+    <h2>Parents</h2>
+
+    <ul :if={@parents != []} class="file-tree">
+      <li :for={parent <- @parents}>
+        <a class="file-row" href={"/p/#{@project.slug}/n/#{parent.id}"}>
+          <span class="file-kind">node</span>
+          <span class="file-name">{parent.message || "(no message)"}</span>
+        </a>
+        <p class="node-meta">
+          <span class="flag-badge">{format_flags(parent.flags, parent.pinned)}</span>
+          <code>{String.slice(parent.git_commit_sha, 0, 12)}</code>
+        </p>
+      </li>
+    </ul>
+
+    <p :if={@parents == []} class="note">No parent nodes are available.</p>
+  </section>
+
+  <section class="proposal-result">
+    <h2>Result</h2>
+
+    <%= case @result do %>
+      <% :isolated -> %>
+        <Repo.quarantine
+          eyebrow="Protected proposal"
+          title="Result hidden for review"
+          body="The meld result is hidden while a critical incident is open. Status and timestamps stay visible."
+        />
+      <% :none -> %>
+        <p class="note">Promotion proposals have no meld result.</p>
+        <p :if={@target_node}>
+          <a href={"/p/#{@project.slug}/n/#{@target_node.id}"}>View the target node</a>
+        </p>
+        <p :if={is_nil(@target_node)} class="note">The target node is not available.</p>
+      <% {:ok, result} -> %>
+        <%= if result.quarantined? do %>
+          <Repo.quarantine
+            eyebrow="Protected proposal"
+            title="Result hidden for review"
+            body="The meld result is hidden while it is reviewed for sensitive content. Status and timestamps stay visible."
+          />
+        <% else %>
+          <p class="note">
+            {result.summary.added} added · {result.summary.modified} modified · {result.summary.deleted} deleted
+            — compared with the first parent.
+          </p>
+
+          <ul :if={result.files != []} class="file-tree">
+            <li :for={file <- result.files}>
+              <div class="file-row">
+                <span class="file-kind">{file.status}</span>
+                <span class="file-name">{file.path}</span>
+              </div>
+            </li>
+          </ul>
+
+          <p :if={result.files == []} class="note">No file changes against the first parent.</p>
+
+          <p :if={result.hidden_count > 0} class="note">
+            {result.hidden_count} {if result.hidden_count == 1, do: "file", else: "files"} hidden for security.
+          </p>
+
+          <p :if={result.truncated?} class="note">The file list is truncated.</p>
+        <% end %>
+      <% {:error, :missing_objects} -> %>
+        <p class="note">The meld result is not available yet.</p>
+      <% {:error, :too_large} -> %>
+        <p class="note">The result is too large to review in the browser.</p>
+      <% {:error, _reason} -> %>
+        <p class="note">The meld result is not available yet.</p>
+    <% end %>
+  </section>
+
+  <p class="note">Approval is not available on this page.</p>
+</article>

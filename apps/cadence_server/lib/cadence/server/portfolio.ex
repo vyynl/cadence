@@ -23,6 +23,27 @@ defmodule Cadence.Server.Portfolio do
   def get_project_by_slug(_slug), do: {:error, :not_found}
 
   @doc """
+  Fetch a project by its ID.
+
+  Invalid UUID input returns `{:error, :not_found}` without touching the
+  database, so public callers can treat bad input as a missing page.
+  """
+  @spec get_project(Ecto.UUID.t() | String.t() | nil) ::
+          {:ok, Project.t()} | {:error, :not_found}
+  def get_project(id) do
+    case UUID.cast(id) do
+      {:ok, project_id} ->
+        case Repo.get(Project, project_id) do
+          nil -> {:error, :not_found}
+          project -> {:ok, project}
+        end
+
+      :error ->
+        {:error, :not_found}
+    end
+  end
+
+  @doc """
   Fetch a node only if it belongs to the project.
 
   Returns `nil` for an unknown/invalid node or project ID.
@@ -153,8 +174,9 @@ defmodule Cadence.Server.Portfolio do
   def quarantine_status(_project, nil, _opts), do: :quarantined
 
   def quarantine_status(project, node, opts) do
-    max_files = Keyword.get(opts, :max_files) || config_int(:scan_max_files, 10_000)
-    max_bytes = Keyword.get(opts, :max_bytes) || config_int(:scan_max_bytes, 16_777_216)
+    %{max_files: default_max_files, max_bytes: default_max_bytes} = scan_limits()
+    max_files = Keyword.get(opts, :max_files) || default_max_files
+    max_bytes = Keyword.get(opts, :max_bytes) || default_max_bytes
 
     case GitStore.walk_blobs(repo(project), node.git_commit_sha,
            max_files: max_files,
@@ -166,6 +188,21 @@ defmodule Cadence.Server.Portfolio do
       {:error, _reason} ->
         :quarantined
     end
+  end
+
+  @doc """
+  File/byte caps for a full snapshot scan.
+
+  Shared by `quarantine_status/3` and other public readers so every bounded
+  scan uses the same configured limits. A snapshot that cannot be scanned
+  within these caps is treated as unverifiable, never as safe.
+  """
+  @spec scan_limits() :: %{max_files: non_neg_integer(), max_bytes: non_neg_integer()}
+  def scan_limits do
+    %{
+      max_files: config_int(:scan_max_files, 10_000),
+      max_bytes: config_int(:scan_max_bytes, 16_777_216)
+    }
   end
 
   @doc """

@@ -9,6 +9,8 @@ defmodule Cadence.Server.Application do
       Cadence.Server.Repo,
       {AshAuthentication.Supervisor, otp_app: :cadence_server},
       {Phoenix.PubSub, name: Cadence.Server.PubSub},
+      Cadence.Server.LLMRateLimit,
+      Cadence.Server.MeldWorker,
       Cadence.ServerWeb.Endpoint
     ]
 

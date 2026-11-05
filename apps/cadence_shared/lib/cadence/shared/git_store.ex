@@ -140,6 +140,94 @@ defmodule Cadence.Shared.GitStore do
 
   defp ignored?(name, ignore), do: name in @always_ignored or name in ignore
 
+  @doc """
+  Write a tree from an in-memory `%{path => content}` map and return its SHA.
+
+  Paths are slash-separated and every segment must be a safe entry name;
+  content must be a binary. `.git` segments are rejected for the same reason
+  `build_tree/2` always ignores them: Cadence must never materialize nested
+  repository metadata. Nested directories are created only for the parents of
+  written files — directories with no files are never represented, matching
+  Git's tree model.
+
+  Identical content is stored once because blobs are content-addressed. An
+  empty map writes Git's canonical empty tree.
+
+  Returns `{:error, :unsafe_path}` for a malformed/escaping path,
+  `{:error, :invalid_content}` for non-binary content, and
+  `{:error, :path_conflict}` when one path is both a file and a directory
+  (for example `"a"` and `"a/b"`).
+  """
+  @spec put_files(t(), %{String.t() => binary()}) ::
+          {:ok, sha()} | {:error, :unsafe_path | :invalid_content | :path_conflict}
+  def put_files(repo, files) when is_map(files) do
+    with {:ok, nested} <- nest_files(files) do
+      {:ok, write_nested_tree(repo, nested)}
+    end
+  end
+
+  def put_files(_repo, _files), do: {:error, :invalid_content}
+
+  defp nest_files(files) do
+    Enum.reduce_while(files, {:ok, %{}}, fn {path, content}, {:ok, acc} ->
+      with {:ok, segments} <- split_path(path),
+           :ok <- reject_ignored_segments(segments),
+           :ok <- validate_content(content),
+           {:ok, nested} <- insert_file(acc, segments, content) do
+        {:cont, {:ok, nested}}
+      else
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp reject_ignored_segments(segments) do
+    if Enum.any?(segments, &(&1 in @always_ignored)) do
+      {:error, :unsafe_path}
+    else
+      :ok
+    end
+  end
+
+  defp validate_content(content) when is_binary(content), do: :ok
+  defp validate_content(_content), do: {:error, :invalid_content}
+
+  defp insert_file(tree, [name], content) do
+    case Map.get(tree, name) do
+      nil -> {:ok, Map.put(tree, name, {:file, content})}
+      {:file, _existing} -> {:ok, Map.put(tree, name, {:file, content})}
+      nested when is_map(nested) -> {:error, :path_conflict}
+    end
+  end
+
+  defp insert_file(tree, [name | rest], content) do
+    case Map.get(tree, name) do
+      {:file, _existing} ->
+        {:error, :path_conflict}
+
+      nil ->
+        {:ok, subtree} = insert_file(%{}, rest, content)
+        {:ok, Map.put(tree, name, subtree)}
+
+      nested when is_map(nested) ->
+        {:ok, subtree} = insert_file(nested, rest, content)
+        {:ok, Map.put(tree, name, subtree)}
+    end
+  end
+
+  defp write_nested_tree(repo, nested) do
+    entries =
+      Enum.map(nested, fn
+        {name, {:file, content}} ->
+          %{name: name, mode: @file_mode, type: :blob, ref: write_blob(repo, content)}
+
+        {name, subtree} when is_map(subtree) ->
+          %{name: name, mode: @dir_mode, type: :tree, ref: write_nested_tree(repo, subtree)}
+      end)
+
+    write_tree(repo, entries)
+  end
+
   @doc "Read a tree by SHA, returning its entries, or `nil` if absent."
   @spec read_tree(t(), sha()) :: [entry()] | nil
   def read_tree(repo, sha) do

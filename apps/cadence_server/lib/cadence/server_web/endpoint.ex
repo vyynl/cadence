@@ -24,7 +24,17 @@ defmodule Cadence.ServerWeb.Endpoint do
   )
 
   plug(Plug.RequestId)
-  plug(Plug.Telemetry, event_prefix: [:phoenix, :endpoint])
+
+  plug(Plug.Telemetry,
+    event_prefix: [:phoenix, :endpoint],
+    log: {__MODULE__, :log_level, []}
+  )
+
+  @doc false
+  # Proposal URLs are capability links: the token must never reach access logs.
+  # `false` suppresses the default Phoenix request log for that path.
+  def log_level(%{path_info: ["proposals" | _rest]}), do: false
+  def log_level(_conn), do: :info
 
   plug(Plug.Static,
     at: "/assets/vendor",

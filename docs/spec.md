@@ -486,21 +486,46 @@ branch." A meld is not created (or not promoted to the visible line) until a
 human approves it.
 
 - **Proposal** — a pending request to create a meld node, or to promote an
-  existing node to `pinned`. Carries: parent node IDs, the resulting tree (for
-  a meld), proposer, and status (`pending | approved | rejected`).
-- **Shareable link** — every proposal has a stable URL that renders the parents,
-  resulting diff/tree, flags, and status. It is meant to be pasted into
-  Slack/email/whatever comms tool the team uses; Cadence hosts the *view*, not
-  the conversation.
-- **Approve/reject** — reviewers (owner, or `trusted` users granted `approve`)
-  approve or reject. Lightweight: no inline comments or threads.
-- **On approval** — the meld node is created (per §6.5) and/or the node is
-  promoted (`pinned`). Only approval moves state; proposing is non-disruptive
-  and does not move anyone's session pointer.
+  existing node. Carries: parent node IDs (melds), a nullable `target_node_id`
+  (promotions), the precomputed result tree and commit (melds), proposer, and
+  status (`pending | approved | rejected`). Meld results are materialized when
+  the proposal is created so the resulting diff is reviewable before approval.
+- **Shareable link** — every proposal has a stable, high-entropy token and URL.
+  Proposal links are **public read-only by default**, consistent with the public
+  project and DAG views. Anonymous and member views apply the same mandatory
+  filtering/quarantine as §7.6; proposal result content is never rendered raw.
+  Mutations (approve/reject/resolve) require authentication and the appropriate
+  project role.
+- **Approve/reject** — a single approver decides: the owner, or a `trusted`
+  member with the per-project `approver` grant. The deciding user is the
+  reviewer of record. Lightweight: no inline comments or threads.
+- **On approval** — the meld node is attached/created (per §6.5) and/or the node
+  is promoted to `pinned`. Only approval moves state; proposing is
+  non-disruptive and does not move anyone's session pointer.
 - **Guards** — a meld is still never auto-promoted to `functioning` (§3.1);
-  approval promotes the *line*, validation sets the *flag*.
+  approval promotes the *line*, validation sets the *flag*. Critical incidents
+  (§6.7) block approval until resolved.
 
-See §16 for open questions on the exact promotion target and proposal model.
+### 6.7 Critical findings & incidents
+
+Security and correctness findings are persisted as server-side **incidents**
+rather than only being recomputed on read. An incident may reference a proposal,
+a node, or both, and carries a kind (`secret_detected`, `scan_incomplete`,
+`meld_failed`, `agent_output_invalid`, `missing_objects`), severity
+(`critical | high`), status (`open | resolved`), a redacted title, and scanner
+metadata only (pattern names/counts; never secret values or file content).
+
+- **Automatic creation** — server-side detection opens incidents when a meld
+  proposal is built and when pushed node snapshots are scanned.
+- **Isolation** — an open critical incident references the risky proposal or
+  node. Proposal result content renders as a generic "hidden for review" notice
+  and cannot be approved. A node with an open critical incident is quarantined
+  on every public render, in addition to the scan-based quarantine in §7.6.
+- **Resolution** — owner or granted approver may resolve an incident. Resolution
+  re-runs verification; if the risk persists the incident stays open. There is
+  no assignee or comment-thread workflow in Phase 4.
+- **Authority** — the deterministic scanner is authoritative. LLM output may
+  flag risk, but never decides whether content is safe.
 
 ---
 
@@ -523,9 +548,10 @@ secret filter (§7.6): sensitive paths are hidden and detected secrets are
 redacted before HTML reaches the browser. Public access never grants mutation.
 
 Public routes: `/` is the portfolio index, `/p/:slug` is the project home,
-`/p/:slug/n/:node_id/tree/*path` is a directory view, and
-`/p/:slug/n/:node_id/blob/*path` is a file view. `/auth`, `/sync`, `/health`,
-and static paths are reserved.
+`/p/:slug/n/:node_id/tree/*path` is a directory view,
+`/p/:slug/n/:node_id/blob/*path` is a file view, and `/proposals/:token` is the
+public read-only proposal page. `/auth`, `/sync`, `/health`, and static paths
+are reserved.
 
 ### 7.2 Owner/trusted views (authenticated)
 
@@ -647,7 +673,8 @@ filesystem working tree.
 - **Limits:** file reads, README reads, directory listings, and the quarantine
   scan are bounded (`CAD_FILE_MAX_BYTES`, `CAD_FILE_MAX_LINES`,
   `CAD_README_MAX_BYTES`, `CAD_TREE_MAX_ENTRIES`, `CAD_SCAN_MAX_FILES`,
-  `CAD_SCAN_MAX_BYTES`). Truncation is explicit in the UI, never silent. A
+  `CAD_SCAN_MAX_BYTES`; proposal diffs also cap visible files at
+  `CAD_PROPOSAL_MAX_FILES`). Truncation is explicit in the UI, never silent. A
   snapshot that exceeds the scan caps is quarantined rather than shown
   unverified.
 
@@ -679,7 +706,9 @@ therefore applies a mandatory, server-side filter to every anonymous render
    node and its flags, but the public repo pane shows a generic "snapshot hidden
    for review" notice and returns no file tree, file content, or README. This is
    stricter than text redaction and prevents a partially-redacted snapshot from
-   leaking a value the scanner missed elsewhere.
+   leaking a value the scanner missed elsewhere. An open critical incident for
+   the node also forces quarantine on every read (§6.7), so isolation persists
+   until the incident is resolved.
 4. **Commit messages** shown in the DAG tooltip/node header are redacted with the
    same scanner.
 5. **Binary files** are never rendered publicly.
@@ -690,7 +719,18 @@ therefore applies a mandatory, server-side filter to every anonymous render
    role check; it resets when the selected node changes. Viewers and anonymous
    visitors cannot enable it.
 7. **No content logging.** Scan results log counts/reasons only, never values or
-   file content.
+   file content. Proposal URLs are capability links: the server suppresses the
+   default request access log for `/proposals/:token` so tokens are not written
+   to production logs.
+
+**Proposal results (4a-2).** Proposal pages render result *paths and statuses*
+only, never file content. Sensitive paths are filtered out of the diff and
+reported as a generic count; a high-confidence secret in a visible result file
+quarantines the whole result, and an open critical incident isolates it (§6.7).
+Because no content is rendered, files whose names are filtered out are not
+content-scanned. When the review UI starts rendering file content (4c), this
+scope must be revisited so a hidden path's content cannot leak through a
+different surface.
 
 This is best-effort defense-in-depth, not a guarantee. Owners must still rotate
 any secret that was ever committed. Per-project scan allowlists/overrides are
@@ -1195,6 +1235,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_FILE_MAX_LINES` | no | `2000` | Max lines rendered in the public file viewer |
 | `CAD_README_MAX_BYTES` | no | `262144` | Max README bytes rendered publicly |
 | `CAD_TREE_MAX_ENTRIES` | no | `1000` | Max directory entries returned by the repo browser |
+| `CAD_PROPOSAL_MAX_FILES` | no | `200` | Max changed files listed on a public proposal page |
 | `CAD_SCAN_MAX_FILES` | no | `10000` | Max files scanned for secret quarantine |
 | `CAD_SCAN_MAX_BYTES` | no | `16777216` | Max snapshot bytes scanned for secret quarantine |
 | `CAD_ARTIFACT_PATH` | no | `/data/artifacts` | Action outputs |
@@ -1369,16 +1410,24 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   the meld/proposal backend.
 
 **Phase 4 — Unions & review (week 14–15)**
-- 4a — Proposal model/API: pending meld/promotion lifecycle, reviewers,
-  approve/reject, shareable token/URL, idempotent state transitions.
+- 4a — Proposal model/API: pending meld/promotion lifecycle (`meld`,
+  `promotion`, nullable `target_node_id`), precomputed meld result tree/commit,
+  single approver, idempotent state transitions.
+- 4a-1 — Server-only `Proposal` and `Incident` schemas/contexts; critical open
+  incidents block approval. No UI or worker.
+- 4a-2 — Public read-only proposal token/URL with §7.6 filtering/quarantine;
+  auth-gated actions.
 - 4b — Server-side meld worker: permission checks, parent tree fetch, AI meld
-  prompt, resulting tree/commit, validation guard (no auto-`functioning`).
-- 4c — Review UI: parents/diff/tree/flags, approve/reject, shareable link,
-  server-side authorization.
+  prompt, resulting tree/commit, validation guard (no auto-`functioning`);
+  auto-open incidents on secret/scan/meld failures.
+- 4b-2 — Server push scan: scan imported node snapshots, open node incidents,
+  and enforce persisted isolation.
+- 4c — Review UI: parents/diff/tree/flags, open-incident panel, approve/reject,
+  shareable link, server-side authorization.
 - 4d — Broadcast/pull convergence: approved meld reaches connected clients and
   daemons; resolve web-pin propagation if promotion must be visible locally.
 - Proposal UI must not ship before 4a/4b exist; AI output stays reviewable and
-  reversible.
+  reversible. The deterministic scanner, not the LLM, decides safety.
 
 **Phase 5 — Doc automation (week 16)**
 - Doc schema parsing.
@@ -1463,10 +1512,11 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - [ ] **Project visibility/publishing (Phase 3):** all projects are publicly
       discoverable by default (portfolio index + `/p/:slug`). A per-project
       `visibility`/`published` column and owner control are deferred until a
-      concrete need appears; adding them later requires a migration.
-- [ ] **Review/promotion UI placement:** the approval UI listed in §7.2 has no
-      backend until Phase 4. Phase 3 ships at most a read-only placeholder;
-      otherwise it is deferred entirely.
+      concrete need appears; adding them later requires a migration. Public
+      proposal links must respect project visibility once it exists.
+- [ ] **Review/promotion UI placement:** the proposal/incident backend exists as
+      of Phase 4a-1. The approval UI is deferred to 4c; Phase 3 ships no
+      approval actions.
 - [ ] **Doc agent model:** which LLM(s) to support, and whether to allow
       per-project overrides.
 - [ ] **Local store:** SQLite via `ecto_sqlite3` is the obvious pick; confirm
@@ -1481,20 +1531,27 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       object store for Git packfiles.
 - [ ] **Multi-user conflict UX:** when two trusted users spawn from the same
       node, how does the picker display the divergence?
-- [ ] **Promotion target:** does approval promote to `pinned`, `functioning`,
-      or a distinct "protected line" marker? (See §6.6.)
-- [ ] **Proposal model:** approve/reject policy — any single approver, or a
-      quorum of N? Should a rejected proposal be re-submittable?
-- [ ] **Proposal visibility:** are shareable proposal links public (read-only)
-      or authenticated-member-only? If public, the Phase 3 secret filter and
-      raw-view rules must apply.
-- [ ] **Meld flag validation:** without Phase 6 actions there is no test runner.
-      Recommended baseline: AI meld starts `in-progress`; approval promotes/pins
-      the line; never auto-promote to `functioning` until a real validator exists.
+- [x] **Promotion target:** resolved for Phase 4 — approval sets `pinned`.
+      `functioning` remains validator-owned and is never set by approval (§6.6).
+- [x] **Proposal model:** resolved for Phase 4 — a single approver (owner, or
+      trusted with the per-project `approver` grant) decides. Terminal states
+      are immutable; a rejected proposal may be re-submitted as a new proposal.
+- [x] **Proposal visibility:** resolved for Phase 4 — proposal links are public
+      read-only by default, subject to §7.6 filtering/quarantine. Approve,
+      reject, and resolve require authentication and project roles. Proposal
+      content has no raw-view bypass.
+- [x] **Meld flag validation:** resolved for Phase 4 — an AI meld is
+      `in-progress`; approval promotes/pins the line. Never auto-promote to
+      `functioning` until a real validator exists (§6.6, §6.7).
 - [ ] **Team/supervisor schema:** exact shape and sync channel for the
       lightweight §4.6 relationships.
-- [ ] **Proposal link format:** URL scheme and what the shareable view renders
-      (diff vs. tree vs. flags).
+- [x] **Proposal link format:** resolved for Phase 4 — a stable high-entropy
+      URL-safe token renders the parents, result diff/tree (filtered), flags,
+      status, and timestamps. Reviewer/proposer identities are not exposed to
+      anonymous visitors. Mutations are auth-gated.
+- [ ] **Incident planning integrations:** Phase 4 ships alerts with
+      `open | resolved` only. Assignee, comments/threads, and external issue
+      tracker integrations are deferred (§6.7).
 - [ ] **Storage repack trigger:** when to run the Phase 7 lossless repack (size
       threshold vs. scheduled job), and the array→edges migration threshold.
 - [x] **Daemon token issuance (Phase 2b):** resolved in 2b-1 — an
