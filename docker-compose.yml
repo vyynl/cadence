@@ -1,0 +1,48 @@
+# One-command demo stack: Postgres + a seeded, dev-mode Cadence server.
+#
+#   docker compose up --build
+#
+# Not production: the image is MIX_ENV=dev and the password strategy is a
+# build-time demo gate (spec §7.4, §12.4).
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: cadence_demo
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d cadence_demo"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    volumes:
+      - cadence-demo-pg:/var/lib/postgresql/data
+
+  server:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.demo
+      args:
+        CAD_DEMO_AUTH: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      CAD_DATABASE_URL: "ecto://postgres:postgres@db:5432/cadence_demo"
+      CAD_SECRET_KEY_BASE: "cadence-demo-secret-key-base-do-not-use-in-production-0123456789abcdef"
+      CAD_PUBLIC_URL: "http://localhost:4000"
+      CAD_GIT_STORE_PATH: "/data/git"
+      CAD_DEMO_AUTH: "true"
+      CAD_HTTP_PORT: "4000"
+    ports:
+      - "4000:4000"
+    volumes:
+      # Style iteration: edit CSS on the host and refresh the browser.
+      - ./apps/cadence_server/priv/static/css:/app/apps/cadence_server/priv/static/css
+      - cadence-demo-git:/data/git
+
+volumes:
+  cadence-demo-pg:
+  cadence-demo-git:

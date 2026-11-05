@@ -141,6 +141,18 @@ if config_env() != :test do
         redirect_uri: public_url <> "/auth/user/google/callback"
       ]
     ]
+
+  # Demo auth is a build-time flag (see config/config.exs and
+  # Cadence.Server.Accounts.User). A prod release must never carry it.
+  if config_env() == :prod and System.get_env("CAD_DEMO_AUTH") == "true" do
+    raise """
+    CAD_DEMO_AUTH must never be set for a production boot.
+
+    The demo password strategy is compiled in only when CAD_DEMO_AUTH=true at
+    build time. Rebuild the prod artifact without the flag and unset it in the
+    production environment.
+    """
+  end
 end
 
 config :cadence_shared, Cadence.Shared.LLM,

@@ -5,7 +5,8 @@ config :cadence_daemon,
 
 config :cadence_server,
   ecto_repos: [Cadence.Server.Repo],
-  ash_domains: [Cadence.Server.Accounts]
+  ash_domains: [Cadence.Server.Accounts],
+  demo_auth: System.get_env("CAD_DEMO_AUTH") == "true"
 
 config :cadence_server, Cadence.ServerWeb.Endpoint,
   adapter: Bandit.PhoenixAdapter,

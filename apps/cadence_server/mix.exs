@@ -36,6 +36,7 @@ defmodule Cadence.Server.MixProject do
       {:ash_postgres, "~> 2.14"},
       {:ash_authentication, "~> 4.15"},
       {:ash_authentication_phoenix, "~> 2.17"},
+      {:bcrypt_elixir, "~> 3.0"},
       {:hammer, "~> 7.5"},
       {:sourceror, "~> 1.7", only: [:dev, :test]},
       {:lazy_html, ">= 0.1.0", only: :test},

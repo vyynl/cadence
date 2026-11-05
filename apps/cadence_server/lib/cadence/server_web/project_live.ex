@@ -169,6 +169,10 @@ defmodule Cadence.ServerWeb.ProjectLive do
           <h1>{@project.name}</h1>
           <p class="slug">/{@project.slug}</p>
 
+          <p :if={@membership} class="project-nav">
+            <.link navigate={~p"/p/#{@project.slug}/reviews"}>Reviews</.link>
+          </p>
+
           <details :if={@members} class="members-panel">
             <summary>Members ({length(@members)})</summary>
             <ul>

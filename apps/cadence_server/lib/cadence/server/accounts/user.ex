@@ -5,6 +5,12 @@ defmodule Cadence.Server.Accounts.User do
   Authentication is delegated to AshAuthentication: GitHub/Google OAuth for
   humans and API keys for daemons. The resource stores only identity metadata;
   daemon keys live in `Cadence.Server.Accounts.ApiKey`.
+
+  When the `:demo_auth` build flag is true, a password strategy (`:demo`) is
+  compiled in for the local demo stack. The flag is read at build time
+  (`CAD_DEMO_AUTH`) so a production build cannot contain a password login;
+  `config/runtime.exs` refuses to boot a prod release with the flag set.
+  Registration is never enabled — demo users are seeded.
   """
 
   use Ash.Resource,
@@ -13,6 +19,8 @@ defmodule Cadence.Server.Accounts.User do
     extensions: [AshAuthentication]
 
   require Ash.Resource.Change.Builtins
+
+  @demo_auth Application.compile_env(:cadence_server, :demo_auth, false)
 
   authentication do
     session_identifier(:jti)
@@ -42,6 +50,15 @@ defmodule Cadence.Server.Accounts.User do
       api_key do
         api_key_relationship(:valid_api_keys)
       end
+
+      if @demo_auth do
+        password :demo do
+          identity_field(:email)
+          hashed_password_field(:hashed_password)
+          registration_enabled?(false)
+          sign_in_enabled?(true)
+        end
+      end
     end
   end
 
@@ -59,6 +76,11 @@ defmodule Cadence.Server.Accounts.User do
 
     attribute :confirmed_at, :utc_datetime_usec
 
+    attribute :hashed_password, :string do
+      allow_nil?(true)
+      sensitive?(true)
+    end
+
     timestamps()
   end
 
@@ -74,6 +96,15 @@ defmodule Cadence.Server.Accounts.User do
 
   actions do
     defaults([:read])
+
+    create :create do
+      description("Internal create action for demo users and seeding.")
+
+      accept([:email, :name, :hashed_password])
+      require_attributes([:hashed_password])
+      validate(match(:hashed_password, ~r/^\$2[aby]\$/))
+      change(set_attribute(:confirmed_at, &DateTime.utc_now/0))
+    end
 
     read :get_by_subject do
       description("Get a user by the subject claim in a token")

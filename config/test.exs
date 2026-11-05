@@ -29,6 +29,7 @@ config :cadence_server, Cadence.ServerWeb.Endpoint,
   live_view: [signing_salt: "test-live-view-salt"]
 
 config :cadence_server,
+  demo_auth: true,
   token_signing_secret: String.duplicate("test-token-signing-secret-", 4),
   public_url: "http://localhost:4000",
   git_store_path:

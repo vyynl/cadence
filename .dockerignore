@@ -1,0 +1,11 @@
+_build
+deps
+.git
+.gitignore
+.claude
+node_modules
+docs
+*.md
+Dockerfile*
+docker-compose.yml
+.dockerignore

@@ -29,6 +29,8 @@ history, not current instructions.
 |---|---|
 | `spec.md` | Canonical product/technical contract |
 | `progress.md` | Current handoff and session summary |
+| `demo.md` | Local demo stack: compose, seed accounts, guided tour |
+| `ui-notes.md` | UI/tuning backlog — drop observations here between sessions |
 | `phase-4-prep.md` | Phase 4 unions/proposals/review plan |
 | `opencode.md` | Agent tooling: skills, formatter, gates, artifact conventions |
 | `archive/` | Completed-phase briefs and historical progress log |

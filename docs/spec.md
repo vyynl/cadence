@@ -662,6 +662,15 @@ repository snapshots (subject to §7.6 filtering). Optionally, the deployment ca
 require a lightweight signed URL or API key to reduce scraping (deferred
 decision).
 
+For the local demo stack (§12.4) a **compile-gated password strategy** may be
+built in: `CAD_DEMO_AUTH=true` is read at build time
+(`Application.compile_env`) and adds `password :demo` with
+`registration_enabled?(false)` and `sign_in_enabled?(true)`, so seeded demo
+accounts can sign in without OAuth credentials. A production build is made
+without the flag and therefore contains no password strategy; additionally
+`config/runtime.exs` raises when a prod boot sees `CAD_DEMO_AUTH=true`. The
+demo password is public by design and never reused outside a local demo.
+
 ### 7.5 Repository browser
 
 The right pane is a read-only browser over the selected node's Git commit
@@ -1035,6 +1044,7 @@ inserts); the daemon can mark only that node failed and retry the rest.
 | LLM client | `axiom_ai` (DeepSeek via OpenAI-compatible base URL) |
 | Markdown rendering | `MDEx` |
 | Auth | `AshAuthentication` + `Ash` (daemon PATs use the API-key strategy) |
+| Demo password hashing (compile-gated, demo builds only) | `bcrypt_elixir` |
 | Ash data layer | `ash_postgres` |
 | Phoenix auth routes | `ash_authentication_phoenix` |
 | Ash DSL formatting / codegen | `sourceror` (dev/test only) |
@@ -1194,11 +1204,24 @@ volumes:
   postgres_data:
 ```
 
+The repository also ships a **local demo stack** (`docker-compose.yml` +
+`docker/Dockerfile.demo`): `postgres:16-alpine` plus a `MIX_ENV=dev` server that
+runs migrations, seeds demo data (`mix cadence.demo_seed`), and boots only
+`cadence_server` (no daemon). CSS is bind-mounted for style iteration and the
+demo password strategy is compiled in via `CAD_DEMO_AUTH` (§7.4). This is an
+exploration aid, not a production artifact; the release path in §12.8 remains
+authoritative. See `docs/demo.md`.
+
 ### 12.5 Configuration strategy
 
 **Rule: everything configurable is an environment variable, read at runtime
 via `config/runtime.exs`.** No build-time config for anything that might
 change between deployments.
+
+The single deliberate exception is `CAD_DEMO_AUTH` (§7.4): it must be fixed at
+compile time so a production build physically cannot contain the demo password
+strategy. `runtime.exs` still validates the runtime value and refuses to boot a
+prod release with it set.
 
 ```elixir
 # config/runtime.exs
@@ -1267,6 +1290,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_OAUTH_GITHUB_CLIENT_SECRET` | no | — | GitHub OAuth |
 | `CAD_OAUTH_GOOGLE_CLIENT_ID` | no | — | Google OAuth |
 | `CAD_OAUTH_GOOGLE_CLIENT_SECRET` | no | — | Google OAuth |
+| `CAD_DEMO_AUTH` | no | `false` | **Build-time** switch for the demo password strategy (§7.4); must be absent in prod |
 | `CAD_LLM_PROVIDER` | yes | — | `deepseek` \| `openai` \| `anthropic` \| … |
 | `CAD_LLM_API_KEY` | yes | — | Provider key |
 | `CAD_LLM_MODEL` | no | provider default | Model ID |

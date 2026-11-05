@@ -1,0 +1,35 @@
+# Dev-mode demo image for the local demo stack (spec §12.4).
+#
+# This is deliberately NOT a production artifact: it compiles with MIX_ENV=dev,
+# keeps sources for the code reloader, and seeds demo data on boot. The release
+# path (§12.8) remains separate work.
+FROM elixir:1.20-otp-29
+
+ENV MIX_ENV=dev
+
+# Compile-time gate for the demo password strategy (spec §7.4). The value is
+# baked into the build; compose sets the same value at runtime. A production
+# build must never pass this flag.
+ARG CAD_DEMO_AUTH=true
+ENV CAD_DEMO_AUTH=${CAD_DEMO_AUTH}
+
+WORKDIR /app
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates curl \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY mix.exs mix.lock ./
+COPY config ./config
+COPY apps ./apps
+
+RUN mix local.hex --force \
+  && mix local.rebar --force \
+  && mix deps.get \
+  && mix compile
+
+EXPOSE 4000
+
+# Migrate the server repo, seed the demo data (idempotent), then boot only the
+# server app — the daemon and its SQLite repo stay out of the demo.
+CMD ["sh", "-c", "mix ecto.migrate -r Cadence.Server.Repo && mix cadence.demo_seed && mix run --no-start --no-halt -e 'Application.ensure_all_started(:cadence_server)'"]
