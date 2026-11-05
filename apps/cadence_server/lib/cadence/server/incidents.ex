@@ -13,6 +13,10 @@ defmodule Cadence.Server.Incidents do
   alias Cadence.Server.{Authorization, Incident, Repo}
   alias Cadence.Shared.{Project, UUID}
 
+  # Critical incidents sort first, so the cap can only hide lower-severity
+  # alerts, never a blocking one. Keeps the review panel bounded (§7.2).
+  @max_open_incidents 50
+
   @doc """
   Opens an incident, returning the existing open incident when the same target
   and kind are already open.
@@ -34,7 +38,12 @@ defmodule Cadence.Server.Incidents do
     end
   end
 
-  @doc "List a project's open incidents, critical first and newest first."
+  @doc """
+  List a project's open incidents, critical first and newest first.
+
+  Returns at most `max_open_incidents/0` rows; critical incidents sort first,
+  so the cap only hides lower-severity alerts.
+  """
   @spec list_open(map(), Ecto.UUID.t() | String.t()) ::
           {:ok, [Incident.t()]} | {:error, :not_found | :forbidden}
   def list_open(actor, project_id) do
@@ -49,18 +58,30 @@ defmodule Cadence.Server.Incidents do
              asc: fragment("CASE WHEN severity = 'critical' THEN 0 ELSE 1 END"),
              desc: i.created_at,
              desc: i.id
-           ]
+           ],
+           limit: @max_open_incidents
          )
        )}
     end
   end
+
+  @doc "The maximum number of open incidents returned by `list_open/2`."
+  @spec max_open_incidents() :: pos_integer()
+  def max_open_incidents, do: @max_open_incidents
 
   @doc """
   Resolves an open incident after an optional verification callback.
 
   `opts` accepts `:verify`, a one-argument function returning `:ok` or
   `{:error, reason}`. A failed verification leaves the incident open and
-  returns the error. Re-resolving an already-resolved incident is idempotent.
+  returns the error. Re-resolving an already-resolved incident is idempotent
+  (and skips verification).
+
+  Verification runs **before** the `FOR UPDATE` transaction: a callback that
+  walks the object store must not hold the incident row — or a pool
+  connection — for the length of the scan. Incident kind, target, and details
+  are immutable, so the decision cannot go stale; only the status transition
+  needs the lock.
   """
   @spec resolve(map(), Ecto.UUID.t() | String.t(), Ecto.UUID.t() | String.t(), keyword()) ::
           {:ok, Incident.t()} | {:error, term()}
@@ -69,7 +90,9 @@ defmodule Cadence.Server.Incidents do
 
     with {:ok, project_id} <- uuid(project_id),
          {:ok, incident_id} <- uuid(incident_id),
-         {:ok, _membership} <- authorize_decider(actor, project_id) do
+         {:ok, _membership} <- authorize_decider(actor, project_id),
+         {:ok, incident} <- fetch_incident(project_id, incident_id),
+         :ok <- verify_target(verify, incident) do
       Repo.transaction(fn ->
         incident =
           Repo.one(
@@ -80,32 +103,41 @@ defmodule Cadence.Server.Incidents do
           ) || Repo.rollback(:not_found)
 
         case incident.status do
-          :resolved ->
-            incident
-
-          :open ->
-            case verify.(incident) do
-              :ok ->
-                incident
-                |> Ecto.Changeset.change(
-                  status: :resolved,
-                  resolved_at: DateTime.utc_now(),
-                  resolved_by: actor.id
-                )
-                |> Repo.update()
-                |> case do
-                  {:ok, resolved} -> resolved
-                  {:error, changeset} -> Repo.rollback(changeset)
-                end
-
-              {:error, reason} ->
-                Repo.rollback(reason)
-
-              _other ->
-                Repo.rollback(:verification_failed)
-            end
+          :resolved -> incident
+          :open -> mark_resolved(incident, actor)
         end
       end)
+    end
+  end
+
+  defp fetch_incident(project_id, incident_id) do
+    case Repo.get_by(Incident, id: incident_id, project_id: project_id) do
+      nil -> {:error, :not_found}
+      incident -> {:ok, incident}
+    end
+  end
+
+  defp verify_target(_verify, %Incident{status: :resolved}), do: :ok
+
+  defp verify_target(verify, %Incident{} = incident) do
+    case verify.(incident) do
+      :ok -> :ok
+      {:error, reason} -> {:error, reason}
+      _other -> {:error, :verification_failed}
+    end
+  end
+
+  defp mark_resolved(incident, actor) do
+    incident
+    |> Ecto.Changeset.change(
+      status: :resolved,
+      resolved_at: DateTime.utc_now(),
+      resolved_by: actor.id
+    )
+    |> Repo.update()
+    |> case do
+      {:ok, resolved} -> resolved
+      {:error, changeset} -> Repo.rollback(changeset)
     end
   end
 

@@ -10,11 +10,24 @@ defmodule Cadence.Server.ProposalView do
 
   The diff is file-level and relative to the **first** parent; parent
   selection and line-level diffs belong to the review UI (4c).
+
+  `verify_resolution/1` is the incident-resolution counterpart: it re-scans a
+  proposal's stored result, so a proposal incident cannot be clicked away while
+  the result is still risky (spec §6.7). It mutates nothing.
   """
 
   import Ecto.Query
 
-  alias Cadence.Server.{Incidents, Portfolio, ProjectGit, Proposal, PublicContent, Repo}
+  alias Cadence.Server.{
+    Incident,
+    Incidents,
+    Portfolio,
+    ProjectGit,
+    Proposal,
+    PublicContent,
+    Repo
+  }
+
   alias Cadence.Shared.{GitStore, Node, Project}
 
   # Result of the meld, as produced by `result/3`.
@@ -81,6 +94,69 @@ defmodule Cadence.Server.ProposalView do
   @doc "Whether an open critical incident isolates this proposal's result."
   @spec isolated?(Proposal.t()) :: boolean()
   def isolated?(%Proposal{id: id}), do: Incidents.blocking_proposal?(id)
+
+  @doc """
+  Re-scans the target of an incident before resolution (spec §6.7).
+
+  This is an `Incidents.resolve/4` `:verify` callback. A proposal-linked
+  incident only resolves after the stored result passes both checks:
+
+  - the result scans clean under the §7.6 caps — a remaining secret pattern or
+    sensitive path is `{:error, :still_risky}`;
+  - the result commit's tree still equals `result_tree_sha`, the same invariant
+    approval enforces. An incident opened by approval integrity therefore
+    cannot be acknowledged away while the mismatch holds
+    (`{:error, :integrity_failed}`).
+
+  A result that cannot be walked at all (missing objects, not a commit, over
+  the caps, or a corrupt store) is `{:error, :unverifiable}`: an unscanned
+  result is never "clean". Node, project, and other proposal-less incidents
+  resolve by acknowledgment (§6.7, 4b-2) and are always `:ok`, as is a
+  promotion, which has no result to scan. Never raises.
+  """
+  @spec verify_resolution(Incident.t()) ::
+          :ok | {:error, :still_risky | :integrity_failed | :unverifiable}
+  def verify_resolution(%Incident{proposal_id: nil}), do: :ok
+
+  def verify_resolution(%Incident{} = incident) do
+    case Repo.get_by(Proposal, id: incident.proposal_id, project_id: incident.project_id) do
+      nil ->
+        {:error, :unverifiable}
+
+      %Proposal{kind: :promotion} ->
+        :ok
+
+      %Proposal{meld_commit_sha: commit_sha} = proposal ->
+        verify_resolution_result(incident.project_id, proposal, commit_sha)
+    end
+  rescue
+    _error -> {:error, :unverifiable}
+  catch
+    _kind, _value -> {:error, :unverifiable}
+  end
+
+  defp verify_resolution_result(project_id, proposal, commit_sha) do
+    repo = ProjectGit.open(project_id)
+
+    case walk(repo, commit_sha) do
+      {:ok, blobs} ->
+        cond do
+          PublicContent.quarantine?(blobs) -> {:error, :still_risky}
+          result_tree_matches?(repo, commit_sha, proposal.result_tree_sha) -> :ok
+          true -> {:error, :integrity_failed}
+        end
+
+      {:error, _reason} ->
+        {:error, :unverifiable}
+    end
+  end
+
+  defp result_tree_matches?(repo, commit_sha, result_tree_sha) do
+    case GitStore.read_commit(repo, commit_sha) do
+      %{tree: tree} -> tree == result_tree_sha
+      nil -> false
+    end
+  end
 
   @doc """
   File-level result of the meld, filtered for anonymous visitors.

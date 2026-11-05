@@ -502,6 +502,25 @@ human approves it.
 - **On approval** — the meld node is attached/created (per §6.5) and/or the node
   is promoted to `pinned`. Only approval moves state; proposing is
   non-disruptive and does not move anyone's session pointer.
+- **Approval mechanics (4c)** — the decision runs in a `FOR UPDATE` transaction
+  that locks the project row and then the proposal row, so concurrent approvals
+  of two proposals for the same result cannot attach two nodes. The stored
+  result is verified before anything changes: for a meld the result commit must
+  exist, every object reachable from it must be present, and its tree must equal
+  the proposal's `result_tree_sha`; a promotion has no result and always
+  passes. A failed check rolls the decision back unchanged (status stays
+  `pending`), opens a critical `scan_incomplete` proposal incident, and reports
+  `integrity_failed`; an unverifiable result is never approvable. A meld
+  approval then attaches the node carrying the result commit — reusing the
+  existing node for that commit when there is one — with `parents =
+  parent_ids`, flags `[in-progress]`, `pinned: true`, and `docs_state: pending`;
+  a promotion approval pins its target node. Both fail closed (`blocked`) when
+  an open critical node incident quarantines the node. Approval never sets
+  `functioning` (§3.1): approval moves the line, validation sets the flag.
+- **Decision broadcast (4c)** — a successful decision broadcasts
+  `{:proposal_decided, project_id, proposal_id, status}`; a fresh meld approval
+  also broadcasts `{:nodes_pushed, project_id, [node_id]}`. Refused decisions
+  broadcast nothing. Phase 4d owns the consumers.
 - **Guards** — a meld is still never auto-promoted to `functioning` (§3.1);
   approval promotes the *line*, validation sets the *flag*. Critical incidents
   (§6.7) block approval until resolved.
@@ -535,8 +554,21 @@ status (`open | resolved`), a redacted title, and scanner metadata only
   verification callback runs, and resolving it never bypasses the read-time
   scan in §7.6. A node whose snapshot genuinely contains a secret stays
   quarantined after its incident is resolved; the fix is to rotate the secret
-  and push a new node. The review panel (4c) owns the resolution UX and must
-  present this as rotate/resolve, not restore.
+  and push a new node. The review panel (4c) owns the resolution UX and
+  presents this as rotate/resolve, not restore.
+- **Proposal-linked resolution (4c)** — a proposal incident resolves only after
+  a fresh scan of the stored result under the §7.6 caps. A remaining secret
+  pattern or sensitive path keeps it open (`still_risky`): the result cannot be
+  clicked clean, so the reviewer rejects the proposal and re-proposes with the
+  secret rotated. A result that cannot be walked at all (missing objects, over
+  the caps) also stays open (`unverifiable`). The same check re-asserts the
+  §6.6 invariant that `meld_commit_sha`'s tree equals `result_tree_sha`, so an
+  incident opened by a failed approval-integrity check cannot be dismissed
+  while the mismatch holds (`integrity_failed`); the remedy there is also to
+  reject and re-propose. A promotion-linked incident has no result to scan and
+  resolves by acknowledgment. Project-scoped incidents resolve by
+  acknowledgment like node incidents. Resolution never mutates a proposal;
+  approval re-verifies the result independently (§6.6).
 - **Authority** — the deterministic scanner is authoritative. LLM output may
   flag risk, but never decides whether content is safe.
 
@@ -563,8 +595,9 @@ redacted before HTML reaches the browser. Public access never grants mutation.
 Public routes: `/` is the portfolio index, `/p/:slug` is the project home,
 `/p/:slug/n/:node_id/tree/*path` is a directory view,
 `/p/:slug/n/:node_id/blob/*path` is a file view, and `/proposals/:token` is the
-public read-only proposal page. `/auth`, `/sync`, `/health`, and static paths
-are reserved.
+public read-only proposal page. `/p/:slug/reviews` and
+`/p/:slug/reviews/:proposal_id` are member-only (authenticated, §7.2) and are
+never public. `/auth`, `/sync`, `/health`, and static paths are reserved.
 
 ### 7.2 Owner/trusted views (authenticated)
 
@@ -574,6 +607,19 @@ are reserved.
 - Trigger actions.
 - Manage memberships.
 - Review and approve/reject meld proposals (shareable link).
+- The review hub: `/p/:slug/reviews` lists the project's proposals
+  (pending first) and its open incidents, and
+  `/p/:slug/reviews/:proposal_id` shows one proposal's parents/promotion
+  target, the file-level result, integrity state, and decision state. Both
+  routes are inside the authenticated live session and require project
+  membership (`can_view?/1`); a refused visitor is redirected to the public
+  project page with a flash. Only the owner or a granted approver
+  (`can_decide?/1`) sees approve/reject and incident resolve controls, and
+  every event re-checks that role. Proposal incidents are resolved only after
+  a clean re-scan of the result (a remaining secret must be fixed by rejecting
+  and re-proposing); node and project incidents resolve by acknowledgment
+  (§6.7). Emails are shown to the owner/trusted manager audience only; other
+  members see display names.
 - View doc diffs and approve/reject pending doc revisions.
 - Explicitly reveal unfiltered file content for maintenance (the public and
   default authenticated views remain filtered; see §7.6).
@@ -745,12 +791,16 @@ therefore applies a mandatory, server-side filter to every anonymous render
    default request access log for `/proposals/:token` so tokens are not written
    to production logs.
 
-**Proposal results (4a-2).** Proposal pages render result *paths and statuses*
-only, never file content. Sensitive paths are filtered out of the diff and
-reported as a generic count; a high-confidence secret in a visible result file
-quarantines the whole result, and an open critical incident isolates it (§6.7).
-Because no content is rendered, files whose names are filtered out are not
-content-scanned. When the review UI starts rendering file content (4c), this
+**Proposal results (4a-2 / 4c-3).** Proposal pages — public and the authenticated
+review hub — render result *paths and statuses* only, never file content.
+Sensitive paths are filtered out of the diff and reported as a generic count; a
+high-confidence secret in a visible result file quarantines the whole result,
+and an open critical incident isolates it (§6.7). Because no content is
+rendered, files whose names are filtered out are not content-scanned for the
+diff. Incident resolution scans differently: before a proposal incident is
+resolved, every result blob — including blobs behind filtered path names — is
+re-scanned, so a secret hidden by its filename still keeps the incident open.
+Content rendering on the review surface remains deferred; when it lands, this
 scope must be revisited so a hidden path's content cannot leak through a
 different surface.
 
@@ -1470,8 +1520,10 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   auto-open incidents on secret/scan/meld failures.
 - 4b-2 — Server push scan: scan imported node snapshots, open node incidents,
   and enforce persisted isolation.
-- 4c — Review UI: parents/diff/tree/flags, open-incident panel, approve/reject,
-  shareable link, server-side authorization.
+- 4c — Review UI: member review hub (proposal list + detail), file-level result
+  and integrity state, approve/reject with a verified result and node
+  attach/pin, open-incident panel with re-scan/acknowledge resolution,
+  shareable link, server-side authorization on every event.
 - 4d — Broadcast/pull convergence: approved meld reaches connected clients and
   daemons; resolve web-pin propagation if promotion must be visible locally.
 - Proposal UI must not ship before 4a/4b exist; AI output stays reviewable and

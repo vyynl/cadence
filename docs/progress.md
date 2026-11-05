@@ -1,8 +1,9 @@
 # Cadence — Progress
 
 ## Current Phase
-Phase 4 — unions, proposals & review. 4a-1, 4a-2, 4b, 4b-2, 4c-1, 4c-2 and the
-**demo stack** are complete; 4c-3 (incident panel) is next.
+Phase 4 — unions, proposals & review. 4a-1, 4a-2, 4b, 4b-2, 4c-1, 4c-2, 4c-3 and
+the **demo stack** are complete; 4d (broadcast/pull + daemon convergence) is
+next.
 
 ## Done (summary)
 
@@ -98,6 +99,25 @@ Phase 4 — unions, proposals & review. 4a-1, 4a-2, 4b, 4b-2, 4c-1, 4c-2 and the
   `ash_authentication_live_session`; `:browser` gained `plug(:fetch_flash)`
   (needed for a flash on a live redirect). 16 LiveView tests + 5 authorization
   tests.
+- **Phase 4c P2 (4c-3 incident panel)** — `ReviewLive.Index` now loads
+  `Incidents.list_open/2` with a second `assign_async` and renders an
+  open-incident panel: severity, kind, title, age, proposal/node subject links,
+  and a **closed whitelist** details summary (`patterns`, `sensitive_paths`,
+  `reason` only — unknown keys are never rendered). Resolve/Acknowledge is
+  shown only to `can_decide?`; `handle_event("resolve_incident", …)` re-reads
+  the membership, refreshes `can_decide?`, and calls `Incidents.resolve/4`.
+  `ProposalView.verify_resolution/1` is the `:verify` callback: proposal-linked
+  melds re-scan under the §7.6 caps (`still_risky` on a secret/sensitive path,
+  `unverifiable` when the walk fails) **and** re-assert the §6.6 tree invariant
+  (`integrity_failed` while `result_tree_sha` mismatches, so integrity
+  incidents cannot be dismissed); promotions and proposal-less incidents
+  resolve by acknowledgment. `Incidents.resolve/4` now verifies **before** the
+  `FOR UPDATE` transaction so a store walk never holds the row/pool connection;
+  `list_open/2` caps at 50 (critical first, UI says when truncated). Flash
+  mapping covers `integrity_failed` in addition to the plan's four errors, and
+  unknown failures log only their shape. 14 new tests (12 LiveView + 2
+  context) — 565 total. Spec §6.6/§6.7/§7.1/§7.2/§7.6/§13 updated; styling
+  observations in `docs/ui-notes.md`.
 - **Demo stack (P0–P3)** — one `docker compose up` gives a browsable Cadence:
   `postgres:16-alpine` plus a `MIX_ENV=dev` server that migrates, seeds and
   boots only `cadence_server`. Compile-gated `password :demo` strategy
@@ -123,7 +143,7 @@ Phase 4 — unions, proposals & review. 4a-1, 4a-2, 4b, 4b-2, 4c-1, 4c-2 and the
   §7.4/§11/§12.4/§12.5/§12.6 updates. 15 new tests; compose smoke verified
   (`/health`, `/`, both projects, a proposal token, `/sign-in` all 200;
   anonymous reviews 302; demo sign-in establishes a session).
-- 551 tests green (161 shared + 115 daemon + 275 server);
+- 565 tests green (161 shared + 115 daemon + 289 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
   `AshAuthentication.Info.strategy(User, :demo) == :error`.
@@ -136,20 +156,17 @@ Phase 4 — unions, proposals & review. 4a-1, 4a-2, 4b, 4b-2, 4c-1, 4c-2 and the
 
 ## Next
 
-1. Execute **4c-3 — incident panel** from `.claude/plans/review-ui-4c/plan.md`
-   (P2-T9..T11), then P3 docs. P2 adds `Incidents.list_open/2` to
-   `ReviewLive.Index` with severity/kind/title/date, subject links and a
-   redacted details summary, plus a `resolve_incident` event that re-checks
-   `can_decide?`, passes `verify:` for proposal-linked incidents (a remaining
-   secret is `:still_risky` → "reject and re-propose") and acknowledges node
-   incidents. Run `/phx-full .claude/plans/review-ui-4c/plan.md` starting at P2.
-   Scratchpad alongside; ledger in `.claude/plans/review-ui-4c/progress.md`.
-2. Then 4d (broadcast/pull + daemon convergence).
-
-UI observations between sessions go in `docs/ui-notes.md`. One styling pass
-over the portfolio, project, review and incident surfaces is best scheduled
-after 4c-3 (so the incident panel is styled in the same pass), unless a demo
-needs polish sooner.
+1. Execute **4d — broadcast/pull convergence** (spec §10, §13; plan brief in
+   `docs/phase-4-prep.md` §5). Start by fixing the event contract: decide
+   whether `{:nodes_pushed, ...}` is emitted for re-pinned meld nodes and for
+   promotions (today only fresh meld approvals emit it), and which daemons
+   consume `{:proposal_decided, ...}`.
+2. Before 4d wires creation, close the two review deltas that affect it:
+   cap `Proposals.result_integrity/2` under `Portfolio.scan_limits/0` (map
+   overflow to its own error) and teach it about missing parents (the UI
+   already refuses, the context does not).
+3. Then the UI styling pass (incident panel is now styled in the same pass as
+   the portfolio/project/review surfaces; notes in `docs/ui-notes.md`).
 
 ## Blocked
 
@@ -158,11 +175,36 @@ needs polish sooner.
 
 ## Spec Deltas / Open Items
 
-- **Proposal result quarantine scope** (4a-2): paths are filtered + counted; a
-  secret value in a *visible* result file quarantines the whole result, so a
-  secret behind a hidden path name is not content-scanned. Recorded in spec
-  §7.6 ("Proposal results (4a-2)"). **4c-3 must revisit this** before rendering
-  file content on the proposal page (4c-2 still renders paths only).
+- **Proposal result scanning has two scopes (4a-2 → 4c-3)** — the rendered diff
+  filters sensitive paths and content-scans only visible files, while incident
+  resolution re-scans **all** result blobs (a hidden-path filename alone keeps
+  an incident open, because the creation check quarantines it too). Recorded in
+  spec §7.6 ("Proposal results (4a-2 / 4c-3)"). Content rendering on the review
+  surface is still deferred, so the gap is closed for now.
+- **Integrity incidents are effectively permanent (4c-3)** — resolution now
+  re-asserts `meld_commit_sha`'s tree equals `result_tree_sha`, so an
+  `approval_integrity` incident never clears while the mismatch holds; the only
+  exit is reject + re-propose. This is deliberate (D8), but it means a
+  transient store problem that later becomes consistent **and** leaves the
+  proposal row unchanged still cannot be resolved. Recorded in spec §6.7.
+- **Acknowledgment is a nil clause (4c-3)** — plan D9 says node/project
+  incidents resolve with *no* verify callback; the implementation always passes
+  `ProposalView.verify_resolution/1`, whose `proposal_id: nil` clause is the
+  acknowledgment path. Behaviour is identical and the context still owns the
+  "no scan" decision; kept because passing different opt lists would duplicate
+  the branch in the LiveView. Documented in spec §6.7 as acknowledgment.
+- **Incident list is capped at 50 (4c-3)** — `Incidents.list_open/2` returns at
+  most `max_open_incidents/0` rows. Critical incidents sort first, so the cap
+  only hides lower severities; the panel says "Showing the 50 newest open
+  incidents" when truncated. No paging/deep-link to older incidents yet.
+- **Verification runs outside the resolution lock (4c-3)** — `Incidents.resolve/4`
+  loads and verifies the incident before the `FOR UPDATE` transaction, so a
+  filesystem scan never holds the row or a pool connection. Two concurrent
+  resolvers may therefore both scan before one writes; the write is idempotent
+  and incident targets are immutable, so the duplicate scan is accepted.
+- **`verify_resolution/1` goes beyond plan P2-T10** — it returns
+  `integrity_failed` (in addition to `still_risky | unverifiable`) and the UI
+  flashes "reject and re-propose". Review finding M1; recorded in spec §6.7.
 - **Approval integrity is uncapped (4c-1)** — `Proposals.result_integrity/2`
   walks the result with `GitStore.objects_from/2` (no limits, as the approved
   plan specifies), while the reviewer's diff is capped by
@@ -194,20 +236,15 @@ needs polish sooner.
 - **The demo stack is not a release artifact** — `docker/Dockerfile.demo` builds
   `MIX_ENV=dev` and keeps sources for `code_reloader`; spec §12.8 (release
   image) remains open work.
-- **Review-page identities (4c-2)** — the plan asks for proposer/reviewer
-  email; §7.2 gates the member list (roles) to owner/trusted. The page now shows
-  emails only to `can_manage?` (owner/trusted) and a display name to viewers.
-  Record the review-page identity rule in §7.2 during P3-T2.
-- **Review-page freshness (4c-2, Iron Law 5)** — `isolated?` and `can_decide?`
-  are recomputed on every `handle_params` and after every decision, but nothing
-  pushes external changes: an incident opened while the page is open leaves the
-  Approve control looking enabled until reload. The event path re-reads the
-  membership and the context re-checks incidents, so a stale click fails closed
-  (`:blocked | :forbidden`). There is no incident broadcast to subscribe to;
-  P2 should add one when it owns the panel.
-- **No entry point to the review hub (4c-2)** — nothing links to
-  `/p/:slug/reviews` from `ProjectLive`; reviewers must know the URL. Add a
-  member-only nav link (P3).
+- **Review-page freshness (4c-2/4c-3, Iron Law 5)** — `isolated?` and
+  `can_decide?` are recomputed on every `handle_params`, after every decision,
+  and after every incident resolution, but nothing pushes external changes: an
+  incident opened while either page is open leaves controls looking usable
+  until reload. The event paths re-read the membership and the context
+  re-checks incidents/roles, so a stale click fails closed
+  (`:blocked | :forbidden`). 4c-3 owns the incident panel and deliberately adds
+  no PubSub (plan Iron Law table: "No PubSub subscription added in 4c"), so
+  incident broadcasts plus subscriptions are a 4d item.
 - **Render duplication (4c-2)** — the review page repeats the public proposal
   result block (`proposal_html/show.html.heex`) with its own isolation sentinel,
   and `kind_title`/`format_flags`/`format_time` are now duplicated across four
@@ -284,23 +321,21 @@ needs polish sooner.
 - Concurrent duplicate meld proposals for the same parents are accepted (two
   LLM calls, two proposals) until 4d adds queue dedupe.
 - Meld validation syntax-checks only `.ex`/`.exs`; other languages are
-  reviewer-checked in 4c.
-- `result_metadata` is server-owned and never cast; surfacing it in the review
-  UI is optional 4c work.
+  reviewer-checked once review renders file content (not in 4c — it renders
+  paths only).
+- `result_metadata` is server-owned and never cast; it is still not surfaced in
+  the review UI (optional 4d/UI-pass work).
 
 ## Last Updated
-2026-11-05 — demo stack shipped end to end (P0–P3 in one session at the user's
-request): compile-gated demo password auth with a prod guard, `DemoSeed` + mix
-task, a dev-mode Docker image and compose stack, header navigation with
-sign-in/out and a member-only Reviews link, `docs/demo.md`, and spec updates.
-Verification: format/compile clean in dev and prod (prod has no `:demo`
-strategy), 551 tests green, and the compose smoke passed (`/health`, `/`, both
-demo projects, a proposal token, `/sign-in`, anonymous reviews redirect, demo
-sign-in session). Two bugs fixed during the run: `sign_out_route/3` takes the
-path before opts, and the seed task now disables the endpoint so it can run
-inside an already-running container. An Ecto challenge review then found and
-fixed 6 issues: token revocation used the bare UUID instead of Ash's
-`user?id=<uuid>` subject (medium), seeding raced on unique indexes, the seed was
-non-atomic, `hashed_password` accepted non-bcrypt values, and the review-queue
-sort lacked a covering index. UI observations now have a durable home in
-`docs/ui-notes.md`; the intended next slice is 4c-3 (incident panel).
+2026-11-05 — 4c-3 (incident panel + resolution) shipped from
+`.claude/plans/review-ui-4c/plan.md` P2-T9..P3-T2: incident panel on the review
+hub, `resolve_incident` with a fresh role check, `ProposalView.verify_resolution/1`
+(re-scan + tree invariant), resolution verification moved before the row lock,
+`list_open/2` capped at 50, and spec §6.6/§6.7/§7.1/§7.2/§7.6/§13 updates.
+Independent review verdict PASS WITH WARNINGS; all four Mediums fixed (integrity
+incidents can no longer be dismissed while the tree mismatches, scan off the
+lock, `:unverifiable`/hidden-path/integrity/promotion/cross-project tests added)
+plus the Lows (closed authorization assertion, refreshed `can_decide?`, summary
+computed once with an ellipsis, log shape only). Verification: format/compile
+clean in dev and prod, 565 tests green (161 + 115 + 289). Next slice is 4d; the
+UI styling pass follows it, with notes in `docs/ui-notes.md`.

@@ -13,7 +13,21 @@ styling pass is planned after 4c-3 (incident panel) unless a demo is imminent.
 
 ## Open
 
-- (none yet)
+- `/p/:slug/reviews` — the open-incident panel reuses `.file-tree`/`.file-row`
+  and `.flag-badge`, so a **critical** incident looks the same as a `high` one
+  and as a proposal status badge. Give severity its own treatment (color,
+  icon, or label) in the styling pass.
+- `/p/:slug/reviews` — the panel renders *below* the proposal list. With a long
+  review queue the incidents (the things that block approval) are below the
+  fold; consider moving the panel above the list or adding an open count next
+  to the "Open incidents" heading.
+- `/p/:slug/reviews` — details render as one dense line
+  (`patterns: … · reason: …`) and a long reason is silently cut at 60 chars.
+  Decide whether to wrap, tooltip, or show "more".
+- `/p/:slug/reviews` — Resolve and Acknowledge share the `.admin-button` style
+  and the D8/D9 explanation is a trailing note, not next to the control. A
+  destructive/irreversible-looking "Acknowledge" may need different copy
+  placement.
 
 ## Done
 

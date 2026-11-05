@@ -50,6 +50,29 @@ defmodule Cadence.Server.IncidentsTest do
       assert Incidents.list_open(actor(viewer), "not-a-uuid") == {:error, :not_found}
     end
 
+    test "list_open/2 caps the result at the most recent open incidents" do
+      owner = Ecto.UUID.generate()
+      project = project(owner)
+      membership(project, owner, :owner)
+
+      for _ <- 1..(Incidents.max_open_incidents() + 2) do
+        node = node_fixture(project)
+
+        {:ok, _incident} =
+          Incidents.open(%{
+            project_id: project.id,
+            node_id: node.id,
+            kind: :scan_incomplete,
+            severity: :high,
+            title: "Scan incomplete",
+            details: %{reason: :caps_exceeded}
+          })
+      end
+
+      assert {:ok, incidents} = Incidents.list_open(actor(owner), project.id)
+      assert length(incidents) == Incidents.max_open_incidents()
+    end
+
     test "re-opening the same target and kind returns the existing incident" do
       owner = Ecto.UUID.generate()
       project = project(owner)
@@ -238,6 +261,23 @@ defmodule Cadence.Server.IncidentsTest do
 
       assert Incidents.blocking_node?(project.id, node.id)
       assert Repo.get!(Incident, incident.id).status == :open
+    end
+
+    test "re-resolving a resolved incident skips verification" do
+      owner = Ecto.UUID.generate()
+      project = project(owner)
+      membership(project, owner, :owner)
+      node = node_fixture(project)
+      incident = open_incident(project, node)
+
+      assert {:ok, resolved} = Incidents.resolve(actor(owner), project.id, incident.id)
+
+      assert {:ok, again} =
+               Incidents.resolve(actor(owner), project.id, incident.id,
+                 verify: fn _incident -> flunk("verification must not run twice") end
+               )
+
+      assert again.resolved_at == resolved.resolved_at
     end
 
     test "unknown or wrong-project incidents are not found" do

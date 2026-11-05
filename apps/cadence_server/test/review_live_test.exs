@@ -384,6 +384,374 @@ defmodule Cadence.ServerWeb.ReviewLiveTest do
     end
   end
 
+  describe "incidents" do
+    test "lists open incidents critical first and renders only the redacted summary", %{
+      conn: conn,
+      owner: owner,
+      project: project
+    } do
+      node = node_with_snapshot(project, %{"scan.txt" => "scan me"}, %{message: "scan node"})
+
+      {:ok, high} =
+        Incidents.open(%{
+          project_id: project.id,
+          node_id: node.id,
+          kind: :scan_incomplete,
+          severity: :high,
+          title: "Snapshot scan incomplete",
+          details: %{reason: :too_many_files}
+        })
+
+      {:ok, critical} =
+        Incidents.open(%{
+          project_id: project.id,
+          node_id: node.id,
+          kind: :secret_detected,
+          severity: :critical,
+          title: "Secret detected in snapshot",
+          details: %{patterns: [:github_token], note: "SHOULD_NOT_RENDER"}
+        })
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/demo/reviews")
+      html = render_async(view)
+
+      assert html =~ "Open incidents"
+      assert html =~ "Secret detected in snapshot"
+      assert html =~ "secret detected"
+      assert html =~ "Snapshot scan incomplete"
+      assert html =~ "scan incomplete"
+
+      {critical_index, _} = :binary.match(html, "incident-#{critical.id}")
+      {high_index, _} = :binary.match(html, "incident-#{high.id}")
+      assert critical_index < high_index
+
+      assert html =~ "patterns: github_token"
+      assert html =~ "reason: too_many_files"
+      assert html =~ ~s(href="/p/demo/n/#{node.id}")
+      refute html =~ "SHOULD_NOT_RENDER"
+    end
+
+    test "a granted approver resolves a node incident by acknowledgment", %{
+      conn: conn,
+      project: project
+    } do
+      approver = seed_user("approver@example.com", "Ada Approver")
+      membership(project, approver.id, :trusted, %{approver: true})
+      node = node_with_snapshot(project, %{"scan.txt" => "scan me"}, %{message: "scan node"})
+      incident = open_node_incident(project, node)
+
+      {:ok, view, _html} = live(signed_conn(conn, approver), "/p/demo/reviews")
+      html = render_async(view)
+      assert html =~ "incident-#{incident.id}"
+      assert html =~ "Acknowledge"
+
+      clicked = render_click(view, "resolve_incident", %{"id" => incident.id})
+      assert clicked =~ "Incident resolved."
+
+      html = render_async(view)
+      refute html =~ "incident-#{incident.id}"
+
+      stored = Repo.get!(Cadence.Server.Incident, incident.id)
+      assert stored.status == :resolved
+      assert stored.resolved_by == approver.id
+    end
+
+    test "a risky proposal incident stays open and points at reject-and-re-propose", %{
+      conn: conn,
+      owner: owner,
+      project: project,
+      parent_a: parent_a,
+      parent_b: parent_b
+    } do
+      leaky =
+        snapshot_tree(
+          project,
+          %{"leak.txt" => "token = ghp_abcdefghijklmnopqrstuvwxyz0123456789"},
+          "leaky result"
+        )
+
+      proposal = meld_proposal(project, owner.id, [parent_a, parent_b], leaky)
+
+      {:ok, incident} =
+        Incidents.open(%{
+          project_id: project.id,
+          proposal_id: proposal.id,
+          kind: :secret_detected,
+          severity: :critical,
+          title: "Secret detected in meld result",
+          details: %{patterns: [:github_token]}
+        })
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/demo/reviews")
+      assert render_async(view) =~ "Resolve"
+
+      clicked = render_click(view, "resolve_incident", %{"id" => incident.id})
+      assert clicked =~ "still contains sensitive content"
+      assert clicked =~ "reject and re-propose"
+
+      assert render_async(view) =~ "incident-#{incident.id}"
+      assert Repo.get!(Cadence.Server.Incident, incident.id).status == :open
+    end
+
+    test "a clean proposal result resolves its incident", %{
+      conn: conn,
+      owner: owner,
+      proposal: proposal
+    } do
+      {:ok, incident} =
+        Incidents.open(%{
+          project_id: proposal.project_id,
+          proposal_id: proposal.id,
+          kind: :secret_detected,
+          severity: :critical,
+          title: "Secret detected in meld result",
+          details: %{patterns: [:github_token]}
+        })
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/demo/reviews")
+      render_async(view)
+
+      render_click(view, "resolve_incident", %{"id" => incident.id})
+      html = render_async(view)
+
+      refute html =~ "incident-#{incident.id}"
+      stored = Repo.get!(Cadence.Server.Incident, incident.id)
+      assert stored.status == :resolved
+      assert stored.resolved_by == owner.id
+    end
+
+    test "a project-scoped incident resolves by acknowledgment", %{
+      conn: conn,
+      owner: owner,
+      project: project
+    } do
+      {:ok, incident} =
+        Incidents.open(%{
+          project_id: project.id,
+          kind: :meld_failed,
+          severity: :high,
+          title: "Meld agent failed",
+          details: %{reason: :timeout}
+        })
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/demo/reviews")
+      assert render_async(view) =~ "Project-wide"
+
+      render_click(view, "resolve_incident", %{"id" => incident.id})
+      html = render_async(view)
+
+      refute html =~ "incident-#{incident.id}"
+      assert Repo.get!(Cadence.Server.Incident, incident.id).status == :resolved
+    end
+
+    test "viewers see the panel but cannot resolve, even with an injected event", %{
+      conn: conn,
+      project: project
+    } do
+      viewer = seed_user("viewer@example.com", "Vic Viewer")
+      membership(project, viewer.id, :viewer)
+      node = node_with_snapshot(project, %{"scan.txt" => "scan me"}, %{message: "scan node"})
+      incident = open_node_incident(project, node)
+
+      {:ok, view, _html} = live(signed_conn(conn, viewer), "/p/demo/reviews")
+      html = render_async(view)
+
+      assert html =~ "Secret detected in snapshot"
+      refute html =~ "Acknowledge"
+      refute html =~ ~s(phx-click="resolve_incident")
+
+      denied = render_click(view, "resolve_incident", %{"id" => incident.id})
+      assert denied =~ "Only the project owner or a granted approver may resolve incidents."
+      refute denied =~ ~s(phx-click="resolve_incident")
+
+      assert Repo.get!(Cadence.Server.Incident, incident.id).status == :open
+    end
+
+    test "a trusted member without the approver grant cannot resolve", %{
+      conn: conn,
+      project: project
+    } do
+      trusted = seed_user("trusted@example.com", "Tess Trusted")
+      membership(project, trusted.id, :trusted)
+      node = node_with_snapshot(project, %{"scan.txt" => "scan me"}, %{message: "scan node"})
+      incident = open_node_incident(project, node)
+
+      {:ok, view, _html} = live(signed_conn(conn, trusted), "/p/demo/reviews")
+      html = render_async(view)
+
+      assert html =~ "Secret detected in snapshot"
+      refute html =~ ~s(phx-click="resolve_incident")
+
+      denied = render_click(view, "resolve_incident", %{"id" => incident.id})
+      assert denied =~ "Only the project owner or a granted approver may resolve incidents."
+      assert Repo.get!(Cadence.Server.Incident, incident.id).status == :open
+    end
+
+    test "an unscannable proposal result keeps its incident open without crashing", %{
+      conn: conn,
+      owner: owner,
+      project: project,
+      parent_a: parent_a,
+      parent_b: parent_b
+    } do
+      proposal =
+        meld_proposal(
+          project,
+          owner.id,
+          [parent_a, parent_b],
+          result_for(project, "gone"),
+          %{meld_commit_sha: String.duplicate("0", 40)}
+        )
+
+      incident = open_proposal_incident(proposal)
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/demo/reviews")
+      render_async(view)
+
+      clicked = render_click(view, "resolve_incident", %{"id" => incident.id})
+      assert clicked =~ "could not be scanned, so the incident stays open"
+
+      assert render_async(view) =~ "incident-#{incident.id}"
+      assert Repo.get!(Cadence.Server.Incident, incident.id).status == :open
+    end
+
+    test "a sensitive path keeps a proposal incident open even when its content is clean", %{
+      conn: conn,
+      owner: owner,
+      project: project,
+      parent_a: parent_a,
+      parent_b: parent_b
+    } do
+      hidden =
+        snapshot_tree(
+          project,
+          %{"keep.txt" => "keep", ".env" => "SAFE=1"},
+          "hidden path result"
+        )
+
+      proposal = meld_proposal(project, owner.id, [parent_a, parent_b], hidden)
+      incident = open_proposal_incident(proposal)
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/demo/reviews")
+      render_async(view)
+
+      clicked = render_click(view, "resolve_incident", %{"id" => incident.id})
+      assert clicked =~ "still contains sensitive content"
+
+      assert Repo.get!(Cadence.Server.Incident, incident.id).status == :open
+    end
+
+    test "an approval-integrity incident cannot be resolved while the tree mismatches", %{
+      conn: conn,
+      owner: owner,
+      project: project,
+      parent_a: parent_a,
+      parent_b: parent_b
+    } do
+      proposal =
+        meld_proposal(
+          project,
+          owner.id,
+          [parent_a, parent_b],
+          result_for(project, "mismatch"),
+          %{result_tree_sha: String.duplicate("b", 40)}
+        )
+
+      {:ok, incident} =
+        Incidents.open(%{
+          project_id: project.id,
+          proposal_id: proposal.id,
+          kind: :scan_incomplete,
+          severity: :critical,
+          title: "Meld result could not be verified",
+          details: %{stage: :approval_integrity, reason: :tree_mismatch}
+        })
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/demo/reviews")
+      render_async(view)
+
+      clicked = render_click(view, "resolve_incident", %{"id" => incident.id})
+      assert clicked =~ "still does not match the proposal"
+
+      assert Repo.get!(Cadence.Server.Incident, incident.id).status == :open
+    end
+
+    test "a promotion proposal incident resolves without a store scan", %{
+      conn: conn,
+      owner: owner,
+      project: project
+    } do
+      target = node_with_snapshot(project, %{"promote.txt" => "ready"}, %{message: "promote me"})
+      proposal = promotion_proposal(project, owner.id, target)
+
+      {:ok, incident} =
+        Incidents.open(%{
+          project_id: project.id,
+          proposal_id: proposal.id,
+          kind: :scan_incomplete,
+          severity: :critical,
+          title: "Promotion needs review",
+          details: %{reason: :tree_mismatch}
+        })
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/demo/reviews")
+      render_async(view)
+
+      render_click(view, "resolve_incident", %{"id" => incident.id})
+
+      assert Repo.get!(Cadence.Server.Incident, incident.id).status == :resolved
+    end
+
+    test "unknown and cross-project incident ids are refused", %{
+      conn: conn,
+      owner: owner
+    } do
+      other = project(owner.id, %{name: "Other", slug: "other"})
+      membership(other, owner.id, :owner)
+      other_node = node_with_snapshot(other, %{"other.txt" => "other"}, %{message: "other"})
+      other_incident = open_node_incident(other, other_node)
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/demo/reviews")
+      render_async(view)
+
+      cross = render_click(view, "resolve_incident", %{"id" => other_incident.id})
+      assert cross =~ "This incident no longer exists."
+      assert Repo.get!(Cadence.Server.Incident, other_incident.id).status == :open
+
+      unknown = render_click(view, "resolve_incident", %{"id" => Ecto.UUID.generate()})
+      assert unknown =~ "This incident no longer exists."
+      assert Repo.get!(Cadence.Server.Incident, other_incident.id).status == :open
+    end
+  end
+
+  defp open_node_incident(project, node) do
+    {:ok, incident} =
+      Incidents.open(%{
+        project_id: project.id,
+        node_id: node.id,
+        kind: :secret_detected,
+        severity: :critical,
+        title: "Secret detected in snapshot",
+        details: %{patterns: [:github_token]}
+      })
+
+    incident
+  end
+
+  defp open_proposal_incident(proposal) do
+    {:ok, incident} =
+      Incidents.open(%{
+        project_id: proposal.project_id,
+        proposal_id: proposal.id,
+        kind: :secret_detected,
+        severity: :critical,
+        title: "Secret detected in meld result",
+        details: %{patterns: [:github_token]}
+      })
+
+    incident
+  end
+
   defp load_parents(project) do
     [parent_a, parent_b] = [
       node_with_snapshot(project, %{"a.txt" => "a"}, %{message: "a"}),
