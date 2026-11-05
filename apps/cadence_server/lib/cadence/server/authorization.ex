@@ -36,6 +36,17 @@ defmodule Cadence.Server.Authorization do
   def can_propose?(%Membership{role: role}), do: role in @propose_roles
 
   @doc """
+  Whether the membership may manage the project: owner or trusted.
+
+  This is the web layer's "manage" audience — the raw-content toggle and the
+  member list with roles (§7.2). It is a superset of `can_decide?/1`: trusted
+  members can manage without the `approver` grant.
+  """
+  @spec can_manage?(Membership.t() | nil) :: boolean()
+  def can_manage?(nil), do: false
+  def can_manage?(%Membership{role: role}), do: role in @propose_roles
+
+  @doc """
   Whether the membership may decide proposals or resolve blocking incidents.
 
   Owners always may; trusted members only with the per-project `approver`

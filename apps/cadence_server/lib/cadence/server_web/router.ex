@@ -12,6 +12,7 @@ defmodule Cadence.ServerWeb.Router do
   pipeline :browser do
     plug(:accepts, ["html"])
     plug(:fetch_session)
+    plug(:fetch_flash)
     plug(:protect_from_forgery)
     plug(:put_secure_browser_headers)
     plug(:load_from_session)
@@ -39,6 +40,8 @@ defmodule Cadence.ServerWeb.Router do
       live("/p/:slug/n/:node_id/tree", ProjectLive, :tree)
       live("/p/:slug/n/:node_id/tree/*path", ProjectLive, :tree)
       live("/p/:slug/n/:node_id/blob/*path", ProjectLive, :blob)
+      live("/p/:slug/reviews", ReviewLive.Index, :index)
+      live("/p/:slug/reviews/:proposal_id", ReviewLive.Show, :show)
     end
 
     get("/auth/tokens/new", TokenController, :new)
