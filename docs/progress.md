@@ -71,9 +71,12 @@ Phase 4 — unions, proposals & review. 4a-1, 4a-2, 4b, and 4b-2 are complete;
 
 ## Next
 
-1. **4c — review UI + incident panel + approve/reject** (must also add the
-   `meld_commit_sha` ↔ `result_tree_sha` cross-check before exposing approval,
-   and obtain the resolution endpoints/UX that 4b-2 deliberately left out).
+1. Execute **4c — review UI + incident panel + approve/reject** from
+   `.claude/plans/review-ui-4c/plan.md` (approved 2026-11-05; 13 tasks, three
+   sessions: 4c-1 approval backend, 4c-2 review hub, 4c-3 incident panel).
+   Scope is review-only: no proposal-creation UI (4d wires union/pull). The
+   plan's P0-T1/P0-T2 close the `meld_commit_sha` ↔ `result_tree_sha` integrity
+   gap before approval is exposed. Scratchpad alongside.
 2. Then 4d (broadcast/pull + daemon convergence).
 
 ## Blocked
@@ -152,7 +155,7 @@ Phase 4 — unions, proposals & review. 4a-1, 4a-2, 4b, and 4b-2 are complete;
   UI is optional 4c work.
 
 ## Last Updated
-2026-11-05 — 4b-2 complete: server push scan (`NodeScans`), node-linked
-incidents, incident-first quarantine, spec §6.7 resolution nuance. 490 tests
-green. Run artifacts: `.claude/plans/push-scan-4b2/{plan,progress}.md`.
-Next: 4c.
+2026-11-05 — 4c planned and approved (`.claude/plans/review-ui-4c/plan.md`):
+approval backend + review hub + incident panel across three sessions, with the
+result-integrity check before approval. Iron Law 5 added (cached-assign
+freshness). Tree clean; 490 tests green as of the 4b-2 commit. Next: 4c-1.
