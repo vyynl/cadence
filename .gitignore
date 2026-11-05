@@ -24,3 +24,9 @@ erl_crash.dump
 .DS_Store
 .idea/
 .vscode/
+
+# Agent tooling
+# The plugin is its own git repository; restore it with scripts/setup-opencode.sh.
+.opencode/skills/elixir-phoenix/
+# Run artifacts from skill workflows (plans, reviews, scratchpads).
+.claude/

@@ -67,7 +67,12 @@ cadence/                        (umbrella root)
 │   ├── spec.md                 CANONICAL CONTRACT
 │   ├── progress.md             SESSION HANDOFF (see §2)
 │   ├── phase-4-prep.md         current phase brief
+│   ├── opencode.md             agent tooling: skills, gates, artifacts
 │   └── archive/                historical briefs + full Phase 1–3 log
+├── scripts/
+│   └── setup-opencode.sh       vendor/update the agent skills checkout
+├── .opencode/                  agent tooling (skills checkout is git-ignored)
+├── opencode.jsonc              formatter + destructive-command guards
 ├── mix.exs                     umbrella root
 ├── docker-compose.yml          server deployment (planned, spec §12.4)
 └── AGENTS.md                   this file
@@ -273,6 +278,100 @@ A task is done when:
 Do not declare "done" when only the first item is checked.
 
 ---
+
+## 12. Agent Tooling (OpenCode + Elixir/Phoenix skills)
+
+<!-- ELIXIR-PHOENIX-PLUGIN:START -->
+<!-- Hand-maintained OpenCode port of /phx-init | 2026-11-05 | plugin v3.2.2 -->
+<!-- Stack: Phoenix 1.8, Ecto 3.14, Ash 3.36 (server only), LiveView 1.2 -->
+
+OpenCode V2 reads `AGENTS.md` only — it does **not** fall back to `CLAUDE.md`.
+`/phx-init` therefore has no effect here and must not be run. This block is the
+manual equivalent: update it by hand when the plugin version changes (see
+`docs/opencode.md`).
+
+Skills are vendored under `.opencode/skills/elixir-phoenix/targets/opencode/skills/`
+and are git-ignored; restore with `scripts/setup-opencode.sh`. Load one with
+`@skill-id` or the `skill` tool. Slash commands such as `/phx-plan` are not
+installed by this target.
+
+Authority order: §4 Hard Rules, then `docs/spec.md`, then skill instructions.
+If a skill contradicts the spec, stop and ask — do not improvise.
+
+### Routing
+
+| Request | Path |
+|---|---|
+| Bug, stack trace, unexpected behaviour | `@phx-investigate` |
+| Single-file change (<50 lines), config, CSS | `@phx-quick` |
+| Feature spanning 2+ contexts, new domain concept | `@phx-plan` → `@phx-work` → `@phx-review` |
+| Auth, sessions, tokens, sync protocol | `@phx-plan`, plus `@security` — security work never skips planning |
+| Scope still unclear | `@phx-brainstorm` |
+| Domain reference while coding | `@ecto-patterns`, `@liveview-patterns`, `@testing`, `@ash-framework`, `@elixir-idioms` |
+| Slow code, memory, call chains | `@phx-perf`, `@phx-trace` |
+| End of a slice | `@phx-verify`, then `@phx-review` |
+
+### Artifacts vs. session state
+
+Skill workflows write to `.claude/plans/{slug}/` (plugin convention,
+git-ignored). That is **run** state: research, scratchpads, review output.
+
+- `phx-work` / `phx-full` resume ledger → `.claude/plans/{slug}/progress.md`.
+- `docs/progress.md` stays the canonical session handoff (§2) and is still the
+  only state the next session reads cold.
+- At wrap-up, fold durable outcomes into `docs/progress.md`; promote reusable
+  lessons into `docs/`. Do not let `.claude/solutions/` become a second
+  knowledge base.
+
+### IRON LAWS — stop and explain if code would violate one
+
+**LiveView**
+1. No DB query in a disconnected mount → `assign_async`.
+2. Use streams for lists over ~100 items.
+3. Check `connected?/1` before subscribing to PubSub.
+4. Match `{:error, %Ecto.Changeset{}}` explicitly; a bare `{:error, _}` hides
+   form errors.
+
+**Ecto**
+5. No `:float` for money → `:decimal` or integer cents.
+6. Pin values with `^` in queries; never interpolate.
+7. Separate queries for `has_many`, JOIN for `belongs_to`.
+
+**Security**
+8. No `String.to_atom/1` on user input.
+9. Authorize every `handle_event`; mount auth is not enough.
+10. No `raw/1` on untrusted content.
+
+**OTP**
+11. No process without a concurrency, state, or isolation reason.
+12. Mix tasks: `Mix.Task.run("app.config")` +
+    `Application.ensure_all_started/1`, never `app.start`.
+13. Capture the Gettext/CLDR locale before spawning a Task or GenServer.
+
+**Style**
+14. Comments hold durable facts (footguns, quirks) — not change reasoning or
+    issue tags. That belongs in the commit/PR.
+
+### Ash (`cadence_server` only)
+
+Load `@ash-framework` before writing Ash code. Prefer domain code interfaces
+over direct `Repo` calls. `cadence_shared` schemas stay plain Ecto — Ash must
+not leak across the app boundary (§3).
+
+### Verification gate (umbrella root)
+
+```bash
+mix format --check-formatted &&
+mix compile --warnings-as-errors &&
+mix test
+```
+
+Focused loop first, e.g. `mix test apps/cadence_server/test/proposals_test.exs`.
+`credo` and `dialyzer` are **not** configured in this umbrella — do not report
+them as run. The `mix` formatter in `opencode.jsonc` reformats files after
+edits; the gate still decides whether the tree is clean.
+
+<!-- ELIXIR-PHOENIX-PLUGIN:END -->
 
 ## Appendix A — `docs/progress.md` Template
 
