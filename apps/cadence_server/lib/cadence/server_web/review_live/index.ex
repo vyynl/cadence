@@ -16,6 +16,16 @@ defmodule Cadence.ServerWeb.ReviewLive.Index do
   after a clean re-scan — a remaining secret must be fixed by rejecting and
   re-proposing — while node and project incidents resolve by acknowledgment
   (§6.7).
+
+  ## Freshness
+
+  After the socket connects, `handle_params/3` subscribes to `project:<id>`
+  once. `{:proposal_created, …}` and `{:proposal_decided, …}` reload the
+  queue, `{:incidents_changed, …}` reloads the incident panel, and every
+  handled event re-reads the membership before assigning `can_decide?` so a
+  revoked grant stops rendering the controls. A local decision or resolution
+  keeps its explicit reload and may also receive its own broadcast, which is
+  accepted as one redundant async load.
   """
 
   use Cadence.ServerWeb, :live_view
@@ -32,7 +42,8 @@ defmodule Cadence.ServerWeb.ReviewLive.Index do
        page_title: "Reviews",
        project: nil,
        not_found: false,
-       can_decide?: false
+       can_decide?: false,
+       subscribed_project_id: nil
      )}
   end
 
@@ -43,7 +54,9 @@ defmodule Cadence.ServerWeb.ReviewLive.Index do
         user_id = socket.assigns.current_user.id
 
         socket =
-          assign(socket,
+          socket
+          |> maybe_subscribe(project)
+          |> assign(
             page_title: "Reviews · #{project.name}",
             project: project,
             not_found: false,
@@ -66,7 +79,9 @@ defmodule Cadence.ServerWeb.ReviewLive.Index do
 
       {:error, :not_found} ->
         {:noreply,
-         assign(socket,
+         socket
+         |> unsubscribe()
+         |> assign(
            page_title: "Project not found",
            project: nil,
            not_found: true,
@@ -106,6 +121,25 @@ defmodule Cadence.ServerWeb.ReviewLive.Index do
   end
 
   def handle_event(_event, _params, socket), do: {:noreply, socket}
+
+  @impl true
+  def handle_info({:proposal_created, project_id, _proposal_id}, socket) do
+    {:noreply, reload_proposals_for(socket, project_id)}
+  end
+
+  def handle_info({:proposal_decided, project_id, _proposal_id, _status}, socket) do
+    {:noreply, reload_proposals_for(socket, project_id)}
+  end
+
+  def handle_info({:incidents_changed, project_id, _incident_id, _proposal_id, _node_id}, socket) do
+    {:noreply, reload_incidents_for(socket, project_id)}
+  end
+
+  # A subscribed socket receives every project event; these cannot change the
+  # review queue or the incident panel.
+  def handle_info({:nodes_pushed, _project_id, _node_ids}, socket), do: {:noreply, socket}
+
+  def handle_info({:preferences_updated, _project_id, _user_id}, socket), do: {:noreply, socket}
 
   @impl true
   def render(assigns) do
@@ -254,6 +288,73 @@ defmodule Cadence.ServerWeb.ReviewLive.Index do
     user_id = socket.assigns.current_user.id
 
     assign_async(socket, :incidents, fn -> load_incidents(project, user_id) end)
+  end
+
+  # The project id is only known once the slug resolves, so subscription
+  # happens in `handle_params/3`, never `mount/3`. The assign keeps repeated
+  # patches idempotent and lets a project switch move the subscription rather
+  # than join a second topic.
+  defp maybe_subscribe(%{assigns: %{subscribed_project_id: current}} = socket, project) do
+    cond do
+      not connected?(socket) ->
+        socket
+
+      current == project.id ->
+        socket
+
+      true ->
+        if current, do: Phoenix.PubSub.unsubscribe(Cadence.Server.PubSub, "project:#{current}")
+        Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "project:#{project.id}")
+        assign(socket, :subscribed_project_id, project.id)
+    end
+  end
+
+  defp unsubscribe(%{assigns: %{subscribed_project_id: nil}} = socket), do: socket
+
+  defp unsubscribe(socket) do
+    Phoenix.PubSub.unsubscribe(
+      Cadence.Server.PubSub,
+      "project:#{socket.assigns.subscribed_project_id}"
+    )
+
+    assign(socket, :subscribed_project_id, nil)
+  end
+
+  defp reload_proposals_for(socket, project_id) do
+    case event_context(socket, project_id) do
+      nil ->
+        socket
+
+      {project, user_id} ->
+        socket
+        |> refresh_role(project)
+        |> assign_async(:proposals, fn -> load_proposals(project, user_id) end)
+    end
+  end
+
+  defp reload_incidents_for(socket, project_id) do
+    case event_context(socket, project_id) do
+      nil ->
+        socket
+
+      {project, user_id} ->
+        socket
+        |> refresh_role(project)
+        |> assign_async(:incidents, fn -> load_incidents(project, user_id) end)
+    end
+  end
+
+  defp event_context(socket, project_id) do
+    case {socket.assigns.project, socket.assigns[:current_user]} do
+      {%{id: ^project_id}, %{id: user_id}} -> {socket.assigns.project, user_id}
+      _other -> nil
+    end
+  end
+
+  # Mount authorization is not enough: a revoked grant must stop rendering the
+  # controls on the next project event, not only after a reload.
+  defp refresh_role(socket, project) do
+    assign(socket, :can_decide?, fresh_decider?(socket.assigns[:current_user], project))
   end
 
   defp flash_resolution(socket, {:ok, _incident}) do

@@ -20,14 +20,18 @@ defmodule Cadence.Server.Proposals do
   unverifiable result cannot be approved until that incident is resolved.
 
   Successful decisions broadcast `{:proposal_decided, project_id, proposal_id,
-  status}`. Any approval that touches a node also broadcasts
+  status}`. A newly created pending proposal broadcasts
+  `{:proposal_created, project_id, proposal_id}` so a review queue can insert it
+  without a reload (creation moves no node and no session pointer). Any
+  approval that touches a node also broadcasts
   `{:nodes_pushed, project_id, [node_id]}` — a new meld node, a reused meld
   node re-pinned, or a promotion target whose pin changed. Every successful
   decision additionally wakes each project member's daemon through
   `Cadence.Server.SyncNotifier` (`{:sync_available, project_id}`); pinning
   bumps the node's pull cursor so the change is actually pulled. An idempotent
   re-decision repeats `proposal_decided` with the stored status. Nothing is
-  broadcast when a decision is refused.
+  broadcast when a decision is refused, and a creation that fails validation or
+  authorization broadcasts nothing.
   """
 
   import Ecto.Query
@@ -77,7 +81,14 @@ defmodule Cadence.Server.Proposals do
            {:ok, _project} <- fetch_project(project_id),
            {:ok, _membership} <- authorize_proposer(actor, project_id),
            :ok <- validate_references(changeset, project_id) do
-        Repo.insert(changeset)
+        case Repo.insert(changeset) do
+          {:ok, proposal} = ok ->
+            broadcast_created(proposal)
+            ok
+
+          other ->
+            other
+        end
       end
     else
       {:error, changeset}
@@ -252,6 +263,24 @@ defmodule Cadence.Server.Proposals do
   end
 
   def result_node(%Proposal{}), do: nil
+
+  @doc """
+  The node approval would attach or pin for a pending proposal, if one already
+  exists.
+
+  Mirrors the node `ensure_node_approvable/2` checks: a promotion's target
+  node, or the existing node carrying a meld's result commit (a first-time meld
+  creates a fresh node, which no incident can quarantine yet). `nil` means the
+  decision has no pre-existing node that an incident could block.
+  """
+  @spec decision_node(Proposal.t()) :: Node.t() | nil
+  def decision_node(%Proposal{kind: :promotion, project_id: project_id, target_node_id: id})
+      when is_binary(id) do
+    Portfolio.node_for_project(project_id, id)
+  end
+
+  def decision_node(%Proposal{kind: :meld} = proposal), do: existing_meld_node(proposal)
+  def decision_node(%Proposal{}), do: nil
 
   @doc """
   Approves a pending proposal. Idempotent for an already-approved one.
@@ -490,6 +519,26 @@ defmodule Cadence.Server.Proposals do
     SyncNotifier.project_changed(proposal.project_id)
 
     :ok
+  end
+
+  # Creation is live queue state only: no node moves, so no daemon needs waking.
+  # Best-effort like the decision broadcast — the row is already committed.
+  defp broadcast_created(proposal) do
+    Phoenix.PubSub.broadcast(
+      Cadence.Server.PubSub,
+      "project:#{proposal.project_id}",
+      {:proposal_created, proposal.project_id, proposal.id}
+    )
+
+    :ok
+  rescue
+    error ->
+      Logger.warning("proposal broadcast failed: #{inspect(error.__struct__)}")
+      :ok
+  catch
+    kind, _reason ->
+      Logger.warning("proposal broadcast failed: #{inspect(kind)}")
+      :ok
   end
 
   defp node_changed?(nil), do: false

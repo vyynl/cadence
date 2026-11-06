@@ -296,6 +296,146 @@ defmodule Cadence.Server.IncidentsTest do
     end
   end
 
+  describe "broadcasts" do
+    test "a new incident broadcasts its ids on the project topic" do
+      owner = Ecto.UUID.generate()
+      project = project(owner)
+      membership(project, owner, :owner)
+      node = node_fixture(project)
+
+      Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "project:#{project.id}")
+
+      assert {:ok, incident} =
+               Incidents.open(%{
+                 project_id: project.id,
+                 node_id: node.id,
+                 kind: :secret_detected,
+                 severity: :critical,
+                 title: "Secret detected",
+                 details: %{patterns: [:github_token]}
+               })
+
+      assert_receive {:incidents_changed, project_id, incident_id, proposal_id, node_id}
+      assert project_id == project.id
+      assert incident_id == incident.id
+      assert is_nil(proposal_id)
+      assert node_id == node.id
+    end
+
+    test "a duplicate open sends no second event" do
+      owner = Ecto.UUID.generate()
+      project = project(owner)
+      membership(project, owner, :owner)
+      node = node_fixture(project)
+
+      attrs = %{
+        project_id: project.id,
+        node_id: node.id,
+        kind: :secret_detected,
+        severity: :critical,
+        title: "Secret detected",
+        details: %{patterns: [:github_token]}
+      }
+
+      Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "project:#{project.id}")
+
+      assert {:ok, first} = Incidents.open(attrs)
+      assert_receive {:incidents_changed, _project_id, first_id, _proposal_id, _node_id}
+      assert first_id == first.id
+
+      assert {:ok, second} = Incidents.open(attrs)
+      assert second.id == first.id
+      refute_receive {:incidents_changed, _project_id, _incident_id, _proposal_id, _node_id}
+    end
+
+    test "resolving an open incident broadcasts once; re-resolving is silent" do
+      owner = Ecto.UUID.generate()
+      project = project(owner)
+      membership(project, owner, :owner)
+      node = node_fixture(project)
+      incident = open_incident(project, node)
+
+      Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "project:#{project.id}")
+
+      assert {:ok, _resolved} = Incidents.resolve(actor(owner), project.id, incident.id)
+
+      assert_receive {:incidents_changed, project_id, incident_id, _proposal_id, _node_id}
+      assert project_id == project.id
+      assert incident_id == incident.id
+
+      assert {:ok, _again} = Incidents.resolve(actor(owner), project.id, incident.id)
+      refute_receive {:incidents_changed, _project_id, _incident_id, _proposal_id, _node_id}
+    end
+
+    test "a failed verification broadcasts nothing" do
+      owner = Ecto.UUID.generate()
+      project = project(owner)
+      membership(project, owner, :owner)
+      node = node_fixture(project)
+      incident = open_incident(project, node)
+
+      Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "project:#{project.id}")
+
+      assert Incidents.resolve(actor(owner), project.id, incident.id,
+               verify: fn _incident -> {:error, :still_risky} end
+             ) == {:error, :still_risky}
+
+      refute_receive {:incidents_changed, _project_id, _incident_id, _proposal_id, _node_id}
+    end
+
+    test "a subscriber only receives its own project's events" do
+      owner = Ecto.UUID.generate()
+      project = project(owner)
+      other = project(owner)
+      membership(project, owner, :owner)
+      membership(other, owner, :owner)
+      other_node = node_fixture(other)
+
+      Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "project:#{project.id}")
+
+      assert {:ok, _incident} =
+               Incidents.open(%{
+                 project_id: other.id,
+                 node_id: other_node.id,
+                 kind: :secret_detected,
+                 severity: :critical,
+                 title: "Secret detected",
+                 details: %{patterns: [:github_token]}
+               })
+
+      refute_receive {:incidents_changed, _project_id, _incident_id, _proposal_id, _node_id}
+    end
+
+    test "the write succeeds even when broadcasting is unavailable" do
+      owner = Ecto.UUID.generate()
+      project = project(owner)
+      membership(project, owner, :owner)
+      node = node_fixture(project)
+
+      :ok = Supervisor.terminate_child(Cadence.Server.Supervisor, Phoenix.PubSub.Supervisor)
+      on_exit(fn -> restart_pubsub() end)
+
+      assert {:ok, incident} =
+               Incidents.open(%{
+                 project_id: project.id,
+                 node_id: node.id,
+                 kind: :secret_detected,
+                 severity: :critical,
+                 title: "Secret detected",
+                 details: %{patterns: [:github_token]}
+               })
+
+      assert Repo.get!(Incident, incident.id).status == :open
+    end
+  end
+
+  defp restart_pubsub do
+    case Supervisor.restart_child(Cadence.Server.Supervisor, Phoenix.PubSub.Supervisor) do
+      {:ok, _pid} -> :ok
+      {:error, :running} -> :ok
+    end
+  end
+
   defp open_incident(project, node) do
     {:ok, incident} =
       Incidents.open(%{

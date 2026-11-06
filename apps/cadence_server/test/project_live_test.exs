@@ -248,6 +248,129 @@ defmodule Cadence.ServerWeb.ProjectLiveTest do
     end
   end
 
+  describe "node incident freshness" do
+    test "an incident opened elsewhere hides the selected snapshot live", %{conn: conn} do
+      project = insert_project("live-incident-open")
+      clean = insert_node(project, %{message: "clean node"}, %{"README.md" => "# Clean\n"})
+
+      {:ok, view, _html} = live(conn, "/p/live-incident-open")
+      html = render_patch(view, "/p/live-incident-open/n/#{clean.id}")
+      assert html =~ "README.md"
+      refute html =~ "Snapshot hidden for review"
+
+      open_secret_incident(project, clean)
+
+      html = render(view)
+      assert html =~ "Snapshot hidden for review"
+      refute html =~ "README.md"
+    end
+
+    test "resolving the incident elsewhere restores the clean snapshot live", %{conn: conn} do
+      owner = seed_user("live-resolve@example.com", "Owner")
+      project = insert_project("live-incident-resolve", owner.id)
+      insert_membership(project, owner, :owner)
+
+      clean = insert_node(project, %{message: "clean node"}, %{"README.md" => "# Clean\n"})
+      incident = open_secret_incident(project, clean)
+
+      {:ok, view, _html} = live(conn, "/p/live-incident-resolve")
+
+      assert render_patch(view, "/p/live-incident-resolve/n/#{clean.id}") =~
+               "Snapshot hidden for review"
+
+      assert {:ok, _resolved} = Incidents.resolve(%{id: owner.id}, project.id, incident.id)
+
+      html = render(view)
+      refute html =~ "Snapshot hidden for review"
+      assert html =~ "README.md"
+
+      # Re-patching the same node must reuse the recomputed answer, not the
+      # cached :quarantined one (the cache key includes the incident flag).
+      html = render_patch(view, "/p/live-incident-resolve/n/#{clean.id}")
+      refute html =~ "Snapshot hidden for review"
+      assert html =~ "README.md"
+    end
+
+    test "a secret snapshot stays hidden after an external resolution", %{conn: conn} do
+      owner = seed_user("live-secret@example.com", "Owner")
+      project = insert_project("live-incident-secret", owner.id)
+      insert_membership(project, owner, :owner)
+
+      secret =
+        insert_node(project, %{message: "secret node"}, %{
+          "config.txt" => "token: ghp_abcdefghijklmnopqrstuvwxyz0123456789\n"
+        })
+
+      incident = open_secret_incident(project, secret)
+
+      {:ok, view, _html} = live(conn, "/p/live-incident-secret")
+
+      assert render_patch(view, "/p/live-incident-secret/n/#{secret.id}") =~
+               "Snapshot hidden for review"
+
+      assert {:ok, _resolved} = Incidents.resolve(%{id: owner.id}, project.id, incident.id)
+
+      html = render(view)
+      assert html =~ "Snapshot hidden for review"
+      refute html =~ "config.txt"
+    end
+
+    test "raw view is not hidden by an incident event", %{conn: conn} do
+      owner = seed_user("live-raw@example.com", "Owner")
+      project = insert_project("live-incident-raw", owner.id)
+      insert_membership(project, owner, :owner)
+
+      clean = insert_node(project, %{message: "clean node"}, %{"README.md" => "# Clean\n"})
+
+      {:ok, view, html} = live(signed_conn(conn, owner), "/p/live-incident-raw/n/#{clean.id}")
+      refute html =~ "Snapshot hidden for review"
+
+      assert render_click(view, "toggle_raw", %{}) =~ "Raw view — unfiltered content."
+
+      open_secret_incident(project, clean)
+
+      html = render(view)
+      assert html =~ "Raw view — unfiltered content."
+      assert html =~ "README.md"
+      refute html =~ "Snapshot hidden for review"
+    end
+
+    test "patching back to the same node recomputes the quarantine answer", %{conn: conn} do
+      project = insert_project("live-incident-cache")
+      clean = insert_node(project, %{message: "clean node"}, %{"README.md" => "# Clean\n"})
+
+      {:ok, view, _html} = live(conn, "/p/live-incident-cache")
+      assert render_patch(view, "/p/live-incident-cache/n/#{clean.id}") =~ "README.md"
+
+      open_secret_incident(project, clean)
+      assert render(view) =~ "Snapshot hidden for review"
+
+      # The same URL again must not reuse the earlier clean answer: the node id
+      # is only one of the inputs (Iron Law 5).
+      html = render_patch(view, "/p/live-incident-cache/n/#{clean.id}")
+      assert html =~ "Snapshot hidden for review"
+      refute html =~ "README.md"
+    end
+
+    test "an incident for another node does not disturb the selected pane", %{conn: conn} do
+      project = insert_project("live-incident-other")
+
+      selected =
+        insert_node(project, %{message: "selected node"}, %{"README.md" => "# Selected\n"})
+
+      other = insert_node(project, %{message: "other node"}, %{"other.txt" => "other\n"})
+
+      {:ok, view, _html} = live(conn, "/p/live-incident-other")
+      assert render_patch(view, "/p/live-incident-other/n/#{selected.id}") =~ "README.md"
+
+      open_secret_incident(project, other)
+
+      html = render(view)
+      refute html =~ "Snapshot hidden for review"
+      assert html =~ "README.md"
+    end
+  end
+
   test "does not render raw HTML from a README", %{conn: conn} do
     project = insert_project("xss-project")
 

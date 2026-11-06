@@ -2,8 +2,9 @@
 
 ## Current Phase
 Phase 4 — unions, proposals & review is **complete** (4a-1, 4a-2, 4b, 4b-2,
-4c-1, 4c-2, 4c-3, 4d-1, 4d-2, 4d-3 and the demo stack). The next slice is the
-UI styling/freshness pass, then Phase 5 (doc automation).
+4c-1, 4c-2, 4c-3, 4d-1, 4d-2, 4d-3 and the demo stack). The UI
+styling/freshness pass is in progress: **Session A (freshness) is complete**;
+Session B (styling) is next, then Phase 5 (doc automation).
 
 ## Done (summary)
 
@@ -187,7 +188,29 @@ UI styling/freshness pass, then Phase 5 (doc automation).
   §7.4/§11/§12.4/§12.5/§12.6 updates. 15 new tests; compose smoke verified
   (`/health`, `/`, both projects, a proposal token, `/sign-in` all 200;
   anonymous reviews 302; demo sign-in establishes a session).
-- 596 tests green (161 shared + 125 daemon + 310 server);
+- **UI freshness pass, Session A (4e-1)** — review and project pages now react
+  to project activity. `Incidents` broadcasts
+  `{:incidents_changed, project_id, incident_id, proposal_id, node_id}` after a
+  new insert or an open→resolved transition (ids only, post-commit,
+  best-effort with shape-only logging); `Proposals.create/2` broadcasts
+  `{:proposal_created, project_id, proposal_id}`. `ReviewLive.Index`
+  subscribes after `connected?/1` in `handle_params` (guarded by a
+  `subscribed_project_id` assign), reloads proposals on
+  created/decided and incidents on any incident event, and refreshes
+  `can_decide?`. `ReviewLive.Show` reacts only to its own decision and to
+  incidents that touch it — a proposal-linked incident, or one on the node the
+  decision would promote/attach (`Proposals.decision_node/1`, mirroring the
+  context's `ensure_node_approvable/2`), so a quarantined promotion target hides
+  Approve live instead of failing on click; unrelated node incidents are
+  ignored, and both roles are refreshed before every reload. `ProjectLive`
+  keeps a quarantine cache keyed on both inputs — the node id (the snapshot
+  scan is immutable) and the node's open-critical-incident flag (cheap to
+  re-read) — so tree/blob patches reuse the scan while an incident change
+  always re-derives; it subscribes incident-only and reloads the pane only when
+  the event targets the selected node. Incident resolution derives the
+  transition inside the `FOR UPDATE` transaction, so concurrent resolves cannot
+  double-broadcast. Spec §6.6/§6.7/§7.2 updated. 26 new tests.
+- 622 tests green (161 shared + 125 daemon + 336 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
   `AshAuthentication.Info.strategy(User, :demo) == :error`.
@@ -200,26 +223,30 @@ UI styling/freshness pass, then Phase 5 (doc automation).
 
 ## Next
 
-**Immediate step:** UI styling/freshness pass. Start with a plan (`@phx-plan`
-or the full lifecycle) — it touches several web modules. Surface notes live in
-`docs/ui-notes.md`.
+**Immediate step:** Session B of `.claude/plans/ui-styling-freshness/plan.md` —
+styling (P3–P4). Session A is done; start at **P3-T11**
+(`Cadence.ServerWeb.Presentation`). Surface notes live in `docs/ui-notes.md`.
 
-1. **Styling** — incident panel and review pages together with the
-   portfolio/project surfaces: severity colors, panel placement, details
-   density, resolve/acknowledge copy.
-2. **Freshness (Iron Law 5)** — subscribe `ReviewLive.Index`/`Show` to the
-   project topic after `connected?/1` and recompute `isolated?`/`can_decide?`;
-   there is no incident broadcast yet, so add one if the panel needs live
-   updates. Also drop the per-node `quarantined` assign short-circuit in
-   `ProjectLive.handle_params/3` (cache keyed on all inputs) or invalidate it
-   on incident changes.
+1. **Styling** — severity/status badges and tokens, incident panel moved above
+   the queue with a `<dl>` details block and distinct Resolve/Acknowledge
+   buttons plus inline copy, shared presentation helpers, callouts on the
+   public proposal page and the quarantine notice, and consistency on the
+   portfolio cards (`docs/ui-notes.md` bullets are the acceptance list).
+2. **Fold in two open review suggestions** (from the post-triage review; small):
+   - `ReviewLive.Show`: treat a node incident as relevant while the review
+     payload is still loading — `decision_node_ids/1` returns `[]` before the
+     async completes, so a decision-node incident in that window is dropped and
+     Approve stays enabled until reload (fail-closed on click).
+   - `ProjectLive`: reuse the quarantine cache only for `:ok`; a
+     `:quarantined` answer derived from a failed `walk_blobs` is currently
+     cached until an incident flips or the page remounts.
 3. **Smoke** — drive `:CadUnion` against the demo stack once
    (`docker compose up`, `docs/demo.md`) and record the result in the session
    handoff; the Neovim submit is the one 4d-3 surface without a live run.
 4. **After that** — Phase 5, documentation automation (spec §9, §13), then the
    optional `:CadProposals` surface for the returned token.
 
-**Spin-up:** `@phx-full UI styling and freshness pass — start from docs/progress.md Next`
+**Spin-up:** `@phx-work .claude/plans/ui-styling-freshness/plan.md --from P3-T11`
 
 ## Blocked
 
@@ -305,15 +332,14 @@ or the full lifecycle) — it touches several web modules. Surface notes live in
 - **The demo stack is not a release artifact** — `docker/Dockerfile.demo` builds
   `MIX_ENV=dev` and keeps sources for `code_reloader`; spec §12.8 (release
   image) remains open work.
-- **Review-page freshness (4c-2/4c-3, Iron Law 5)** — `isolated?` and
-  `can_decide?` are recomputed on every `handle_params`, after every decision,
-  and after every incident resolution, but nothing pushes external changes: an
-  incident opened while either page is open leaves controls looking usable
-  until reload. The event paths re-read the membership and the context
-  re-checks incidents/roles, so a stale click fails closed
-  (`:blocked | :forbidden`). 4c-3 owns the incident panel and deliberately adds
-  no PubSub (plan Iron Law table: "No PubSub subscription added in 4c"), so
-  incident broadcasts plus subscriptions are a 4d item.
+- **Live DAG refresh is not subscribed (4e-1)** — `ProjectLive` ignores
+  `{:nodes_pushed, …}`: `DAGLayout.layout/2` recomputes intro timing, so a live
+  refresh would replay the animation and can disturb the selected pane. Revisit
+  only with a stable re-layout that preserves the selection and skips the intro.
+- **Membership changes have no broadcast (4e-1)** — there is no event source
+  for role edits. Review pages refresh `can_decide?`/`can_manage?` on the next
+  project event, and every mutation still re-reads the membership and fails
+  closed.
 - **Render duplication (4c-2)** — the review page repeats the public proposal
   result block (`proposal_html/show.html.heex`) with its own isolation sentinel,
   and `kind_title`/`format_flags`/`format_time` are now duplicated across four
@@ -349,12 +375,6 @@ or the full lifecycle) — it touches several web modules. Surface notes live in
   bypass the read-time scan, so a genuine secret stays quarantined until a new
   node carries the rotated content. 4c's panel must not present resolution as
   "restore". Recorded in spec §6.7.
-- **Cached `quarantine` assign (4b-2 discovery)** — `ProjectLive.handle_params/3`
-  reuses the previous `:quarantined` assign when the selected node id is
-  unchanged, so an incident opened while a member is viewing is not reflected
-  until they select another node (a fresh mount always recomputes). 4c should
-  drop the short-circuit or invalidate on incident changes via PubSub. Captured
-  in `.claude/solutions/liveview-issues/quarantine-assign-cache-project-live-20261105.md`.
 - **Push-scan alerting is best-effort (4b-2)** — a failed incident insert never
   fails the push; the read-path scan still quarantines the content, but the
   alert is lost until the next event.
@@ -457,3 +477,31 @@ docker run --rm -d --name cadence-test-pg \
   -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=cadence_test \
   -p 55432:5432 postgres:16-alpine
 ```
+
+2026-11-06 — **UI freshness, Session A (4e-1)** shipped from
+`.claude/plans/ui-styling-freshness/plan.md` P0–P2: `Incidents` broadcasts
+`{:incidents_changed, …}` on a new insert or an open→resolved transition and
+`Proposals.create/2` broadcasts `{:proposal_created, …}`, both after commit and
+best-effort with shape-only logging; `ReviewLive.Index`/`Show` subscribe to
+`project:<id>` after connect (guarded by `subscribed_project_id`) and refresh on
+the events they can act on — Show reloads only its own proposal and ignores node
+incidents — refreshing `can_decide?`/`can_manage?` per event; `ProjectLive` drops
+the cached quarantine assign and reacts to incident events for the selected node
+only, never refreshing the DAG. Spec §6.6/§6.7/§7.2 updated. Verification:
+format + dev/prod compile clean, 619 tests green (161 + 125 + 333; +23 new).
+Session B (styling, P3–P4) is next — resume with `--from P3-T11`.
+
+2026-11-06 — **UI freshness review → triage fixes.** `/phx-review` verdict PASS
+WITH WARNINGS; all four findings fixed per
+`.claude/plans/ui-styling-freshness/reviews/ui-styling-freshness-triage.md`:
+Show now treats a critical incident on the node it would promote/attach as
+blocking (`Proposals.decision_node/1` mirrors `ensure_node_approvable/2`, the
+payload carries `node_blocked?`, Approve is hidden with a blocked reason, and
+the event reloads it), an unrelated node incident is still ignored;
+`Incidents.resolve/4` detects the transition inside the `FOR UPDATE`
+transaction so concurrent resolves cannot double-broadcast; `ProjectLive` keeps
+a quarantine cache keyed on `{node_id, blocking_node?}` — tree/blob patches
+reuse the snapshot scan, incident flips re-derive, no stale assign; Show
+normalizes the URL proposal id with `UUID.cast/1` so mixed-case links keep live
+updates. Spec §7.2 wording corrected. Verification: format + dev/prod compile
+clean, 622 tests green (161 + 125 + 336; +3 new, 1 extended).

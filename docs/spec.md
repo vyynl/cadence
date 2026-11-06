@@ -525,13 +525,16 @@ human approves it.
   target node. Both fail closed (`blocked`) when an open critical node incident
   quarantines the node. Approval never sets `functioning` (§3.1): approval moves
   the line, validation sets the flag.
-- **Decision broadcast (4c/4d)** — a successful decision broadcasts
-  `{:proposal_decided, project_id, proposal_id, status}`. An approval that
-  creates a node — or flips its `pinned` value — also broadcasts
+- **Creation and decision broadcasts (4c/4d/4e)** — a created pending proposal
+  broadcasts `{:proposal_created, project_id, proposal_id}`; creation moves no
+  node and no session pointer, so no daemon is woken. A successful decision
+  broadcasts `{:proposal_decided, project_id, proposal_id, status}`. An approval
+  that creates a node — or flips its `pinned` value — also broadcasts
   `{:nodes_pushed, project_id, [node_id]}`; approving an already-pinned target
   emits no node-changed event. Every successful decision additionally wakes each
   project member's daemon with `{:sync_available, project_id}` (§10.5). Refused
-  decisions broadcast nothing. Phase 4d owns the consumers.
+  decisions and refused or invalid creations broadcast nothing. Consumers filter
+  on the ids they need (§7.2).
 - **Guards** — a meld is still never auto-promoted to `functioning` (§3.1);
   approval promotes the *line*, validation sets the *flag*. Critical incidents
   (§6.7) block approval until resolved.
@@ -582,6 +585,16 @@ status (`open | resolved`), a redacted title, and scanner metadata only
   approval re-verifies the result independently (§6.6).
 - **Authority** — the deterministic scanner is authoritative. LLM output may
   flag risk, but never decides whether content is safe.
+- **Change broadcast (4e)** — a newly opened incident and an open→resolved
+  transition broadcast `{:incidents_changed, project_id, incident_id,
+  proposal_id, node_id}` on `project:<id>`, after the row commits. A duplicate
+  open (same target and kind already open), an idempotent re-resolve, and a
+  failed verification broadcast nothing. The payload carries ids only, never
+  scanner metadata, and is best-effort: the write stands when broadcasting
+  fails. Consumers filter by id: a proposal-linked event can change a proposal
+  result's isolation, a node-linked event can quarantine that node, and a
+  project-scoped event isolates nothing. Incident writes happen outside the
+  caller's transaction so an uncommitted row is never announced.
 
 ---
 
@@ -630,7 +643,16 @@ never public. `/auth`, `/sync`, `/health`, and static paths are reserved.
   a clean re-scan of the result (a remaining secret must be fixed by rejecting
   and re-proposing); node and project incidents resolve by acknowledgment
   (§6.7). Emails are shown to the owner/trusted manager audience only; other
-  members see display names.
+  members see display names. Both pages subscribe to `project:<id>` once
+  connected and refresh live: the hub on proposal creation/decision and on any
+  incident change, the detail page only on its own decision, a
+  proposal-linked incident, or an incident on the node it would promote or
+  attach (an unrelated node incident is ignored; a critical one on that node
+  blocks approval, so the page hides Approve rather than letting the click
+  fail).
+  Every handled event re-reads the membership before re-rendering controls, so
+  a revoked grant disappears on the next project event; mutations still fail
+  closed independently.
 - View doc diffs and approve/reject pending doc revisions.
 - Explicitly reveal unfiltered file content for maintenance (the public and
   default authenticated views remain filtered; see §7.6).

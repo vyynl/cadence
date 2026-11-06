@@ -6,9 +6,19 @@ defmodule Cadence.Server.Incidents do
   Incidents are opened by server-side detection (meld creation or push scans)
   and resolved by an owner or granted approver. Resolution re-runs the supplied
   verification callback; a still-risky target stays open.
+
+  Committed changes broadcast `{:incidents_changed, project_id, incident_id,
+  proposal_id, node_id}` on `project:<id>` so review and project pages can
+  refresh live. The event carries ids only — never details — and consumers
+  filter on the id they need. Only a genuinely new incident and an
+  open→resolved transition broadcast; a duplicate open, an idempotent resolve,
+  and a failed verification are silent. Broadcasting is best-effort: the write
+  is already committed, so a failure is logged by shape and swallowed.
   """
 
   import Ecto.Query
+
+  require Logger
 
   alias Cadence.Server.{Authorization, Incident, Repo}
   alias Cadence.Shared.{Project, UUID}
@@ -22,12 +32,15 @@ defmodule Cadence.Server.Incidents do
   and kind are already open.
 
   Internal: callers must have already validated the target and must never put
-  secret values in `details`.
+  secret values in `details`. Call this **outside** any transaction: the
+  broadcast fires as soon as the insert commits, and an uncommitted row must
+  never be announced.
   """
   @spec open(map()) :: {:ok, Incident.t()} | {:error, Ecto.Changeset.t()}
   def open(attrs) when is_map(attrs) do
     case %Incident{} |> Incident.changeset(attrs) |> Repo.insert() do
       {:ok, incident} ->
+        broadcast(incident)
         {:ok, incident}
 
       {:error, %Ecto.Changeset{} = changeset} ->
@@ -82,6 +95,9 @@ defmodule Cadence.Server.Incidents do
   connection — for the length of the scan. Incident kind, target, and details
   are immutable, so the decision cannot go stale; only the status transition
   needs the lock.
+
+  Only an open→resolved transition broadcasts; re-resolving an already-resolved
+  incident is idempotent and silent.
   """
   @spec resolve(map(), Ecto.UUID.t() | String.t(), Ecto.UUID.t() | String.t(), keyword()) ::
           {:ok, Incident.t()} | {:error, term()}
@@ -93,20 +109,33 @@ defmodule Cadence.Server.Incidents do
          {:ok, _membership} <- authorize_decider(actor, project_id),
          {:ok, incident} <- fetch_incident(project_id, incident_id),
          :ok <- verify_target(verify, incident) do
-      Repo.transaction(fn ->
-        incident =
-          Repo.one(
-            from(i in Incident,
-              where: i.id == ^incident_id and i.project_id == ^project_id,
-              lock: "FOR UPDATE"
-            )
-          ) || Repo.rollback(:not_found)
+      case Repo.transaction(fn ->
+             incident =
+               Repo.one(
+                 from(i in Incident,
+                   where: i.id == ^incident_id and i.project_id == ^project_id,
+                   lock: "FOR UPDATE"
+                 )
+               ) || Repo.rollback(:not_found)
 
-        case incident.status do
-          :resolved -> incident
-          :open -> mark_resolved(incident, actor)
-        end
-      end)
+             case incident.status do
+               :resolved -> {incident, false}
+               :open -> {mark_resolved(incident, actor), true}
+             end
+           end) do
+        # Broadcast after commit, and only when the locked row actually
+        # transitioned: the transition is read inside the transaction so two
+        # concurrent resolvers cannot both announce the same transition.
+        {:ok, {%Incident{} = resolved, true}} ->
+          broadcast(resolved)
+          {:ok, resolved}
+
+        {:ok, {%Incident{} = resolved, false}} ->
+          {:ok, resolved}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
@@ -139,6 +168,27 @@ defmodule Cadence.Server.Incidents do
       {:ok, resolved} -> resolved
       {:error, changeset} -> Repo.rollback(changeset)
     end
+  end
+
+  # Ids only: `details` is scanner metadata and must never reach a pubsub
+  # message (or a socket that did not authorize the read).
+  defp broadcast(incident) do
+    Phoenix.PubSub.broadcast(
+      Cadence.Server.PubSub,
+      "project:#{incident.project_id}",
+      {:incidents_changed, incident.project_id, incident.id, incident.proposal_id,
+       incident.node_id}
+    )
+
+    :ok
+  rescue
+    error ->
+      Logger.warning("incident broadcast failed: #{inspect(error.__struct__)}")
+      :ok
+  catch
+    kind, _reason ->
+      Logger.warning("incident broadcast failed: #{inspect(kind)}")
+      :ok
   end
 
   @doc "Whether an open critical incident blocks approving the proposal."

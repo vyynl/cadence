@@ -1,11 +1,25 @@
 defmodule Cadence.ServerWeb.ProjectLive do
   @moduledoc """
   Public LiveView for a project's DAG and repository browser.
+
+  ## Freshness
+
+  Once connected, the socket subscribes to `project:<id>` and reacts to
+  `{:incidents_changed, …}` for the selected node: an incident that starts or
+  stops isolating the snapshot re-renders the pane without a reload. The
+  quarantine answer is cached on both of its inputs — the node (the snapshot
+  scan is immutable) and the node's open-critical-incident flag (cheap to
+  re-read) — so navigating within a node reuses the scan while an incident flip
+  always re-derives (Iron Law 5). Raw view stays unfiltered.
+
+  Live DAG refresh is deliberately not subscribed: `DAGLayout.layout/2`
+  recomputes intro timing, so reacting to `{:nodes_pushed, …}` would replay the
+  animation and disturb the selected pane.
   """
 
   use Cadence.ServerWeb, :live_view
 
-  alias Cadence.Server.{Accounts, Portfolio, ProjectAdmin, PublicContent}
+  alias Cadence.Server.{Accounts, Incidents, Portfolio, ProjectAdmin, PublicContent}
   alias Cadence.ServerWeb.Components.{DAG, Repo}
   alias Cadence.ServerWeb.DAGLayout
   alias Cadence.ServerWeb.Metadata
@@ -51,13 +65,13 @@ defmodule Cadence.ServerWeb.ProjectLive do
             auth.can_manage? == true and same_node? == true and
               socket.assigns.raw_view? == true
 
-          quarantine =
-            cond do
-              is_nil(selected_node) -> :ok
-              raw_view? -> :ok
-              same_node? and not socket.assigns.raw_view? -> socket.assigns.quarantine
-              true -> Portfolio.quarantine_status(project, selected_node)
-            end
+          # Isolation is the node scan OR a mutable incident flag. The scan is
+          # immutable per node (snapshots are immutable) and expensive; the flag
+          # is cheap to re-read. Keying the cache on both inputs means a
+          # tree/blob patch reuses the scan, a flag flip re-derives, and a stale
+          # answer is never reused (Iron Law 5).
+          {quarantine, quarantine_key} =
+            quarantine_answer(socket, project, selected_node, raw_view?)
 
           dag_layout =
             DAGLayout.layout(nodes,
@@ -68,7 +82,9 @@ defmodule Cadence.ServerWeb.ProjectLive do
           path = URI.parse(uri).path || "/p/#{project.slug}"
 
           socket =
-            assign(socket,
+            socket
+            |> maybe_subscribe(project)
+            |> assign(
               page_title: project.name,
               page_description:
                 "#{project.name} on Cadence — session history and repository snapshot.",
@@ -78,6 +94,7 @@ defmodule Cadence.ServerWeb.ProjectLive do
               selected_node: selected_node,
               not_found: false,
               quarantine: quarantine,
+              quarantine_key: quarantine_key,
               repo_action: action,
               membership: auth.membership,
               members: auth.members,
@@ -94,6 +111,7 @@ defmodule Cadence.ServerWeb.ProjectLive do
 
         {:noreply,
          socket
+         |> unsubscribe()
          |> assign(base_assigns())
          |> assign(
            page_title: "Project not found",
@@ -132,14 +150,16 @@ defmodule Cadence.ServerWeb.ProjectLive do
       {true, %Project{} = project, %Node{} = selected_node} ->
         raw_view? = !socket.assigns.raw_view?
 
-        quarantine =
-          if raw_view? do
-            :ok
-          else
-            Portfolio.quarantine_status(project, selected_node)
-          end
+        {quarantine, quarantine_key} =
+          quarantine_answer(socket, project, selected_node, raw_view?)
 
-        socket = assign(socket, raw_view?: raw_view?, quarantine: quarantine)
+        socket =
+          assign(socket,
+            raw_view?: raw_view?,
+            quarantine: quarantine,
+            quarantine_key: quarantine_key
+          )
+
         {:noreply, reload_repo(socket)}
 
       _ ->
@@ -151,6 +171,39 @@ defmodule Cadence.ServerWeb.ProjectLive do
          )}
     end
   end
+
+  @impl true
+  def handle_info({:incidents_changed, project_id, _incident_id, _proposal_id, node_id}, socket) do
+    project = socket.assigns.project
+    selected = socket.assigns.selected_node
+
+    if targets_selected_node?(project, selected, project_id, node_id) and
+         not socket.assigns.raw_view? do
+      key = quarantine_key(project, selected)
+
+      if key == socket.assigns.quarantine_key do
+        {:noreply, socket}
+      else
+        quarantine = Portfolio.quarantine_status(project, selected)
+        changed? = quarantine != socket.assigns.quarantine
+        socket = assign(socket, quarantine: quarantine, quarantine_key: key)
+        {:noreply, if(changed?, do: reload_repo(socket), else: socket)}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # A subscribed socket receives every project event; only incident changes can
+  # affect the rendered pane (live DAG refresh is deliberately out of scope).
+  def handle_info({:proposal_created, _project_id, _proposal_id}, socket), do: {:noreply, socket}
+
+  def handle_info({:proposal_decided, _project_id, _proposal_id, _status}, socket),
+    do: {:noreply, socket}
+
+  def handle_info({:nodes_pushed, _project_id, _node_ids}, socket), do: {:noreply, socket}
+
+  def handle_info({:preferences_updated, _project_id, _user_id}, socket), do: {:noreply, socket}
 
   @impl true
   def render(assigns) do
@@ -301,12 +354,14 @@ defmodule Cadence.ServerWeb.ProjectLive do
       selected_node: nil,
       not_found: false,
       quarantine: :ok,
+      quarantine_key: nil,
       repo_action: :node,
       membership: nil,
       members: nil,
       can_pin?: false,
       can_manage?: false,
       raw_view?: false,
+      subscribed_project_id: nil,
       current_path: "",
       tree: nil,
       file: nil,
@@ -316,6 +371,61 @@ defmodule Cadence.ServerWeb.ProjectLive do
       readme_notice: nil,
       path_error: nil
     ]
+  end
+
+  # The project id is only known after the slug resolves, so subscription
+  # happens in `handle_params/3`, never `mount/3`. The assign keeps repeated
+  # patches idempotent and moves the subscription when the slug changes.
+  defp maybe_subscribe(%{assigns: %{subscribed_project_id: current}} = socket, project) do
+    cond do
+      not connected?(socket) ->
+        socket
+
+      current == project.id ->
+        socket
+
+      true ->
+        if current, do: Phoenix.PubSub.unsubscribe(Cadence.Server.PubSub, "project:#{current}")
+        Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "project:#{project.id}")
+        assign(socket, :subscribed_project_id, project.id)
+    end
+  end
+
+  defp unsubscribe(%{assigns: %{subscribed_project_id: nil}} = socket), do: socket
+
+  defp unsubscribe(socket) do
+    Phoenix.PubSub.unsubscribe(
+      Cadence.Server.PubSub,
+      "project:#{socket.assigns.subscribed_project_id}"
+    )
+
+    assign(socket, :subscribed_project_id, nil)
+  end
+
+  # Same-variable matching compares the project and node ids in the event with
+  # the rendered ones, so an incident for another node (or a project-scoped
+  # incident with nil ids) leaves the pane alone.
+  defp targets_selected_node?(%{id: project_id}, %{id: node_id}, project_id, node_id), do: true
+  defp targets_selected_node?(_project, _selected, _project_id, _node_id), do: false
+
+  defp quarantine_answer(_socket, _project, nil, _raw_view?), do: {:ok, nil}
+  defp quarantine_answer(_socket, _project, _node, true), do: {:ok, nil}
+
+  defp quarantine_answer(socket, project, node, false) do
+    key = quarantine_key(project, node)
+
+    if socket.assigns.quarantine_key == key do
+      {socket.assigns.quarantine, key}
+    else
+      {Portfolio.quarantine_status(project, node), key}
+    end
+  end
+
+  # The immutable half of isolation (a snapshot scan depends only on the node)
+  # plus the mutable half (an open critical node incident), so the cache is
+  # keyed on every input that can change the answer.
+  defp quarantine_key(project, node) do
+    {node.id, Incidents.blocking_node?(project.id, node.id)}
   end
 
   defp load_repo(socket, _project, nil, _params, _action), do: clear_repo(socket)

@@ -5,9 +5,9 @@ defmodule Cadence.ServerWeb.ReviewLiveTest do
   import Ecto.Query
   import Phoenix.LiveViewTest
 
-  alias Cadence.Server.{Incidents, Proposals, Repo}
+  alias Cadence.Server.{Incidents, ProposalView, Proposals, Repo}
   alias Cadence.Server.Accounts.User
-  alias Cadence.Shared.Node
+  alias Cadence.Shared.{Membership, Node}
 
   setup do
     owner = seed_user("owner@example.com", "Olive Owner")
@@ -728,6 +728,263 @@ defmodule Cadence.ServerWeb.ReviewLiveTest do
       assert unknown =~ "This incident no longer exists."
       assert Repo.get!(Cadence.Server.Incident, other_incident.id).status == :open
     end
+  end
+
+  describe "freshness" do
+    test "index shows an incident opened after mount", %{
+      conn: conn,
+      owner: owner,
+      project: project
+    } do
+      node = node_with_snapshot(project, %{"scan.txt" => "scan me"}, %{message: "scan node"})
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/demo/reviews")
+      assert render_async(view) =~ "No open incidents."
+
+      incident = open_node_incident(project, node)
+
+      html = render_async(view)
+      assert html =~ "incident-#{incident.id}"
+      assert html =~ "Secret detected in snapshot"
+    end
+
+    test "index drops an incident resolved elsewhere", %{
+      conn: conn,
+      owner: owner,
+      project: project
+    } do
+      node = node_with_snapshot(project, %{"scan.txt" => "scan me"}, %{message: "scan node"})
+      incident = open_node_incident(project, node)
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/demo/reviews")
+      assert render_async(view) =~ "incident-#{incident.id}"
+
+      assert {:ok, _resolved} = Incidents.resolve(%{id: owner.id}, project.id, incident.id)
+
+      html = render_async(view)
+      refute html =~ "incident-#{incident.id}"
+      assert html =~ "No open incidents."
+    end
+
+    test "index inserts a proposal created elsewhere", %{
+      conn: conn,
+      owner: owner,
+      project: project
+    } do
+      [parent_a, parent_b] = load_parents(project)
+      result = result_for(project, "live-created")
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/demo/reviews")
+      render_async(view)
+
+      assert {:ok, created} =
+               Proposals.create(%{id: owner.id}, %{
+                 project_id: project.id,
+                 kind: :meld,
+                 parent_ids: [parent_a.id, parent_b.id],
+                 result_tree_sha: result.tree,
+                 meld_commit_sha: result.commit
+               })
+
+      assert render_async(view) =~ "proposal-#{created.id}"
+    end
+
+    test "index reflects a decision made elsewhere", %{
+      conn: conn,
+      owner: owner,
+      project: project,
+      proposal: proposal
+    } do
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/demo/reviews")
+      assert render_async(view) =~ "pending"
+
+      assert {:ok, _rejected} = Proposals.reject(%{id: owner.id}, project.id, proposal.id)
+
+      html = render_async(view)
+      assert html =~ "rejected"
+      refute html =~ "pending"
+    end
+
+    test "show isolates the result when a proposal incident opens elsewhere", %{
+      conn: conn,
+      owner: owner,
+      proposal: proposal
+    } do
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/demo/reviews/#{proposal.id}")
+      html = render_async(view)
+      assert html =~ "new.txt"
+      assert html =~ "Approve"
+
+      _incident = open_proposal_incident(proposal)
+
+      html = render_async(view)
+      assert html =~ "Result hidden for review"
+      refute html =~ "Approve"
+      assert html =~ "Reject"
+    end
+
+    test "show restores the result when the proposal incident is resolved elsewhere", %{
+      conn: conn,
+      owner: owner,
+      project: project,
+      proposal: proposal
+    } do
+      incident = open_proposal_incident(proposal)
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/demo/reviews/#{proposal.id}")
+      assert render_async(view) =~ "Result hidden for review"
+
+      assert {:ok, _resolved} =
+               Incidents.resolve(%{id: owner.id}, project.id, incident.id,
+                 verify: &ProposalView.verify_resolution/1
+               )
+
+      html = render_async(view)
+      refute html =~ "Result hidden for review"
+      assert html =~ "new.txt"
+      assert html =~ "Approve"
+    end
+
+    test "show ignores a node incident opened elsewhere", %{
+      conn: conn,
+      owner: owner,
+      project: project,
+      proposal: proposal
+    } do
+      node = node_with_snapshot(project, %{"scan.txt" => "scan me"}, %{message: "scan node"})
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/demo/reviews/#{proposal.id}")
+      assert render_async(view) =~ "Approve"
+
+      open_node_incident(project, node)
+
+      html = render_async(view)
+      assert html =~ "new.txt"
+      assert html =~ "Approve"
+      refute html =~ "Result hidden for review"
+    end
+
+    test "show reflects a decision made on another socket", %{
+      conn: conn,
+      owner: owner,
+      proposal: proposal
+    } do
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/demo/reviews/#{proposal.id}")
+      {:ok, other, _html} = live(signed_conn(conn, owner), "/p/demo/reviews/#{proposal.id}")
+
+      assert render_async(view) =~ "Approve"
+      render_async(other)
+
+      other |> element("button", "Approve") |> render_click()
+
+      html = render_async(view)
+      assert html =~ "approved"
+      refute html =~ "Approve"
+    end
+
+    test "a critical incident on the promotion target blocks approval live", %{
+      conn: conn,
+      owner: owner,
+      project: project
+    } do
+      target = node_with_snapshot(project, %{"promote.txt" => "ready"}, %{message: "promote me"})
+      proposal = promotion_proposal(project, owner.id, target)
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/demo/reviews/#{proposal.id}")
+      html = render_async(view)
+      assert html =~ "Approve"
+      refute html =~ "quarantines the node"
+
+      open_node_incident(project, target)
+
+      html = render_async(view)
+      refute html =~ "Approve"
+      assert html =~ "quarantines the node"
+      assert html =~ "Reject"
+
+      refused = render_click(view, "approve")
+      assert refused =~ "critical incident is open"
+      assert Repo.get!(Cadence.Server.Proposal, proposal.id).status == :pending
+    end
+
+    test "an incident on the existing meld node blocks re-approval", %{
+      conn: conn,
+      owner: owner,
+      project: project,
+      parent_a: parent_a,
+      parent_b: parent_b
+    } do
+      result = result_for(project, "shared-meld")
+
+      first = meld_proposal(project, owner.id, [parent_a, parent_b], result)
+      assert {:ok, approved} = Proposals.approve(%{id: owner.id}, project.id, first.id)
+
+      second = meld_proposal(project, owner.id, [parent_a, parent_b], result)
+      node = Proposals.result_node(approved)
+      assert node
+
+      open_node_incident(project, node)
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/demo/reviews/#{second.id}")
+      html = render_async(view)
+
+      refute html =~ "Approve"
+      assert html =~ "quarantines the node"
+    end
+
+    test "live updates still work for a mixed-case proposal URL", %{
+      conn: conn,
+      owner: owner,
+      proposal: proposal
+    } do
+      path = "/p/demo/reviews/#{String.upcase(proposal.id)}"
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), path)
+      assert render_async(view) =~ "Approve"
+
+      _incident = open_proposal_incident(proposal)
+
+      html = render_async(view)
+      assert html =~ "Result hidden for review"
+      refute html =~ "Approve"
+    end
+
+    test "revoking an approver grant removes the controls on the next event", %{
+      conn: conn,
+      project: project,
+      proposal: proposal
+    } do
+      approver = seed_user("revoked@example.com", "Revoked Approver")
+      membership(project, approver.id, :trusted, %{approver: true})
+
+      node = node_with_snapshot(project, %{"scan.txt" => "scan me"}, %{message: "scan node"})
+      open_node_incident(project, node)
+
+      {:ok, index, _html} = live(signed_conn(conn, approver), "/p/demo/reviews")
+      assert render_async(index) =~ ~s(phx-click="resolve_incident")
+
+      {:ok, show, _html} = live(signed_conn(conn, approver), "/p/demo/reviews/#{proposal.id}")
+      assert render_async(show) =~ "Approve"
+
+      revoke_approver(project, approver.id)
+      # A proposal-linked incident is one of the events Show reacts to, so it
+      # must refresh the role as well as the payload.
+      open_proposal_incident(proposal)
+
+      refute render_async(index) =~ ~s(phx-click="resolve_incident")
+
+      show_html = render_async(show)
+      refute show_html =~ "Approve"
+      refute show_html =~ "Reject"
+      assert show_html =~ "pending"
+    end
+  end
+
+  defp revoke_approver(project, user_id) do
+    project.id
+    |> then(&Repo.get_by!(Membership, project_id: &1, user_id: user_id))
+    |> Ecto.Changeset.change(approver: false)
+    |> Repo.update!()
   end
 
   defp open_node_incident(project, node) do

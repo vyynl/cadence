@@ -19,19 +19,33 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
   ## Freshness
 
   The payload (including `isolated?` and the result diff) is recomputed on every
-  `handle_params` and after every decision; nothing is cached on the proposal
-  row. It is not pushed on external change: an incident opened elsewhere while
-  the page is open does not reach this socket (there is no incident broadcast),
-  so the Approve control can look enabled until the next load. The decision
-  itself re-reads the membership and the context re-checks the incident, so a
-  stale click still fails closed with `:blocked`/`:forbidden`.
+  `handle_params`, after every decision, and when the project topic announces
+  this proposal's decision or an incident that touches it. An incident is
+  relevant when it is proposal-linked, or when it quarantines the node approval
+  would promote/attach (`Proposals.decision_node/1`): that node blocks the
+  decision even though it does not isolate the result. Incidents on unrelated
+  nodes are ignored so they never pay the capped blob walks. Every handled
+  event re-reads the membership, so a revoked grant removes the controls on the
+  next event. The decision itself also re-reads the membership and the context
+  re-checks incidents and roles, so a stale click still fails closed with
+  `:blocked`/`:forbidden`.
   """
 
   use Cadence.ServerWeb, :live_view
 
-  alias Cadence.Server.{Accounts, Authorization, ProposalView, Proposals, PublicContent}
+  alias Cadence.Server.{
+    Accounts,
+    Authorization,
+    Incidents,
+    ProposalView,
+    Proposals,
+    PublicContent
+  }
+
   alias Cadence.ServerWeb.Components.Repo
   alias Cadence.ServerWeb.ReviewAccess
+  alias Cadence.Shared.UUID
+  alias Phoenix.LiveView.AsyncResult
 
   @impl true
   def mount(_params, _session, socket) do
@@ -42,7 +56,8 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
        proposal_id: nil,
        not_found: false,
        can_decide?: false,
-       can_manage?: false
+       can_manage?: false,
+       subscribed_project_id: nil
      )}
   end
 
@@ -51,10 +66,12 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
     case ReviewAccess.authorize(socket.assigns[:current_user], params["slug"]) do
       {:ok, project, membership} ->
         socket =
-          assign(socket,
+          socket
+          |> maybe_subscribe(project)
+          |> assign(
             page_title: "Review · #{project.name}",
             project: project,
-            proposal_id: params["proposal_id"],
+            proposal_id: normalize_id(params["proposal_id"]),
             not_found: false,
             can_decide?: Authorization.can_decide?(membership),
             can_manage?: Authorization.can_manage?(membership)
@@ -73,7 +90,9 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
 
       {:error, :not_found} ->
         {:noreply,
-         assign(socket,
+         socket
+         |> unsubscribe()
+         |> assign(
            page_title: "Project not found",
            project: nil,
            not_found: true,
@@ -89,6 +108,27 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
   def handle_event("reject", _params, socket), do: decide(socket, :rejected)
 
   def handle_event(_event, _params, socket), do: {:noreply, socket}
+
+  @impl true
+  def handle_info({:proposal_decided, project_id, proposal_id, _status}, socket) do
+    {:noreply, reload_after_event(socket, project_id, proposal_id)}
+  end
+
+  def handle_info({:incidents_changed, project_id, _incident_id, proposal_id, node_id}, socket) do
+    if incident_relevant?(socket, proposal_id, node_id) do
+      {:noreply, reload_project_event(socket, project_id)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # A subscribed socket receives every project event; a creation elsewhere, a
+  # pushed node, and preference writes cannot change this proposal.
+  def handle_info({:proposal_created, _project_id, _proposal_id}, socket), do: {:noreply, socket}
+
+  def handle_info({:nodes_pushed, _project_id, _node_ids}, socket), do: {:noreply, socket}
+
+  def handle_info({:preferences_updated, _project_id, _user_id}, socket), do: {:noreply, socket}
 
   @impl true
   def render(assigns) do
@@ -280,6 +320,80 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
     assign_async(socket, :review, fn -> load_payload(project, proposal_id, user_id) end)
   end
 
+  # The project id is only known once the slug resolves, so subscription
+  # happens in `handle_params/3`, never `mount/3`. The assign keeps repeated
+  # patches idempotent and lets a project switch move the subscription rather
+  # than join a second topic.
+  defp maybe_subscribe(%{assigns: %{subscribed_project_id: current}} = socket, project) do
+    cond do
+      not connected?(socket) ->
+        socket
+
+      current == project.id ->
+        socket
+
+      true ->
+        if current, do: Phoenix.PubSub.unsubscribe(Cadence.Server.PubSub, "project:#{current}")
+        Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "project:#{project.id}")
+        assign(socket, :subscribed_project_id, project.id)
+    end
+  end
+
+  defp unsubscribe(%{assigns: %{subscribed_project_id: nil}} = socket), do: socket
+
+  defp unsubscribe(socket) do
+    Phoenix.PubSub.unsubscribe(
+      Cadence.Server.PubSub,
+      "project:#{socket.assigns.subscribed_project_id}"
+    )
+
+    assign(socket, :subscribed_project_id, nil)
+  end
+
+  # A decision only matters to its own page.
+  defp reload_after_event(socket, project_id, proposal_id) do
+    if socket.assigns.proposal_id == proposal_id do
+      reload_project_event(socket, project_id)
+    else
+      socket
+    end
+  end
+
+  # An incident matters when it touches this proposal or the node the decision
+  # would promote/attach. Anything else keeps the page — and the capped blob
+  # walks — untouched.
+  defp incident_relevant?(socket, proposal_id, node_id) do
+    proposal_id == socket.assigns.proposal_id or node_id in decision_node_ids(socket)
+  end
+
+  defp decision_node_ids(socket) do
+    case socket.assigns.review do
+      %AsyncResult{ok?: true, result: %{} = review} -> Map.get(review, :decision_node_ids, [])
+      _other -> []
+    end
+  end
+
+  defp reload_project_event(socket, project_id) do
+    if match?(%{id: ^project_id}, socket.assigns.project) do
+      socket
+      |> refresh_roles(socket.assigns.project)
+      |> load_review()
+    else
+      socket
+    end
+  end
+
+  # D6: a revoked grant must stop rendering the controls (and emails) on the
+  # next project event, not only after a reload.
+  defp refresh_roles(socket, project) do
+    membership = Authorization.membership(socket.assigns.current_user.id, project.id)
+
+    assign(socket,
+      can_decide?: Authorization.can_decide?(membership),
+      can_manage?: Authorization.can_manage?(membership)
+    )
+  end
+
   defp load_payload(project, proposal_id, user_id) do
     case Proposals.get(%{id: user_id}, project.id, proposal_id) do
       {:ok, proposal} -> {:ok, %{review: review(project, proposal)}}
@@ -291,6 +405,8 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
     identities =
       Accounts.users_by_ids(Enum.reject([proposal.proposer_id, proposal.reviewer_id], &is_nil/1))
 
+    decision_node = Proposals.decision_node(proposal)
+
     %{
       proposal: proposal,
       proposer: Map.get(identities, proposal.proposer_id),
@@ -300,7 +416,12 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
       isolated?: ProposalView.isolated?(proposal),
       result: ProposalView.result(project, proposal),
       integrity: Proposals.result_integrity(project.id, proposal),
-      result_node: Proposals.result_node(proposal)
+      result_node: Proposals.result_node(proposal),
+      # The context refuses approval when an open critical incident quarantines
+      # this node (`Proposals.ensure_node_approvable/2`); the page must agree.
+      node_blocked?:
+        not is_nil(decision_node) and Incidents.blocking_node?(project.id, decision_node.id),
+      decision_node_ids: if(decision_node, do: [decision_node.id], else: [])
     }
   end
 
@@ -312,6 +433,7 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
       result = decision_call(user, project, socket.assigns.proposal_id, decision)
 
       socket
+      |> refresh_roles(project)
       |> flash_decision(result)
       |> load_review()
       |> then(&{:noreply, &1})
@@ -362,6 +484,9 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
   # A decision may only be approved when the reviewer could actually see the
   # result: isolated, unverifiable, quarantined, too large, or missing results
   # are all "review blind" and must fail closed here as well as in the context.
+  # The node the decision would move the line onto is checked too: a node
+  # incident blocks the context even when the result itself is readable.
+  defp approvable?(%{node_blocked?: true}), do: false
   defp approvable?(%{isolated?: true}), do: false
   defp approvable?(%{integrity: integrity}) when integrity != :ok, do: false
   defp approvable?(%{proposal: %{kind: :promotion}}), do: true
@@ -369,6 +494,10 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
   defp approvable?(%{proposal: %{kind: :meld}, result: {:ok, %{quarantined?: false}}}), do: true
 
   defp approvable?(_review), do: false
+
+  defp blocked_reason(%{node_blocked?: true}),
+    do:
+      "Approval is blocked: a critical incident quarantines the node this proposal would promote or attach. Resolve it first."
 
   defp blocked_reason(%{isolated?: true}),
     do:
@@ -391,6 +520,17 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
     do: "Approval is blocked: the result cannot be reviewed."
 
   defp redact_message(message), do: PublicContent.redact_message(message)
+
+  # `Proposals.get/3` casts the id and events carry the canonical lowercase
+  # UUID, so the assign must be canonical too. Otherwise a mixed-case URL
+  # renders the page but never matches an event, silently stopping live
+  # updates. An invalid id is kept as-is so the not-found path still renders.
+  defp normalize_id(id) do
+    case UUID.cast(id) do
+      {:ok, uuid} -> uuid
+      :error -> id
+    end
+  end
 
   defp integrity_label({:error, reason}) when is_atom(reason), do: Atom.to_string(reason)
   defp integrity_label(_integrity), do: "unknown"

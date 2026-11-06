@@ -147,6 +147,41 @@ defmodule Cadence.Server.ProposalsTest do
                  parent_ids: [target.id]
                })
     end
+
+    test "creation broadcasts the proposal on the project topic" do
+      owner = Ecto.UUID.generate()
+      project = project(owner)
+      membership(project, owner, :owner)
+      [parent_a, parent_b] = meld_parents(project)
+
+      Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "project:#{project.id}")
+
+      assert {:ok, proposal} =
+               Proposals.create(actor(owner), meld_attrs(project, [parent_a, parent_b]))
+
+      assert_receive {:proposal_created, project_id, proposal_id}
+      assert project_id == project.id
+      assert proposal_id == proposal.id
+    end
+
+    test "a refused or invalid creation broadcasts nothing" do
+      owner = Ecto.UUID.generate()
+      viewer = Ecto.UUID.generate()
+      project = project(owner)
+      membership(project, owner, :owner)
+      membership(project, viewer, :viewer)
+      [parent_a, parent_b] = meld_parents(project)
+
+      Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "project:#{project.id}")
+
+      assert Proposals.create(actor(viewer), meld_attrs(project, [parent_a, parent_b])) ==
+               {:error, :forbidden}
+
+      assert {:error, %Ecto.Changeset{}} =
+               Proposals.create(actor(owner), %{project_id: project.id, kind: :meld})
+
+      refute_receive {:proposal_created, _project_id, _proposal_id}
+    end
   end
 
   describe "list/2 and get_by_token/1" do
