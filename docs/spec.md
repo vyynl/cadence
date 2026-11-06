@@ -609,12 +609,13 @@ status (`open | resolved`), a redacted title, and scanner metadata only
 - Preview-node summary with its flags and timestamp.
 - Markdown-rendered docs via `MDEx`.
 - Embedded Livebook notebooks for data-analysis projects (sandboxed).
-- Actions panel (if the project exposes read-only actions).
 
 Anonymous visitors see the **full read-only DAG** and may browse the repository
 snapshot of any node. Public rendering is always passed through the server-side
 secret filter (§7.6): sensitive paths are hidden and detected secrets are
 redacted before HTML reaches the browser. Public access never grants mutation.
+The Docker action panel is a member view (§7.2), not a public one; the manifest
+file itself remains browsable as ordinary repository content.
 
 Public routes: `/` is the portfolio index, `/p/:slug` is the project home,
 `/p/:slug/n/:node_id/tree/*path` is a directory view,
@@ -628,7 +629,8 @@ never public. `/auth`, `/sync`, `/health`, and static paths are reserved.
 - All of the above, plus:
 - Pin/unpin nodes (owner only; trusted members may not pin, §4.5).
 - A read-only member list with roles/approver flags (owner/trusted only).
-- Trigger actions.
+- See the snapshot's Docker action list (any member) and trigger one
+  (owner/trusted only, Phase 6b).
 - Manage memberships.
 - Review and approve/reject meld proposals (shareable link).
 - The review hub: `/p/:slug/reviews` lists the project's proposals
@@ -843,7 +845,7 @@ deferred (§16).
 
 ---
 
-## 8. Phase 4 — Docker Actions Layer
+## 8. Phase 6 — Docker Actions Layer
 
 ### 8.1 Concept
 
@@ -873,6 +875,17 @@ Example manifest:
 ```
 
 ### 8.2 Language support
+
+The manifest is read from the selected node's snapshot at
+`actions/manifest.json` — never from a server working copy. It is
+client-pushed content, so parsing is strict and capped
+(`CAD_ACTIONS_MAX_MANIFEST_BYTES`, `CAD_ACTIONS_MAX_ACTIONS`): names match
+`^[a-z0-9][a-z0-9_-]{0,63}$`, commands are 1–512 bytes, descriptions are at
+most 200 bytes, commands and descriptions reject control/bidi characters, and
+duplicate names are rejected. Members may see the action list; running one
+requires the owner/trusted role (Phase 6b). A missing, malformed, or oversized
+manifest hides the panel or renders a shape-only notice — it never fails the
+project page.
 
 Language-agnostic by design: the container is the abstraction. Cadence's
 backend never parses Go/Python/Elixir source. It only:
@@ -1477,9 +1490,10 @@ if config_env() == :prod do
     model: System.fetch_env!("CAD_LLM_MODEL"),
     base_url: System.get_env("CAD_LLM_BASE_URL")
 
-  config :cadence_server, Cadence.Server.Actions,
+  config :cadence_server,
+    actions_enabled: System.get_env("CAD_ACTIONS_ENABLED", "true") == "true",
     docker_socket: System.get_env("CAD_DOCKER_SOCKET", "http://localhost:2375"),
-    enabled: System.get_env("CAD_ACTIONS_ENABLED", "true") == "true"
+    artifact_path: System.get_env("CAD_ARTIFACT_PATH", "/data/artifacts")
 end
 ```
 
@@ -1516,6 +1530,8 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_MELD_RETRY_ATTEMPTS` | no | `1` | Retries after a transient meld provider error |
 | `CAD_MELD_RETRY_BACKOFF_MS` | no | `500` | Delay between meld retries |
 | `CAD_ARTIFACT_PATH` | no | `/data/artifacts` | Action outputs |
+| `CAD_ACTIONS_MAX_MANIFEST_BYTES` | no | `32768` | Max `actions/manifest.json` bytes read from a node snapshot |
+| `CAD_ACTIONS_MAX_ACTIONS` | no | `20` | Max actions accepted from one manifest |
 | `CAD_OAUTH_GITHUB_CLIENT_ID` | no | — | GitHub OAuth |
 | `CAD_OAUTH_GITHUB_CLIENT_SECRET` | no | — | GitHub OAuth |
 | `CAD_OAUTH_GOOGLE_CLIENT_ID` | no | — | Google OAuth |
@@ -1751,9 +1767,15 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   read-only `docs_state` badge and links the docs child (§9.4, §9.5).
 
 **Phase 6 — Docker actions (week 17+)**
-- `ex_docker_api` integration.
-- Action manifest parsing.
-- Web UI action buttons + streaming output.
+- 6a — manifest foundation: strict parse/validation of `actions/manifest.json`
+  from a node snapshot, caps, `CAD_ACTIONS_ENABLED`, members see / managers run,
+  and a read-only action list on the project page (§8, §12.6).
+- 6b — runner: `ex_docker_api` integration (spec §11 version row), snapshot
+  staging into a shared volume, image reuse/build cache, container
+  create/start with no network by default plus CPU/memory limits, log capture,
+  artifacts, and the sandboxed-compose socket proxy (§8.3, §8.4, §12.4).
+- 6c — web run experience: run buttons, streamed output over PubSub/LiveView,
+  artifact links, and the `expose` visibility decision (§16 if still open).
 
 **Phase 7 — Storage engineering (week 18+)**
 - Server-side lossless repack: pack loose objects into packfiles with delta
@@ -1861,6 +1883,17 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       lazy.nvim/packer specs.
 - [ ] **Docker-in-Docker vs. host socket proxy:** host socket proxy is the
       current plan (§8.4). Revisit if isolation needs increase.
+- [ ] **Action `expose` semantics (Phase 6c):** `actions/manifest.json` carries
+      `expose`, but 6a parses it without honoring it. Decide whether
+      `expose: true` publishes the action to anonymous visitors (listing only;
+      execution stays owner/trusted) or whether the whole panel remains
+      members-only. Until then members see all actions and anonymous visitors
+      see none. The manifest file itself is ordinary repository content
+      (browsable per §7.5) and is not confidential.
+- [ ] **`Project.actions_manifest` is unused:** the data model still has the
+      column (§4.2), but 6a reads the manifest from the selected node snapshot.
+      Repurpose it as a cache or remove it in a schema slice so the model and
+      the implementation agree.
 - [ ] **Public preview auth:** fully anonymous, or require a lightweight
       signed-URL / API key to avoid scraping.
 - [ ] **Backup strategy for the cloud server:** Postgres WAL archiving +

@@ -144,6 +144,12 @@ if config_env() != :test do
     meld_context_bytes: String.to_integer(System.get_env("CAD_MELD_CONTEXT_BYTES", "65536")),
     meld_retry_attempts: String.to_integer(System.get_env("CAD_MELD_RETRY_ATTEMPTS", "1")),
     meld_retry_backoff_ms: String.to_integer(System.get_env("CAD_MELD_RETRY_BACKOFF_MS", "500")),
+    actions_enabled: System.get_env("CAD_ACTIONS_ENABLED", "true") == "true",
+    docker_socket: System.get_env("CAD_DOCKER_SOCKET", "http://localhost:2375"),
+    artifact_path: System.get_env("CAD_ARTIFACT_PATH", "/data/artifacts"),
+    actions_max_manifest_bytes:
+      String.to_integer(System.get_env("CAD_ACTIONS_MAX_MANIFEST_BYTES", "32768")),
+    actions_max_actions: String.to_integer(System.get_env("CAD_ACTIONS_MAX_ACTIONS", "20")),
     oauth: [
       github: [
         client_id: System.get_env("CAD_OAUTH_GITHUB_CLIENT_ID"),

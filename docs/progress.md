@@ -1,12 +1,12 @@
 # Cadence — Progress
 
 ## Current Phase
-Phase 5 — documentation automation is **complete through P4**: 5a (shared
-primitives), 5b (daemon doc worker + commit integration), 5c (daemon API +
-Neovim commands), P4-T1 (reconnect docs retry), P4-T2 (already-pushed docs child
-node), P4-T3 (read-only `docs_state` badge), and P4-T4/T5 (spec/README
-closeout). The **P5 release gate** remains: the optional live smoke with a real
-`CAD_LLM_API_KEY`, then the final review/compound pass.
+**Phase 6 — Docker actions** is in progress. **6a (manifest foundation)** is
+complete: strict `actions/manifest.json` validation, snapshot-addressed reads,
+`CAD_ACTIONS_*` config, and a members-only read-only action panel. The same
+session fixed a high-severity `GitStore.walk_blobs/3` truncation bug that made
+secret scans skip files after the first directory. Next: **6b (runner)**, then
+6c (web run experience). The Phase 5 P5 smoke gate remains optional.
 
 ## Done (summary)
 
@@ -354,6 +354,35 @@ closeout). The **P5 release gate** remains: the optional live smoke with a real
   adds the server-created-meld-node docs gap. `docs/README.md` marks Phase 5
   code-complete with P5 pending and stops calling `phase-4-prep.md` the current
   brief.
+- **Phase 6a (Docker action manifest foundation)** — `Cadence.Server.Actions.Manifest`
+  strictly parses `actions/manifest.json` (≤ 20 actions, ≤ 32 KiB, name
+  `^[a-z0-9][a-z0-9_-]{0,63}$`, commands 1–512 bytes, descriptions ≤ 200 bytes,
+  control/bidi chars and duplicates rejected, unknown keys ignored).
+  `Cadence.Server.Actions` is snapshot-addressed (`GitStore.read_path` from the
+  selected node), scopes the membership to the project, gates on
+  `CAD_ACTIONS_ENABLED`, and maps every failure to a shape-only error.
+  `ProjectLive` shows a read-only Actions panel to members (hidden for
+  anonymous/non-members, disabled deployments, absent/invalid manifests, and
+  quarantined snapshots), and re-derives it when quarantine flips or raw view
+  toggles. Config: `CAD_ACTIONS_ENABLED`, `CAD_DOCKER_SOCKET`,
+  `CAD_ARTIFACT_PATH`, `CAD_ACTIONS_MAX_MANIFEST_BYTES`,
+  `CAD_ACTIONS_MAX_ACTIONS`. Spec §7.1/§7.2/§8.2/§12.5/§12.6/§13/§16 updated;
+  `docs/phase-6-prep.md` records the phase plan. Review verdict PASS WITH
+  WARNINGS; all five warnings and the actionable suggestions fixed
+  (project-scoped membership, live panel refresh, fail-closed reads,
+  whitespace/bidi validation, a11y/overflow, spec corrections). 40 new tests;
+  844 total.
+- **High-severity `GitStore.walk_blobs/3` truncation fix** — `walk_tree_blobs/8`
+  returned a 2-tuple from recursive subtree calls while the parent reduce
+  expected `{:ok, acc, count, bytes}`; the catch-all halted the walk, so every
+  sibling file after the first directory was skipped. Secret scans therefore
+  missed root files in common repos (a directory sorts before `config.txt`).
+  The recursion now threads one shape and `walk_blobs/3` sorts once at the top.
+  Regression tests: `git_store_test.exs` (directory first, then files) and the
+  project-page quarantine test (manifest + token). Consequence: scans are
+  stricter; new pushes may open incidents for previously missed content, and
+  over-cap parents now fail approval instead of silently passing truncated.
+  Lesson: `.claude/solutions/data-integrity/walk-blobs-truncation-20261106.md`.
 - **4e gate:** 640 tests green (161 shared + 125 daemon + 354 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
@@ -367,43 +396,41 @@ closeout). The **P5 release gate** remains: the optional live smoke with a real
 
 ## Next
 
-**Immediate step:** the **P5 release gate** from
-`.claude/plans/phase-5-docs/plan.md`. P5-T1..T4 are green as of the P4-T3 run
-(format, dev + prod compile, 804 tests). Remaining:
+**Immediate step:** **6b (Docker action runner)** from `docs/phase-6-prep.md`:
 
-- **P5-T5 (optional live smoke):** with a real `CAD_LLM_API_KEY`, run
-  `docker compose up` + the demo stack, drive a schema-triggering edit, and
-  assert the docs commit and `:CadDocDiff`; record the result.
-- **P5-T6:** final read-only review/compound, then commit and hand off.
+- add `{:ex_docker_api, "~> 1.55"}` to `cadence_server` and a spec §11 version
+  row;
+- stage the selected node's snapshot into the shared action volume (D5) — the
+  server's own bind paths are not visible to the host daemon;
+- reuse `Project.docker_image` when set, else build/cache
+  `cadence-action-<project>-<sha12>` from the snapshot's `Dockerfile`;
+- create/start with no network by default, CPU/memory limits, read-only code,
+  and a writable output dir; capture logs; write artifacts under
+  `CAD_ARTIFACT_PATH`;
+- re-check `can_manage?` **and** snapshot quarantine at the run boundary;
+- add the demo compose socket proxy + shared action volume;
+- tests use a fake Docker client (no real daemon).
 
-**P4-T3/T4/T5 shipped (2026-11-06).** The badge decision is resolved: the
-selected node's own `docs_state` is always rendered; when a docs child exists
-(metadata **and** DAG parentage), the page links the child with its own state.
-`Portfolio.docs_child/2` is the query, `ProjectLive` refreshes only that link on
-`{:nodes_pushed, …}`, and spec §9.4/§16 record the model.
+Then 6c: run buttons, streamed output over PubSub/LiveView, artifact links, the
+`expose` decision (§16), and closeout.
 
-**Integration contract:** `LLM.Docs.build_prompt/4` returns
-`{:ok, prompt, %{writable_paths, read_only_paths}}`; `DocQueue` passes
-`read_only_paths` to `parse/3`. A node's docs commit is
-`session_metadata["docs"]["docs_commit_sha"]` (absent with `"empty": true` for
-a no-op generation); the code commit is
-`session_metadata["docs"]["code_commit_sha"]`. `DocQueue.enqueue(force: true)`
-still supports a direct forced run on a `:skipped`/legacy node by falling back
-to `node.git_commit_sha`; `POST /docs/sync` gates that behind a `SyncPending`
-row or a pushed-SHA stamp (the local proof of provenance) and reports
-`already_current` for generated docs and `legacy` otherwise. A pushed node
-queues a child job (P4-T2) and answers `202 %{status: "queued", node_id}`.
-Reconnect ordering: `Sync.sync/2` `retry_docs: true` →
-`DocQueue.retry_pending/1` (re-arms the hold synchronously) →
-`push_pending/1`; `SyncWorker` asks for it only on the first pass after boot or
-a failed pass.
+**Integration contract (6a):** `Actions.Manifest.parse/2` returns
+`{:ok, %Manifest{actions: [%Action{}]}}` or a shape-only atom;
+`Actions.list(project, node, membership)` returns the same or
+`:forbidden | :disabled | :not_found | :too_large | :invalid_*`, reads
+`actions/manifest.json` from the node's Git tree, and requires the membership
+to belong to the project. The LiveView hides the panel for
+`:not_found | :disabled | :forbidden`, shows a notice for other errors, and
+never renders a quarantined snapshot. `Project.docker_image` is unused by 6a;
+6b must define how a prebuilt image relates to the snapshot tree.
 
-Carry-over (small, not blocking Phase 5):
+Carry-over (small, not blocking Phase 6):
 
-1. **Union live smoke** — drive `:CadUnion` against the demo stack once
+1. **P5 docs live smoke** — optional, with a real `CAD_LLM_API_KEY`.
+2. **Union live smoke** — drive `:CadUnion` against the demo stack once
    (`docker compose up`, `docs/demo.md`) and record the result; the Neovim
    submit is the one 4d-3 surface without a live run.
-2. **Two open review suggestions from the freshness review:**
+3. **Two open review suggestions from the freshness review:**
    - `ReviewLive.Show`: an incident on the decision node that arrives while the
      review payload is still loading is dropped (`decision_node_ids/1` returns
      `[]` before the async completes) and Approve stays enabled until reload
@@ -411,26 +438,40 @@ Carry-over (small, not blocking Phase 5):
    - `ProjectLive`: the quarantine cache is reused for a `:quarantined` answer
      derived from a failed `walk_blobs`; reuse only `:ok` and re-derive a
      failure-derived answer.
-3. **Optional `:CadProposals` surface** for the union token returned to Neovim.
-4. **Manual styling check** (optional): `docker compose up`, then `/`,
+4. **Optional `:CadProposals` surface** for the union token returned to Neovim.
+5. **Manual styling check** (optional): `docker compose up`, then `/`,
    `/p/cadence-demo`, `/p/cadence-demo/reviews`, one pending proposal, and
    `/proposals/<token>` at wide and narrow widths in light and dark. There are
    no browser tests; 4e verified server-rendered markup and CSS only (the P4-T3
-   docs badge is also only test-verified, not browser-checked).
+   docs badge and 6a action panel are also only test-verified).
 
-**Spin-up:** run the P5-T5 live smoke when a real `CAD_LLM_API_KEY` is
-available; otherwise start the next phase brief (Phase 6 — Docker actions,
-spec §8/§13).
+**Spin-up:** `@phx-work docs/phase-6-prep.md` at 6b; the runner design may need
+a fresh gate before code (socket proxy, shared volume, artifact durability).
 
 ## Blocked
 
-- (none). P4-T2 and P4-T3 review findings are fixed and verified. The one known
-  residual (a push that completes *after* the local `C2` write, leaving the
-  server on `C1`) is recorded in Spec Deltas; it is recoverable and does not
-  block the P5 gate — closing it fully needs a push-in-flight marker.
+- (none). 6a review findings are fixed and verified. Two known residual items
+  do not block 6b: the P4-T2 push-in-flight gap (recorded below) and the
+  `ProjectLive` quarantine-cache suggestion carried over from 4e.
 
 ## Spec Deltas / Open Items
 
+- **`walk_blobs/3` truncation fix changes scan outcomes (2026-11-06)** — the
+  shared walk previously dropped every sibling after a directory; it now scans
+  the full tree. Consequences: a snapshot can newly quarantine (correct), new
+  pushes may open incidents for previously missed content (existing rows are
+  not rescanned), `Proposals.verify_first_parent/2` maps an over-cap parent to
+  `:missing_parent` (so a previously truncated over-cap parent now blocks
+  approval), and `ProposalView`/`Melds` walks may newly hit `:too_large`.
+  Regression tests pin the walk; the lesson is in
+  `.claude/solutions/data-integrity/walk-blobs-truncation-20261106.md`.
+- **Actions 6a notes (2026-11-06)** — the manifest is read from the node's Git
+  tree on every navigation (one bounded blob read; no extra query); callers own
+  quarantine (the LiveView hides the panel, 6b must re-check at the run
+  boundary); the manifest file itself remains publicly browsable repository
+  content; `Project.actions_manifest` is still unused; `expose` is parsed but
+  not honored (§16). 6b still needs decisions for artifact retention and run
+  durability.
 - **Phase 5b implementation notes (2026-11-06)** — every commit gets a
   `SyncPending` row written in the same transaction as the node (and spawn);
   `pushable/3` keeps a doc-held parent in the parent set and gates only
@@ -1023,3 +1064,36 @@ contract, §13 5a/5b/5c/P4 breakdown, §16 web-review + meld-node gap,
 tests green (251 shared + 188 daemon + 365 server; +11 net). Next: P5 release
 gate — optional live smoke with a real `CAD_LLM_API_KEY`, then final
 review/handoff.
+
+2026-11-06 — **Phase 6a (Docker action manifest foundation)** shipped from
+`docs/phase-6-prep.md`. `Cadence.Server.Actions.Manifest` strictly parses
+`actions/manifest.json` (≤ 20 actions, ≤ 32 KiB, 64-char lowercase names,
+1–512-byte commands, ≤ 200-byte descriptions, control/bidi chars and duplicates
+rejected, unknown keys ignored); `Cadence.Server.Actions` reads it from the
+selected node's Git tree, requires a project-scoped membership, gates on
+`CAD_ACTIONS_ENABLED`, and returns shape-only errors. `ProjectLive` renders a
+read-only Actions panel for members (hidden for anonymous/non-members, disabled
+deployments, absent/invalid manifests, and quarantined snapshots) and
+re-derives it when quarantine flips or raw view toggles. Config:
+`CAD_ACTIONS_ENABLED`, `CAD_DOCKER_SOCKET`, `CAD_ARTIFACT_PATH`,
+`CAD_ACTIONS_MAX_MANIFEST_BYTES`, `CAD_ACTIONS_MAX_ACTIONS`. Spec
+§7.1/§7.2/§8/§12.5/§12.6/§13/§16 and `docs/README.md` updated; no dependency
+added (6b owns `ex_docker_api`).
+
+**Security fix found during 6a:** `GitStore.walk_blobs/3` recursed with a
+2-tuple while its parent reduce expected `{:ok, acc, count, bytes}`, so the
+catch-all halted the walk after the first directory — the secret scanner
+skipped every sibling file that sorted after it. The recursion now threads one
+shape and `walk_blobs/3` sorts once at the top. Regression tests: a
+directory-before-files walk and the project-page quarantine integration case.
+Scans are now stricter (new quarantines/incidents for previously missed
+content; over-cap parents block approval instead of passing truncated). Lesson:
+`.claude/solutions/data-integrity/walk-blobs-truncation-20261106.md`.
+
+Independent review verdict PASS WITH WARNINGS; all five warnings and the
+actionable suggestions fixed (project-scoped membership check, live panel
+refresh on quarantine/raw flips, fail-closed manifest reads, whitespace/bidi
+validation, `aria-label` + command wrapping, spec contradictions, test gaps).
+Verification: `mix format --check-formatted`, dev +
+`MIX_ENV=prod mix compile --warnings-as-errors`, 844 tests green (252 shared +
+188 daemon + 404 server; +40). Next: 6b (runner).

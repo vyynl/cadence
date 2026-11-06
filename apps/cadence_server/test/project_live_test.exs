@@ -268,6 +268,244 @@ defmodule Cadence.ServerWeb.ProjectLiveTest do
     end
   end
 
+  describe "actions panel" do
+    test "a member sees the snapshot's action list", %{conn: conn} do
+      owner = seed_user("actions-live-owner@example.com", "Owner")
+      project = insert_project("actions-live", owner.id)
+      insert_membership(project, owner, :owner)
+
+      node =
+        insert_node(
+          project,
+          %{message: "action node", flags: [:functioning]},
+          %{"actions/manifest.json" => actions_manifest(), "README.md" => "# Actions\n"}
+        )
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/actions-live")
+      html = render_patch(view, "/p/actions-live/n/#{node.id}")
+
+      assert html =~ "Actions"
+      assert html =~ "run_analysis"
+      assert html =~ "Run the analysis"
+      assert html =~ "python actions/run.py"
+    end
+
+    test "a viewer may see the list", %{conn: conn} do
+      owner = seed_user("actions-viewer-owner@example.com", "Owner")
+      viewer = seed_user("actions-viewer-member@example.com", "Viewer")
+      project = insert_project("actions-viewer", owner.id)
+      insert_membership(project, owner, :owner)
+      insert_membership(project, viewer, :viewer)
+
+      node =
+        insert_node(
+          project,
+          %{message: "action node", flags: [:functioning]},
+          %{"actions/manifest.json" => actions_manifest()}
+        )
+
+      {:ok, view, _html} = live(signed_conn(conn, viewer), "/p/actions-viewer")
+      html = render_patch(view, "/p/actions-viewer/n/#{node.id}")
+
+      assert html =~ "run_analysis"
+    end
+
+    test "anonymous visitors see no action panel", %{conn: conn} do
+      project = insert_project("actions-public")
+
+      node =
+        insert_node(
+          project,
+          %{message: "action node", flags: [:functioning]},
+          %{"actions/manifest.json" => actions_manifest()}
+        )
+
+      {:ok, view, _html} = live(conn, "/p/actions-public")
+      html = render_patch(view, "/p/actions-public/n/#{node.id}")
+
+      refute html =~ "run_analysis"
+      refute html =~ "python actions/run.py"
+    end
+
+    test "a quarantined snapshot hides its actions", %{conn: conn} do
+      owner = seed_user("actions-quarantine-owner@example.com", "Owner")
+      project = insert_project("actions-quarantine", owner.id)
+      insert_membership(project, owner, :owner)
+
+      node =
+        insert_node(
+          project,
+          %{message: "secret action node", flags: [:functioning]},
+          %{
+            "actions/manifest.json" => actions_manifest(),
+            "config.txt" => "token: ghp_abcdefghijklmnopqrstuvwxyz0123456789\n"
+          }
+        )
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/actions-quarantine")
+      html = render_patch(view, "/p/actions-quarantine/n/#{node.id}")
+
+      assert html =~ "Snapshot hidden for review"
+      refute html =~ "run_analysis"
+    end
+
+    test "a malformed manifest renders a shape-only notice", %{conn: conn} do
+      owner = seed_user("actions-invalid-owner@example.com", "Owner")
+      project = insert_project("actions-invalid", owner.id)
+      insert_membership(project, owner, :owner)
+
+      node =
+        insert_node(
+          project,
+          %{message: "bad manifest", flags: [:functioning]},
+          %{"actions/manifest.json" => "{not json"}
+        )
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/actions-invalid")
+      html = render_patch(view, "/p/actions-invalid/n/#{node.id}")
+
+      assert html =~ "The actions manifest could not be read."
+      refute html =~ "run_analysis"
+    end
+
+    test "CAD_ACTIONS_ENABLED=false hides the panel", %{conn: conn} do
+      owner = seed_user("actions-disabled-owner@example.com", "Owner")
+      project = insert_project("actions-disabled", owner.id)
+      insert_membership(project, owner, :owner)
+
+      node =
+        insert_node(
+          project,
+          %{message: "action node", flags: [:functioning]},
+          %{"actions/manifest.json" => actions_manifest()}
+        )
+
+      Application.put_env(:cadence_server, :actions_enabled, false)
+      on_exit(fn -> Application.delete_env(:cadence_server, :actions_enabled) end)
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/actions-disabled")
+      html = render_patch(view, "/p/actions-disabled/n/#{node.id}")
+
+      refute html =~ "run_analysis"
+      refute html =~ "The actions manifest could not be read."
+    end
+
+    test "a snapshot without a manifest hides the panel", %{conn: conn} do
+      owner = seed_user("actions-none-owner@example.com", "Owner")
+      project = insert_project("actions-none", owner.id)
+      insert_membership(project, owner, :owner)
+
+      node =
+        insert_node(project, %{message: "plain node", flags: [:functioning]}, %{
+          "README.md" => "# No actions\n"
+        })
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/actions-none")
+      html = render_patch(view, "/p/actions-none/n/#{node.id}")
+
+      refute html =~ "run_analysis"
+      refute html =~ "The actions manifest could not be read."
+    end
+
+    test "a signed-in non-member sees no action panel", %{conn: conn} do
+      owner = seed_user("actions-outsider-owner@example.com", "Owner")
+      outsider = seed_user("actions-outsider@example.com", "Outsider")
+      project = insert_project("actions-outsider", owner.id)
+      insert_membership(project, owner, :owner)
+
+      node =
+        insert_node(
+          project,
+          %{message: "action node", flags: [:functioning]},
+          %{"actions/manifest.json" => actions_manifest()}
+        )
+
+      {:ok, view, _html} = live(signed_conn(conn, outsider), "/p/actions-outsider")
+      html = render_patch(view, "/p/actions-outsider/n/#{node.id}")
+
+      refute html =~ "run_analysis"
+    end
+
+    test "an oversized manifest renders a shape-only notice", %{conn: conn} do
+      owner = seed_user("actions-oversize-owner@example.com", "Owner")
+      project = insert_project("actions-oversize", owner.id)
+      insert_membership(project, owner, :owner)
+
+      node =
+        insert_node(
+          project,
+          %{message: "action node", flags: [:functioning]},
+          %{"actions/manifest.json" => actions_manifest()}
+        )
+
+      Application.put_env(:cadence_server, :actions_max_manifest_bytes, 10)
+      on_exit(fn -> Application.delete_env(:cadence_server, :actions_max_manifest_bytes) end)
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/actions-oversize")
+      html = render_patch(view, "/p/actions-oversize/n/#{node.id}")
+
+      assert html =~ "The actions manifest could not be read."
+      refute html =~ "run_analysis"
+    end
+
+    test "resolving a node incident reveals the action panel live", %{conn: conn} do
+      owner = seed_user("actions-live-owner@example.com", "Owner")
+      project = insert_project("actions-live-unquarantine", owner.id)
+      insert_membership(project, owner, :owner)
+
+      node =
+        insert_node(
+          project,
+          %{message: "clean action node", flags: [:functioning]},
+          %{"actions/manifest.json" => actions_manifest(), "README.md" => "# Clean\n"}
+        )
+
+      incident = open_secret_incident(project, node)
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/actions-live-unquarantine")
+      html = render_patch(view, "/p/actions-live-unquarantine/n/#{node.id}")
+
+      assert html =~ "Snapshot hidden for review"
+      refute html =~ "run_analysis"
+
+      assert {:ok, _resolved} = Incidents.resolve(%{id: owner.id}, project.id, incident.id)
+
+      html = render(view)
+      assert html =~ "run_analysis"
+      refute html =~ "Snapshot hidden for review"
+    end
+
+    test "raw view reveals and re-hides a quarantined snapshot's actions", %{conn: conn} do
+      owner = seed_user("actions-raw-owner@example.com", "Owner")
+      project = insert_project("actions-raw", owner.id)
+      insert_membership(project, owner, :owner)
+
+      node =
+        insert_node(
+          project,
+          %{message: "secret action node", flags: [:functioning]},
+          %{
+            "actions/manifest.json" => actions_manifest(),
+            "config.txt" => "token: ghp_abcdefghijklmnopqrstuvwxyz0123456789\n"
+          }
+        )
+
+      {:ok, view, html} =
+        live(signed_conn(conn, owner), "/p/actions-raw/n/#{node.id}")
+
+      assert html =~ "Snapshot hidden for review"
+      refute html =~ "run_analysis"
+
+      html = render_click(view, "toggle_raw", %{})
+      assert html =~ "run_analysis"
+      refute html =~ "Snapshot hidden for review"
+
+      html = render_click(view, "toggle_raw", %{})
+      assert html =~ "Snapshot hidden for review"
+      refute html =~ "run_analysis"
+    end
+  end
+
   test "shows binary and oversized file notices", %{
     conn: conn,
     functioning: functioning
@@ -722,6 +960,19 @@ defmodule Cadence.ServerWeb.ProjectLiveTest do
 
   defp seed_user(email, name) do
     Ash.Seed.seed!(User, %{email: email, name: name})
+  end
+
+  defp actions_manifest do
+    Jason.encode!(%{
+      "actions" => [
+        %{
+          "name" => "run_analysis",
+          "command" => "python actions/run.py",
+          "description" => "Run the analysis",
+          "expose" => true
+        }
+      ]
+    })
   end
 
   defp open_secret_incident(project, node) do

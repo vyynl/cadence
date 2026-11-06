@@ -21,7 +21,7 @@ defmodule Cadence.ServerWeb.ProjectLive do
 
   use Cadence.ServerWeb, :live_view
 
-  alias Cadence.Server.{Accounts, Incidents, Portfolio, ProjectAdmin, PublicContent}
+  alias Cadence.Server.{Accounts, Actions, Incidents, Portfolio, ProjectAdmin, PublicContent}
   alias Cadence.ServerWeb.Components.{DAG, Repo}
   alias Cadence.ServerWeb.DAGLayout
   alias Cadence.ServerWeb.Metadata
@@ -96,6 +96,7 @@ defmodule Cadence.ServerWeb.ProjectLive do
               dag_layout: dag_layout,
               selected_node: selected_node,
               docs_child: selected_node && Portfolio.docs_child(project.id, selected_node.id),
+              actions: actions_for(project, selected_node, auth.membership, quarantine),
               not_found: false,
               quarantine: quarantine,
               quarantine_key: quarantine_key,
@@ -310,6 +311,28 @@ defmodule Cadence.ServerWeb.ProjectLive do
                   </span>
                 </div>
 
+                <%= if @quarantine != :quarantined do %>
+                  <%= case @actions do %>
+                    <% {:ok, actions} -> %>
+                      <section class="actions-panel" aria-label="Actions">
+                        <p class="eyebrow">Actions</p>
+                        <ul class="action-list">
+                          <li :for={action <- actions}>
+                            <span class="action-name">{action.name}</span>
+                            <p :if={action.description} class="note">{action.description}</p>
+                            <code>{action.command}</code>
+                          </li>
+                        </ul>
+                      </section>
+                    <% :invalid -> %>
+                      <section class="actions-panel" aria-label="Actions">
+                        <p class="eyebrow">Actions</p>
+                        <p class="note">The actions manifest could not be read.</p>
+                      </section>
+                    <% nil -> %>
+                  <% end %>
+                <% end %>
+
                 <Repo.quarantine :if={@quarantine == :quarantined and not @raw_view?} />
 
                 <div :if={@quarantine != :quarantined and @path_error} class="path-error">
@@ -377,6 +400,7 @@ defmodule Cadence.ServerWeb.ProjectLive do
       dag_layout: DAGLayout.layout([]),
       selected_node: nil,
       docs_child: nil,
+      actions: nil,
       not_found: false,
       quarantine: :ok,
       quarantine_key: nil,
@@ -583,6 +607,7 @@ defmodule Cadence.ServerWeb.ProjectLive do
 
   defp reload_repo(socket) do
     params = %{"path" => socket.assigns.current_path}
+    socket = reload_actions(socket)
 
     load_repo(
       socket,
@@ -590,6 +615,19 @@ defmodule Cadence.ServerWeb.ProjectLive do
       socket.assigns.selected_node,
       params,
       socket.assigns.repo_action
+    )
+  end
+
+  # The panel depends on mutable quarantine state, so it is recomputed whenever
+  # the pane reloads for an incident flip or a raw toggle. Snapshots are
+  # immutable, so a pin/tree patch does not need it.
+  defp reload_actions(socket) do
+    project = socket.assigns.project
+    node = socket.assigns.selected_node
+
+    assign(
+      socket,
+      actions: actions_for(project, node, socket.assigns.membership, socket.assigns.quarantine)
     )
   end
 
@@ -675,6 +713,20 @@ defmodule Cadence.ServerWeb.ProjectLive do
   defp redact_node(node) do
     Map.put(node, :message, PublicContent.redact_message(node.message))
   end
+
+  # Nothing to show: no manifest, actions disabled, or the viewer is not a
+  # member. A malformed or oversized manifest is a shape-only notice, never a
+  # partial list and never a crash.
+  defp actions_for(_project, nil, _membership, _quarantine), do: nil
+  defp actions_for(_project, _node, _membership, :quarantined), do: nil
+
+  defp actions_for(project, node, membership, _quarantine),
+    do: actions_view(Actions.list(project, node, membership))
+
+  defp actions_view({:ok, %{actions: []}}), do: nil
+  defp actions_view({:ok, %{actions: actions}}), do: {:ok, actions}
+  defp actions_view({:error, reason}) when reason in [:not_found, :disabled, :forbidden], do: nil
+  defp actions_view({:error, _reason}), do: :invalid
 
   defp dag_intro_ms do
     Application.get_env(:cadence_server, :dag_intro_ms, 1200)
