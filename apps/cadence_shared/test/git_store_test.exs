@@ -346,6 +346,27 @@ defmodule Cadence.Shared.GitStoreTest do
       assert Enum.all?(blobs, &(&1.size == byte_size(&1.content)))
     end
 
+    test "keeps walking after a directory entry", %{repo: repo, dir: dir} do
+      # Git sorts a tree before sibling blobs whose names sort later; an earlier
+      # implementation returned the subtree result and dropped the rest.
+      tree =
+        build_file_tree(repo, Path.join(dir, "walk-order"), %{
+          "actions/manifest.json" => "{}",
+          "config.txt" => "token: test\n",
+          "z.txt" => "z\n"
+        })
+
+      commit = GitStore.write_commit(repo, tree, [], %{name: "a", email: "a@b"}, "order")
+
+      assert {:ok, blobs} = GitStore.walk_blobs(repo, commit)
+
+      assert Enum.map(blobs, & &1.path) == [
+               "actions/manifest.json",
+               "config.txt",
+               "z.txt"
+             ]
+    end
+
     test "enforces file and byte caps", %{repo: repo, commit: commit} do
       assert GitStore.walk_blobs(repo, commit, max_files: 1) == {:error, :too_many_files}
       assert GitStore.walk_blobs(repo, commit, max_bytes: 3) == {:error, :too_many_bytes}

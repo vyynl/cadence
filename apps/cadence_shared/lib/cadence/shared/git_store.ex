@@ -463,7 +463,11 @@ defmodule Cadence.Shared.GitStore do
     case read_object(repo, commit_sha) do
       {:commit, _data} ->
         commit = read_commit(repo, commit_sha)
-        walk_tree_blobs(repo, commit.tree, "", max_files, max_bytes, [], 0, 0)
+
+        case walk_tree_blobs(repo, commit.tree, "", max_files, max_bytes, [], 0, 0) do
+          {:ok, blobs, _count, _bytes} -> {:ok, Enum.sort_by(blobs, & &1.path)}
+          error -> error
+        end
 
       {_other, _data} ->
         {:error, :not_a_commit}
@@ -528,10 +532,6 @@ defmodule Cadence.Shared.GitStore do
               end
           end
         end)
-        |> case do
-          {:ok, acc, _count, _bytes} -> {:ok, Enum.sort_by(acc, & &1.path)}
-          error -> error
-        end
     end
   end
 
