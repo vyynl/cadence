@@ -55,6 +55,31 @@ defmodule Cadence.Daemon.Sync do
     end
   end
 
+  @doc """
+  Requests a meld proposal on the server for `parent_node_ids` (spec §6.5,
+  §10.6).
+
+  Ensures the server user and project exist, then posts synchronously — a
+  conflicted union may wait on the meld model, so `SyncClient.union/3` applies
+  `Env.sync_union_timeout_ms/0`. No local state changes: the pending proposal
+  is reviewed on the server/web.
+  """
+  @spec propose_union(Ecto.UUID.t() | String.t(), [Ecto.UUID.t() | String.t()], keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def propose_union(project_id, parent_node_ids, opts \\ []) do
+    with {:ok, project_id} <- UUID.cast(project_id),
+         :ok <- ensure_server_user(),
+         :ok <- ensure_project(project_id) do
+      # Selected parents may still be queued locally ("commit then union").
+      # Push due nodes first; a remaining gap surfaces as a 422 from the server.
+      _ = push_pending(project_id)
+      SyncClient.union(project_id, parent_node_ids, opts)
+    else
+      :error -> {:error, :invalid_uuid}
+      {:error, _reason} = error -> error
+    end
+  end
+
   @doc "Resolves and caches the authenticated server user ID."
   @spec ensure_server_user() :: :ok | {:error, term()}
   def ensure_server_user do

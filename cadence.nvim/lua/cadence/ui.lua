@@ -120,7 +120,8 @@ end
 --- Open the DAG picker.
 ---
 --- `layout` is the output of `cadence.graph.layout/3`. `opts`:
----   title, default_node_id, on_switch(node_id), union (boolean)
+---   title, default_node_id, on_switch(node_id), union (boolean),
+---   on_union(node_ids) -> boolean
 M.open_graph = function(layout, opts)
   opts = opts or {}
   M.setup_highlights()
@@ -140,7 +141,9 @@ M.open_graph = function(layout, opts)
   end
 
   local union = opts.union == true
+  local on_union = opts.on_union
   local selected = {}
+  local selected_order = {}
   local ns = vim.api.nvim_create_namespace("cadence_graph")
   local union_ns = vim.api.nvim_create_namespace("cadence_union")
   local diff_ns = vim.api.nvim_create_namespace("cadence_diff_panel")
@@ -359,7 +362,7 @@ M.open_graph = function(layout, opts)
     end
     vim.bo[buf].modifiable = true
     vim.api.nvim_buf_set_lines(buf, footer_idx, footer_idx + 1, false, {
-      string.format("selected %d · <C-s> submit", n),
+      string.format("selected %d · <C-s> submit (2–8)", n),
     })
     vim.bo[buf].modifiable = false
   end
@@ -368,11 +371,19 @@ M.open_graph = function(layout, opts)
     if selected[node_id] then
       vim.api.nvim_buf_del_extmark(buf, union_ns, selected[node_id])
       selected[node_id] = nil
+
+      for i, id in ipairs(selected_order) do
+        if id == node_id then
+          table.remove(selected_order, i)
+          break
+        end
+      end
     else
       selected[node_id] = vim.api.nvim_buf_set_extmark(buf, union_ns, cell.row, cell.col, {
         virt_text = { { "✓", "CadencePinned" } },
         virt_text_pos = "overlay",
       })
+      selected_order[#selected_order + 1] = node_id
     end
     refresh_footer()
   end
@@ -403,9 +414,34 @@ M.open_graph = function(layout, opts)
     end
   end, { buffer = buf })
 
-  vim.keymap.set("n", "<C-s>", function()
-    vim.notify("union requires the server (Phase 2b)", vim.log.levels.WARN)
-  end, { buffer = buf })
+  if union then
+    vim.keymap.set("n", "<C-s>", function()
+      -- Selection order is meaningful: the first parent is the review diff
+      -- base and the first commit parent.
+      local ids = {}
+      for _, id in ipairs(selected_order) do
+        ids[#ids + 1] = id
+      end
+
+      if #ids < 2 then
+        vim.notify("select at least two nodes to union", vim.log.levels.WARN)
+        return
+      end
+
+      if #ids > 8 then
+        vim.notify("select at most eight nodes", vim.log.levels.WARN)
+        return
+      end
+
+      if on_union then
+        if on_union(ids) then
+          close_all()
+        end
+      else
+        vim.notify("union is not available in this picker", vim.log.levels.WARN)
+      end
+    end, { buffer = buf })
+  end
 
   vim.keymap.set("n", "q", close_all, { buffer = buf })
   vim.keymap.set("n", "<Esc>", close_all, { buffer = buf })

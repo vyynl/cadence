@@ -86,6 +86,18 @@ defmodule Cadence.Daemon.Env do
     Application.get_env(:cadence_daemon, :sync_request_timeout_ms, 5_000)
   end
 
+  @doc """
+  HTTP timeout for a synchronous union request.
+
+  A conflicted union can take `(meld retries + 1) × server timeout + backoff` on the
+  server (about 120.5 s at defaults), so this is deliberately larger than
+  `sync_request_timeout_ms/0`.
+  """
+  @spec sync_union_timeout_ms() :: pos_integer()
+  def sync_union_timeout_ms do
+    Application.get_env(:cadence_daemon, :sync_union_timeout_ms, 180_000)
+  end
+
   @doc "Delay between background sync passes in milliseconds."
   @spec sync_interval_ms() :: pos_integer()
   def sync_interval_ms do

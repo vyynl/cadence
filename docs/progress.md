@@ -1,9 +1,9 @@
 # Cadence — Progress
 
 ## Current Phase
-Phase 4 — unions, proposals & review. 4a-1, 4a-2, 4b, 4b-2, 4c-1, 4c-2, 4c-3,
-**4d-1 (convergence)**, **4d-2 (union route)** and the **demo stack** are
-complete; 4d-3 (daemon + Neovim trigger) is next.
+Phase 4 — unions, proposals & review is **complete** (4a-1, 4a-2, 4b, 4b-2,
+4c-1, 4c-2, 4c-3, 4d-1, 4d-2, 4d-3 and the demo stack). The next slice is the
+UI styling/freshness pass, then Phase 5 (doc automation).
 
 ## Done (summary)
 
@@ -147,6 +147,21 @@ complete; 4d-3 (daemon + Neovim trigger) is next.
   parents (sequential queue dedupe; rejected work re-proposes), caps parents at
   8, and keys the LLM limiter per project. `UnionResponse` is the proposal
   reference. 8 request tests; 587 total.
+- **Phase 4d-3 (daemon + Neovim trigger)** — `:CadUnion` now submits for real.
+  `Env.sync_union_timeout_ms/0` (`CAD_SYNC_UNION_TIMEOUT_MS`, 180 s) covers the
+  synchronous meld; `SyncClient.union/3` posts `/sync/union` and
+  `Sync.propose_union/3` provisions first and best-effort pushes pending nodes
+  so a just-committed parent is available. Daemon `POST /union` validates 2–8
+  parents, returns `201 %{proposal_id, proposal_token, proposal_url, status,
+  kind}`, maps 503 unconfigured/unreachable, 504 timeout, 422 payload/unknown
+  synced-parent (friendly message), 429 rate limit, and passes server
+  403/404/409/422/500/502 through. The Neovim picker keeps selection order
+  (first parent = diff base), `<C-s>` is gated to union mode, and submission is
+  **async** (`client.post_async`), so the editor never freezes; the token/URL
+  arrives as a notification. Spec §6.1/§6.5/§10.6/§12.6 updated; 11 new daemon
+  tests. Review verdict PASS WITH WARNINGS; H1 + six Mediums fixed (async
+  submit, 503/504 mapping, ordered parents, push-before-union, timeout formula,
+  passthrough tests, offline wording).
 - **Demo stack (P0–P3)** — one `docker compose up` gives a browsable Cadence:
   `postgres:16-alpine` plus a `MIX_ENV=dev` server that migrates, seeds and
   boots only `cadence_server`. Compile-gated `password :demo` strategy
@@ -172,7 +187,7 @@ complete; 4d-3 (daemon + Neovim trigger) is next.
   §7.4/§11/§12.4/§12.5/§12.6 updates. 15 new tests; compose smoke verified
   (`/health`, `/`, both projects, a proposal token, `/sign-in` all 200;
   anonymous reviews 302; demo sign-in establishes a session).
-- 587 tests green (161 shared + 116 daemon + 310 server);
+- 596 tests green (161 shared + 125 daemon + 310 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
   `AshAuthentication.Info.strategy(User, :demo) == :error`.
@@ -185,19 +200,15 @@ complete; 4d-3 (daemon + Neovim trigger) is next.
 
 ## Next
 
-1. Execute **4d-3 — daemon + Neovim union trigger** from
-   `.claude/plans/4d-convergence/plan.md` P3-T1..T4: `SyncClient.union/3` and
-   `Sync.propose_union/3` (ensure server user/project, then post with a
-   timeout above the ~120.5 s server bound — do **not** reuse the 5 s
-   `CAD_SYNC_REQUEST_TIMEOUT_MS`), daemon `POST /union` (201 token/URL, 503
-   when sync is off, 422 for <2/too many parents, 404 unknown project, 502
-   server meld failure), Neovim `<C-s>` via `on_union(selected_ids)` plus the
-   `/union` call, Bypass/API tests.
-2. Then the UI styling/freshness pass (incident + review pages; notes in
-   `docs/ui-notes.md`), including the still-open PubSub freshness item and the
-   cached quarantine assign.
-3. Optional polish after 4d: a `:CadProposals`/notification surface for the
-   returned token (not in spec; discuss before adding).
+1. UI styling/freshness pass: incident panel, review pages, portfolio/project
+   surfaces (`docs/ui-notes.md`), the still-open PubSub freshness item (an
+   incident/proposal opened elsewhere does not reach an open socket), and the
+   cached quarantine assign in `ProjectLive`.
+2. Then Phase 5 — documentation automation (spec §9, §13): doc schema parsing,
+   the doc agent with its own limiter, deferred docs when offline, and
+   `:CadDocDiff`/`:CadDocSync` (both still stubs).
+3. Optional polish: a `:CadProposals`/notification surface for the returned
+   proposal token (not in spec; discuss before adding).
 
 ## Blocked
 
@@ -206,6 +217,22 @@ complete; 4d-3 (daemon + Neovim trigger) is next.
 
 ## Spec Deltas / Open Items
 
+- **`proposal_url` assumes `CAD_SERVER_URL` is public (4d-3)** — the daemon
+  builds the link from its API base. If a deployment points the daemon at an
+  internal/docker URL while `CAD_PUBLIC_URL` differs, the notification link is
+  unreachable. The server already knows `public_url`; returning it in the union
+  response would remove the assumption.
+- **The union picker is not live-smoke tested (4d-3)** — `ui.lua`,
+  `client.lua`, and the plugin pass `luac -p` and the daemon API is covered by
+  tests, but no Neovim instance was driven against a daemon/server for this
+  session. Drive `:CadUnion` once against the demo stack and record the result.
+- **`CAD_SYNC_ENABLED` gates only background sync (4d-3)** — a union still
+  attempts when it is `false` as long as `CAD_SERVER_URL`/`CAD_AUTH_TOKEN` are
+  set (and reports 503 when they are not). Spec §6.5 now says offline union
+  reports 503 after submit rather than greying the command out.
+- **The union request is synchronous end to end (4d-3)** — the editor is async,
+  but the daemon holds one HTTP request open while the server may retry the
+  model (~120.5 s at defaults). A job/queue remains an open delta.
 - **Pin convergence is best-effort after commit (4d-1)** — the pin is committed
   first, then `Sync.touch_node/1` bumps `nodes.seq` outside the transaction
   specifically so a concurrent pull cannot advance past an uncommitted token.
@@ -396,3 +423,16 @@ retry×timeout latency, 429 mapping, queue dedupe), plus the Lows (scan 5xx,
 403 wording, struct response, moduledoc, test gaps). Verification: format +
 dev/prod compile clean, 587 tests green (161 + 116 + 310). Next: 4d-3
 (daemon + Neovim trigger).
+
+2026-11-05 — **4d-3 (daemon + Neovim union trigger)** completes Phase 4.
+`:CadUnion` submits asynchronously through the daemon (`POST /union`) to
+`POST /sync/union`; the picker keeps selection order, the daemon provisions and
+pushes pending parents first, and the result notifies the proposal token/URL.
+`CAD_SYNC_UNION_TIMEOUT_MS` (180 s) covers the server's `(retries + 1) ×
+timeout` bound; transport failures map to 503/504, server statuses pass
+through, and rate limits say "retry shortly". Review verdict PASS WITH
+WARNINGS; H1 (blocking `<C-s>`) and six Mediums fixed (async submit, status
+mapping, ordered parents, push-before-union, timeout formula, passthrough
+tests), plus the Lows. Verification: format + dev/prod compile clean, `luac -p`
+clean, 596 tests green (161 + 125 + 310). Remaining: UI styling/freshness pass
+and Phase 5 docs automation.

@@ -46,4 +46,36 @@ M.post = function(path, body, socket_path)
   return M.request("POST", path, body, socket_path)
 end
 
+--- Perform an asynchronous POST over the daemon Unix socket.
+---
+--- `callback` receives `{ status, body, error }` on the main loop. Used by
+--- long-running requests (union can wait on the meld model) so the editor is
+--- never blocked.
+M.post_async = function(path, body, socket_path, callback)
+  local opts = {
+    url = "http://localhost" .. path,
+    method = "POST",
+    headers = { ["content-type"] = "application/json" },
+    body = vim.json.encode(body),
+    raw = { "--unix-socket", socket_path },
+    callback = function(res)
+      vim.schedule(function()
+        callback({ status = res.status, body = decode(res.body) })
+      end)
+    end,
+    on_error = function(err)
+      vim.schedule(function()
+        callback({ status = 0, body = nil, error = err.message })
+      end)
+    end,
+  }
+
+  local ok, err = pcall(curl.request, opts)
+  if not ok then
+    vim.schedule(function()
+      callback({ status = 0, body = nil, error = tostring(err) })
+    end)
+  end
+end
+
 return M

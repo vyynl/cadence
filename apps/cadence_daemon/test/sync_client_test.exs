@@ -10,7 +10,13 @@ defmodule Cadence.Daemon.SyncClientTest do
   setup do
     on_exit(fn ->
       Enum.each(
-        [:server_url, :auth_token, :sync_request_timeout_ms, :sync_req_options],
+        [
+          :server_url,
+          :auth_token,
+          :sync_request_timeout_ms,
+          :sync_union_timeout_ms,
+          :sync_req_options
+        ],
         &Application.delete_env(:cadence_daemon, &1)
       )
     end)
@@ -182,6 +188,50 @@ defmodule Cadence.Daemon.SyncClientTest do
   test "reports offline mode when URL or token is missing" do
     refute SyncClient.configured?()
     assert SyncClient.me() == {:error, :not_configured}
+  end
+
+  test "union/3 posts parents and returns the proposal reference" do
+    configure()
+    project_id = Ecto.UUID.generate()
+    parents = [Ecto.UUID.generate(), Ecto.UUID.generate()]
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      assert conn.method == "POST"
+      assert conn.request_path == "/sync/union"
+      assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer #{@token}"]
+      assert conn.body_params == %{"project_id" => project_id, "parent_node_ids" => parents}
+
+      Req.Test.json(conn, %{
+        proposal_id: "p1",
+        proposal_token: "tok",
+        status: "pending",
+        kind: "meld"
+      })
+    end)
+
+    assert SyncClient.union(project_id, parents) ==
+             {:ok, %{proposal_id: "p1", proposal_token: "tok", status: "pending", kind: "meld"}}
+  end
+
+  test "union/3 rejects a malformed response and surfaces HTTP errors" do
+    configure()
+    parents = [Ecto.UUID.generate(), Ecto.UUID.generate()]
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      Req.Test.json(conn, %{proposal_id: "p1"})
+    end)
+
+    assert SyncClient.union(Ecto.UUID.generate(), parents) ==
+             {:error, {:invalid_response, %{"proposal_id" => "p1"}}}
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(403, Jason.encode!(%{error: "insufficient project role"}))
+    end)
+
+    assert SyncClient.union(Ecto.UUID.generate(), parents) ==
+             {:error, {:http, 403, %{"error" => "insufficient project role"}}}
   end
 
   defp configure do

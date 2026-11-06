@@ -49,6 +49,8 @@ if config_env() != :test do
     sync_channel_enabled: System.get_env("CAD_SYNC_CHANNEL_ENABLED", "true") == "true",
     sync_request_timeout_ms:
       String.to_integer(System.get_env("CAD_SYNC_REQUEST_TIMEOUT_MS", "5000")),
+    sync_union_timeout_ms:
+      String.to_integer(System.get_env("CAD_SYNC_UNION_TIMEOUT_MS", "180000")),
     sync_interval_ms: String.to_integer(System.get_env("CAD_SYNC_INTERVAL_MS", "30000")),
     sync_retry_backoff_ms:
       String.to_integer(System.get_env("CAD_SYNC_RETRY_BACKOFF_MS", "30000")),

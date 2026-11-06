@@ -7,6 +7,7 @@ defmodule Cadence.Daemon.EnvTest do
     assert Env.sync_enabled?()
     assert Env.sync_channel_enabled?()
     assert Env.sync_request_timeout_ms() == 5_000
+    assert Env.sync_union_timeout_ms() == 180_000
     assert Env.sync_interval_ms() == 30_000
     assert Env.sync_retry_backoff_ms() == 30_000
     assert Env.sync_max_attempts() == 10

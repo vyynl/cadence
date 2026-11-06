@@ -16,7 +16,8 @@ defmodule Cadence.Daemon.TestSyncServer do
         preferences: %{},
         next_seq: 1,
         next_failure: nil,
-        next_node_failure: nil
+        next_node_failure: nil,
+        last_union: nil
       }
     end)
   end
@@ -68,6 +69,9 @@ defmodule Cadence.Daemon.TestSyncServer do
     end)
   end
 
+  @doc "Returns the last `/sync/union` request body, or `nil`."
+  def last_union(server), do: Agent.get(server, & &1.last_union)
+
   defp handle(server, conn) do
     case take_failure(server) do
       {status, body} ->
@@ -104,6 +108,40 @@ defmodule Cadence.Daemon.TestSyncServer do
       json(conn, status, %{project: stored})
     else
       _ -> json(conn, 422, %{"error" => "invalid project"})
+    end
+  end
+
+  defp route(server, %{method: "POST", request_path: "/sync/union"} = conn) do
+    state = Agent.get(server, & &1)
+    project_id = conn.body_params["project_id"]
+    parent_ids = conn.body_params["parent_node_ids"] || []
+
+    valid_parents? =
+      is_list(parent_ids) and length(parent_ids) >= 2 and length(parent_ids) <= 8 and
+        length(Enum.uniq(parent_ids)) == length(parent_ids) and
+        Enum.all?(parent_ids, &match?({:ok, _uuid}, Ecto.UUID.cast(&1)))
+
+    cond do
+      not Map.has_key?(state.projects, project_id) ->
+        json(conn, 404, %{"error" => "project not found"})
+
+      not valid_parents? ->
+        json(conn, 422, %{"error" => "invalid parent"})
+
+      true ->
+        Agent.update(server, fn state ->
+          %{
+            state
+            | last_union: %{project_id: project_id, parent_node_ids: parent_ids}
+          }
+        end)
+
+        json(conn, 201, %{
+          "proposal_id" => Ecto.UUID.generate(),
+          "proposal_token" => "proposal-token-#{System.unique_integer([:positive])}",
+          "status" => "pending",
+          "kind" => "meld"
+        })
     end
   end
 

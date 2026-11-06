@@ -127,6 +127,39 @@ defmodule Cadence.Daemon.SyncClient do
     end
   end
 
+  @doc """
+  Requests a meld proposal (`POST /sync/union`).
+
+  Synchronous: the server may call the meld model, so this uses
+  `Env.sync_union_timeout_ms/0` unless a `:receive_timeout` is passed. Returns
+  the proposal reference; no node exists until approval.
+  """
+  @spec union(Ecto.UUID.t(), [Ecto.UUID.t()], keyword()) ::
+          {:ok,
+           %{proposal_id: String.t(), proposal_token: String.t(), status: term(), kind: term()}}
+          | {:error, term()}
+  def union(project_id, parent_node_ids, opts \\ []) when is_list(parent_node_ids) do
+    payload = %{project_id: project_id, parent_node_ids: parent_node_ids}
+    opts = Keyword.put_new(opts, :receive_timeout, Env.sync_union_timeout_ms())
+
+    with {:ok, body} <- request(:post, "/sync/union", Keyword.merge([json: payload], opts)) do
+      case body do
+        %{"proposal_id" => proposal_id, "proposal_token" => proposal_token}
+        when is_binary(proposal_id) and is_binary(proposal_token) ->
+          {:ok,
+           %{
+             proposal_id: proposal_id,
+             proposal_token: proposal_token,
+             status: Map.get(body, "status"),
+             kind: Map.get(body, "kind")
+           }}
+
+        _other ->
+          {:error, {:invalid_response, body}}
+      end
+    end
+  end
+
   defp request(method, path, opts \\ []) do
     with {:ok, server_url} <- required_config(Env.server_url()),
          {:ok, token} <- required_config(Env.auth_token()) do

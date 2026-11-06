@@ -123,6 +123,32 @@ defmodule Cadence.Daemon.SyncTest do
     assert length(Nodes.list(project.id)) == 1
   end
 
+  test "union provisions and requests a server proposal", %{
+    project: project,
+    server: server
+  } do
+    configure_sync()
+    ids = [Ecto.UUID.generate(), Ecto.UUID.generate()]
+
+    assert {:ok, proposal} = Sync.propose_union(project.id, ids)
+    assert proposal.status == "pending"
+    assert proposal.kind == "meld"
+    assert is_binary(proposal.proposal_token)
+
+    assert TestSyncServer.last_union(server) == %{
+             project_id: project.id,
+             parent_node_ids: ids
+           }
+
+    assert TestSyncServer.project(server, project.id)["id"] == project.id
+  end
+
+  test "union reports an unconfigured server", %{project: project} do
+    ids = [Ecto.UUID.generate(), Ecto.UUID.generate()]
+
+    assert Sync.propose_union(project.id, ids) == {:error, :not_configured}
+  end
+
   test "pull applies a server-side pin to an existing node", %{
     project: project,
     server: server

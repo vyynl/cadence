@@ -7,11 +7,13 @@ defmodule Cadence.Daemon.API.Router do
 
   alias Cadence.Daemon.{
     CommitQueue,
+    Env,
     NodeDiff,
     Nodes,
     ProjectRegistry,
     Projects,
-    Session
+    Session,
+    Sync
   }
 
   alias Cadence.Shared.DAG
@@ -122,6 +124,16 @@ defmodule Cadence.Daemon.API.Router do
     end
   end
 
+  post "/union" do
+    case propose_union(conn.body_params) do
+      {:ok, proposal} ->
+        send_json(conn, 201, union_json(proposal))
+
+      {:error, reason} ->
+        union_error(conn, reason)
+    end
+  end
+
   match _ do
     send_json(conn, 404, %{error: "not found"})
   end
@@ -144,6 +156,88 @@ defmodule Cadence.Daemon.API.Router do
   end
 
   defp switch_node(_), do: {:error, :no_project}
+
+  defp propose_union(%{"project_id" => project_id, "parent_node_ids" => ids})
+       when is_list(ids) do
+    if length(ids) >= 2 and length(ids) <= 8 do
+      case fetch_project(project_id) do
+        {:ok, project_id} -> Sync.propose_union(project_id, ids)
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      {:error, :invalid_parent}
+    end
+  end
+
+  defp propose_union(_body), do: {:error, :invalid_payload}
+
+  defp union_json(proposal) do
+    %{
+      proposal_id: proposal.proposal_id,
+      proposal_token: proposal.proposal_token,
+      proposal_url: proposal_url(proposal.proposal_token),
+      status: proposal.status,
+      kind: proposal.kind
+    }
+  end
+
+  defp proposal_url(token) when is_binary(token) do
+    case Env.server_url() do
+      url when is_binary(url) and url != "" ->
+        String.trim_trailing(url, "/") <> "/proposals/" <> token
+
+      _ ->
+        nil
+    end
+  end
+
+  defp union_error(conn, :invalid_payload) do
+    send_json(conn, 422, %{error: "project_id and parent_node_ids are required"})
+  end
+
+  defp union_error(conn, :invalid_parent) do
+    send_json(conn, 422, %{error: "select between two and eight nodes"})
+  end
+
+  defp union_error(conn, :missing) do
+    send_json(conn, 422, %{error: "project_id is required"})
+  end
+
+  defp union_error(conn, :not_configured) do
+    send_json(conn, 503, %{error: "sync is not configured"})
+  end
+
+  defp union_error(conn, %Req.TransportError{reason: :timeout}) do
+    send_json(conn, 504, %{error: "sync timed out"})
+  end
+
+  defp union_error(conn, %Req.TransportError{}) do
+    send_json(conn, 503, %{error: "sync server unreachable"})
+  end
+
+  defp union_error(conn, {:http, 422, %{"error" => "invalid parent"}}) do
+    send_json(conn, 422, %{error: "one or more selected nodes are not synced yet"})
+  end
+
+  defp union_error(conn, {:http, 429, _body}) do
+    send_json(conn, 429, %{error: "meld rate limited; retry shortly"})
+  end
+
+  defp union_error(conn, {:http, status, body})
+       when status in [401, 403, 404, 409, 422, 429, 500, 502] do
+    send_json(conn, status, %{error: union_message(body)})
+  end
+
+  defp union_error(conn, reason) when reason in [:not_found, :no_location] do
+    send_json(conn, 404, %{error: "project not found"})
+  end
+
+  defp union_error(conn, _reason) do
+    send_json(conn, 502, %{error: "sync union failed"})
+  end
+
+  defp union_message(%{"error" => message}) when is_binary(message), do: message
+  defp union_message(_body), do: "sync union failed"
 
   defp fetch_project(nil), do: {:error, :missing}
 

@@ -13,6 +13,11 @@ styling pass is planned after 4c-3 (incident panel) unless a demo is imminent.
 
 ## Open
 
+- `:CadUnion` — `<C-s>` blocks Neovim while the synchronous union request runs
+  (a conflicted meld can wait on the model). The picker notifies "requesting
+  meld…" first and reports the token/URL on success, but the UI is frozen
+  until the daemon answers. Consider an async submit (job/notification) if
+  that becomes annoying.
 - `/p/:slug/reviews` — the open-incident panel reuses `.file-tree`/`.file-row`
   and `.flag-badge`, so a **critical** incident looks the same as a `high` one
   and as a proposal status badge. Give severity its own treatment (color,

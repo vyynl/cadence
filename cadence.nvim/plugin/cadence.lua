@@ -36,7 +36,8 @@ local function with_project(fn)
   fn(project)
 end
 
---- Open the DAG picker for `project`. `opts.union` enables union mode.
+--- Open the DAG picker for `project`. `opts.union` enables union mode and
+--- `opts.on_union` submits the selected node ids.
 local function open_picker(project, opts)
   opts = opts or {}
 
@@ -77,6 +78,7 @@ local function open_picker(project, opts)
         vim.notify("switch failed", vim.log.levels.ERROR)
       end
     end,
+    on_union = opts.on_union,
   })
 end
 
@@ -94,7 +96,36 @@ end, {})
 
 vim.api.nvim_create_user_command("CadUnion", function()
   with_project(function(project)
-    open_picker(project, { title = "union — " .. project.slug, union = true })
+    open_picker(project, {
+      title = "union — " .. project.slug,
+      union = true,
+      on_union = function(node_ids)
+        vim.notify("requesting meld…", vim.log.levels.INFO)
+
+        client.post_async(
+          "/union",
+          { project_id = project.id, parent_node_ids = node_ids },
+          socket(),
+          function(res)
+            if
+              res
+              and res.status == 201
+              and type(res.body) == "table"
+              and type(res.body.proposal_token) == "string"
+            then
+              local target = res.body.proposal_url or res.body.proposal_token
+              vim.notify("meld proposal created: " .. target, vim.log.levels.INFO)
+            else
+              local message = (res and res.body and res.body.error) or "union failed"
+              vim.notify(message, vim.log.levels.ERROR)
+            end
+          end
+        )
+
+        -- Close the picker now; the result arrives asynchronously.
+        return true
+      end,
+    })
   end)
 end, {})
 

@@ -395,7 +395,7 @@ Diff:
 | `:CadOpen` | Open the DAG picker. Default selection = most-recent node by current user (after attempting a short cloud sync; fall back to local). |
 | `:CadSpawn <name>` | Spawn a sandbox child from the current node. **Session pointer moves to the new node.** Parent stays in active heads. |
 | `:CadSwitch <label>` | Move the session pointer to another node in the project (active heads are the usual targets) without creating a node. |
-| `:CadUnion` | Enter picker in union mode. CR toggles `✓`. `<C-s>` submits to server. |
+| `:CadUnion` | Enter picker in union mode. CR toggles `✓` (2–8 nodes). `<C-s>` submits to the server and reports the proposal token/URL. |
 | `:CadDocDiff` | Show the doc diff attached to the current node. |
 | `:CadDocSync` | Manually trigger doc automation. |
 
@@ -440,7 +440,9 @@ first (Telescope integration), then the DAG picker.
 
 ### 6.5 Union semantics
 
-Union is **server-first**. Offline union is disallowed (command greys out).
+Union is **server-first**. Offline union is disallowed: submission reports 503
+when sync is unconfigured or unreachable (the picker itself is local and still
+opens).
 
 The server pipeline **proposes, it does not create**:
 
@@ -1103,7 +1105,7 @@ SyncMessage.UnionResponse
   # project, 422 invalid/too many parents or payload, 429 meld rate limited
   # (with Retry-After), 502 meld/model failure, 500 server object corruption.
   # The synchronous call can take up to
-  # CAD_MELD_RETRY_ATTEMPTS × CAD_MELD_TIMEOUT_MS + CAD_MELD_RETRY_BACKOFF_MS
+  # (CAD_MELD_RETRY_ATTEMPTS + 1) × CAD_MELD_TIMEOUT_MS + CAD_MELD_RETRY_BACKOFF_MS
   # (about 120.5 s at defaults); callers must budget above that.
 ```
 
@@ -1357,7 +1359,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_PROPOSAL_MAX_FILES` | no | `200` | Max changed files listed on a public proposal page |
 | `CAD_SCAN_MAX_FILES` | no | `10000` | Max files scanned for secret quarantine |
 | `CAD_SCAN_MAX_BYTES` | no | `16777216` | Max snapshot bytes scanned for secret quarantine |
-| `CAD_MELD_TIMEOUT_MS` | no | `60000` | Timeout per meld agent attempt (a synchronous union can take `retries × timeout + backoff`) |
+| `CAD_MELD_TIMEOUT_MS` | no | `60000` | Timeout per meld agent attempt (a synchronous union can take `(retries + 1) × timeout + backoff`) |
 | `CAD_MELD_RATE_LIMIT` | no | `5` | Meld agent calls per server rate window |
 | `CAD_MELD_RATE_SCALE` | no | `60000` | Meld rate window in milliseconds |
 | `CAD_MELD_MAX_OPS` | no | `50` | Max file operations accepted from the agent |
@@ -1402,6 +1404,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_SYNC_CHANNEL_ENABLED` | no | `true` | Enable the optional notification socket (polling remains active) |
 | `CAD_SYNC_TIMEOUT_MS` | no | `500` | Picker sync attempt |
 | `CAD_SYNC_REQUEST_TIMEOUT_MS` | no | `5000` | Background sync HTTP request timeout |
+| `CAD_SYNC_UNION_TIMEOUT_MS` | no | `180000` | Synchronous union HTTP timeout (must exceed the server's `(CAD_MELD_RETRY_ATTEMPTS + 1) × CAD_MELD_TIMEOUT_MS + CAD_MELD_RETRY_BACKOFF_MS`) |
 | `CAD_SYNC_INTERVAL_MS` | no | `30000` | Delay between background sync passes |
 | `CAD_SYNC_RETRY_BACKOFF_MS` | no | `30000` | Base retry delay for failed sync operations |
 | `CAD_SYNC_MAX_ATTEMPTS` | no | `10` | Max automatic retries for a pending node |

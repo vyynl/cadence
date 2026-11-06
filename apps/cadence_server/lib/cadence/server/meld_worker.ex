@@ -42,7 +42,7 @@ defmodule Cadence.Server.MeldWorker do
 
   `:timeout` is per attempt; provider errors are retried
   `CAD_MELD_RETRY_ATTEMPTS` times, so a synchronous caller must budget
-  `attempts × timeout + backoff` (spec §10.6).
+  `(attempts + 1) × timeout + backoff` (spec §10.6).
   """
   @spec resolve([map()], map(), keyword()) :: {:ok, map()} | {:error, term()}
   def resolve(parents, conflicts, opts \\ []) when is_list(parents) and is_map(conflicts) do
