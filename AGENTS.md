@@ -58,23 +58,28 @@ multi-session work possible.
 ```
 cadence/                        (umbrella root)
 ├── apps/
-│   ├── cadence_shared/         schemas, sync protocol, GitStore, LLM client
-│   ├── cadence_daemon/         local process: watcher, commit queue, Unix socket
-│   └── cadence_server/         Phoenix: sync endpoint (web UI Phase 3, meld worker Phase 4)
+│   ├── cadence_shared/         schemas, sync protocol, GitStore, LLM client + prompts
+│   ├── cadence_daemon/         local process: watcher, commit queue, doc queue, Unix socket
+│   └── cadence_server/         Phoenix: sync endpoint, public/review web UI, meld worker
+├── cadence.nvim/               Neovim plugin (:Cad* commands, DAG picker, doc diff)
 ├── config/                     umbrella-level config
 ├── docs/
 │   ├── README.md               doc index + read order
 │   ├── spec.md                 CANONICAL CONTRACT
 │   ├── progress.md             SESSION HANDOFF (see §2)
-│   ├── phase-4-prep.md         current phase brief
+│   ├── demo.md                 local demo stack + guided tour
+│   ├── ui-notes.md             UI tuning backlog
 │   ├── opencode.md             agent tooling: skills, gates, artifacts
-│   └── archive/                historical briefs + full Phase 1–3 log
+│   ├── phase-4-prep.md         completed Phase 4 brief (history)
+│   └── archive/                completed briefs + full session history
+├── docker/                     Dockerfile.demo (dev demo image)
 ├── scripts/
 │   └── setup-opencode.sh       vendor/update the agent skills checkout
+├── .claude/                    git-ignored skill run state (plans, ledger, solutions)
 ├── .opencode/                  agent tooling (skills checkout is git-ignored)
 ├── opencode.jsonc              formatter + destructive-command guards
+├── docker-compose.yml          one-command demo stack (Postgres + seeded server)
 ├── mix.exs                     umbrella root
-├── docker-compose.yml          server deployment (planned, spec §12.4)
 └── AGENTS.md                   this file
 ```
 
@@ -82,9 +87,9 @@ cadence/                        (umbrella root)
 
 | App | May depend on | Must NOT depend on |
 |---|---|---|
-| `cadence_shared` | Ecto, `axiom_ai`, `libgraph` | Phoenix, Postgres, Bandit, any web stack |
-| `cadence_daemon` | `cadence_shared`, SQLite (`ecto_sqlite3`), `file_system`, `Bandit`, `Plug`, `Hammer` | Phoenix, Postgres, LiveView |
-| `cadence_server` | `cadence_shared`, Phoenix, LiveView, Postgres, `ex_docker_api`, `AshAuthentication` | — |
+| `cadence_shared` | Ecto, `axiom_ai`, `libgraph`, `yaml_elixir` | Phoenix, Postgres, Bandit, any web stack |
+| `cadence_daemon` | `cadence_shared`, SQLite (`ecto_sqlite3`), `file_system`, `Req`, `Bandit`, `Plug`, `Hammer` | Phoenix, Postgres, LiveView |
+| `cadence_server` | `cadence_shared`, Phoenix, LiveView, Postgres, Ash/AshAuthentication, `mdex`, `Hammer`, `ex_docker_api` (Phase 6) | — |
 
 `cadence_shared` is a `path` dependency of both `cadence_daemon` and
 `cadence_server`. **Schemas, sync protocol types, `GitStore`, and the LLM
@@ -158,6 +163,9 @@ implementation costs many.
 # Compile everything
 mix compile
 
+# Release-build check
+MIX_ENV=prod mix compile --warnings-as-errors
+
 # Compile a single app
 cd apps/cadence_daemon && mix compile
 
@@ -179,6 +187,14 @@ mix ecto.gen.migration <name>
 # Generate a migration (daemon)
 cd apps/cadence_daemon
 mix ecto.gen.migration <name> --repo Cadence.Daemon.Repo
+
+# Server tests need Postgres on localhost:55432
+docker run --rm -d --name cadence-test-pg \
+  -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=cadence_test \
+  -p 55432:5432 postgres:16-alpine
+
+# Browsable demo stack (Postgres + seeded dev server on :4000)
+docker compose up --build
 ```
 
 Always run `mix format` before declaring a task complete.
@@ -207,10 +223,11 @@ Flag atoms are the exact set: `:functioning`, `:in-progress`, `:broken`,
 - Every public function in `cadence_shared` gets a test.
 - `GitStore` gets an integration test that does a full round-trip (init →
   blob → tree → commit → read) on a temp directory.
-- Daemon integration tests use `ExUnit` + `Bypass` for the cloud sync client.
+- Daemon sync tests use `Req.Test` through `TestSyncServer`; no live HTTP.
 - Server tests use `Phoenix.ConnTest` for controllers and `Phoenix.LiveViewTest`
   for LiveViews.
-- No tests hit real LLM APIs. Use a mock (e.g., `Mox`) or a recorded fixture.
+- No tests hit real LLM APIs. Inject a test module through `:meld_llm` or
+  `:docs_llm` (`TestMeldLLM`, `TestDocsLLM`); do not add Mox.
 
 ---
 
@@ -230,8 +247,8 @@ For all three:
   result metadata. Reproducibility matters.
 - AI output is **always** reviewable and reversible. Never make an AI decision
   the final word on a user's behalf.
-- Rate-limit all LLM calls via `Hammer`. The rate limiter is shared across
-  the daemon.
+- Rate-limit all LLM calls via `Hammer`: the daemon owns the `:llm` (commit
+  messages) and `:docs` limiters; the server keys the meld limiter per project.
 
 ---
 
@@ -265,9 +282,10 @@ Do not work from this file alone for anything non-trivial.
 
 A task is done when:
 
-- [ ] Code compiles (`mix compile` passes).
-- [ ] Code is formatted (`mix format` applied).
-- [ ] Relevant tests pass.
+- [ ] Code is formatted (`mix format --check-formatted` passes).
+- [ ] Dev and prod compile clean (`mix compile --warnings-as-errors`,
+      `MIX_ENV=prod mix compile --warnings-as-errors`).
+- [ ] Relevant tests pass (`mix test`; server tests need the test Postgres).
 - [ ] New public functions have tests.
 - [ ] No hardcoded config values were introduced.
 - [ ] The change aligns with the relevant spec section, or the spec was
@@ -305,6 +323,7 @@ If a skill contradicts the spec, stop and ask — do not improvise.
 | Bug, stack trace, unexpected behaviour | `@phx-investigate` |
 | Single-file change (<50 lines), config, CSS | `@phx-quick` |
 | Feature spanning 2+ contexts, new domain concept | `@phx-plan` → `@phx-work` → `@phx-review` |
+| Full lifecycle (discover → plan → work → verify → review → compound) | `@phx-full` — honor the plan/implementation gate; never auto-approve |
 | Auth, sessions, tokens, sync protocol | `@phx-plan`, plus `@security` — security work never skips planning |
 | Scope still unclear | `@phx-brainstorm` |
 | Domain reference while coding | `@ecto-patterns`, `@liveview-patterns`, `@testing`, `@ash-framework`, `@elixir-idioms` |
@@ -387,7 +406,7 @@ next session reads it first.
 ## Current Phase
 Phase 1b — Shared schemas + GitStore
 
-## Done
+## Done (summary)
 - [x] Node, Project, Membership schemas with changesets
 - [x] Tests for schema validations
 
@@ -399,7 +418,7 @@ Phase 1b — Shared schemas + GitStore
 ## Blocked
 - (none)
 
-## Spec Deltas
+## Spec Deltas / Open Items
 - (none)
 
 ## Last Updated
@@ -408,15 +427,16 @@ Phase 1b — Shared schemas + GitStore
 
 ### Notes on maintaining this file
 
-- **Done** is a concise current-phase summary. The full running log lives in
-  `docs/archive/progress-history.md`; add to it only when archiving a phase, not
-  every session. Do not delete unresolved items from **Spec Deltas**.
-- **Next** is replaced each session. It should describe *one* immediate step,
-  not a phase.
+- **Done (summary)** is a concise current-phase summary. The full running log
+  lives in `docs/archive/progress-history.md`; add to it only when archiving a
+  phase, not every session. Do not delete unresolved items from **Spec Deltas /
+  Open Items**.
+- **Next** is replaced each session. Lead with *one* immediate step specific
+  enough to start cold; supporting context and carry-over may follow.
 - **Blocked** is replaced each session. If empty, write `(none)` explicitly —
   don't leave the section absent.
-- **Spec Deltas** is cumulative for unresolved items. When a delta is
-  resolved (spec updated), move it to **Done** and remove it from this
+- **Spec Deltas / Open Items** is cumulative for unresolved items. When a delta
+  is resolved (spec updated), move it to **Done** and remove it from this
   section.
-- **Last Updated** is always today's date and a one-line note about how the
-  session ended.
+- **Last Updated** is a running log: append today's dated entry and keep the
+  older ones.
