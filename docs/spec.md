@@ -1002,7 +1002,9 @@ the agent succeeds, its docs are added to the working tree and written as a
 follow-up commit `C2` whose Git parent is `C1`. The node's logical `parents`
 (§4.1) do not change; its `git_commit_sha` points at `C2`, so one node contains
 both code and docs while the two remain separate commits. A failed or deferred
-generation leaves the node pointing at `C1` with `docs_state: :pending`.
+generation leaves the node pointing at `C1` with `docs_state: :pending`. If the
+node's current SHA is already on the server, the same generation is attached as
+a docs child node instead of rewriting the snapshot (§9.5).
 
 ### 9.4 Reviewability
 
@@ -1021,7 +1023,11 @@ generation leaves the node pointing at `C1` with `docs_state: :pending`.
   is recorded. `:pending` means a job is queued, deferred offline, or failed
   and is retrying; `:skipped` means no schema matched, the schema was invalid
   or unreadable, doc automation was disabled, or no trigger matched, so the
-  commit is code-only.
+  commit is code-only. A node pushed before its docs resolved keeps the
+  `docs_state` it was pushed with; the project page then also links the docs
+  child node, so the snapshot's badge never claims docs its immutable tree does
+  not contain. A server-created meld node is recorded `:pending` at approval
+  (§6.5) even though no daemon-side job exists for it; §16 tracks that gap.
 - Web approve/reject for pending docs is deferred: nodes are immutable, so
   "reject" needs a review object that does not exist yet. Recorded in §16.
 - Reverting docs does not revert code — they're separate commits under one
@@ -1029,9 +1035,11 @@ generation leaves the node pointing at `C1` with `docs_state: :pending`.
 
 ### 9.5 Offline
 
-If offline, commit with `docs_state: :pending`. On reconnect, run the agent,
-amend docs into a follow-up commit, then sync both as one node. If the job
-defers, the code-only node syncs and the docs are retried later.
+If offline, commit with `docs_state: :pending`. On reconnect, run the agent and
+amend the docs into a follow-up commit. If the job resolves before the node is
+pushed, the server receives one node pointing at `C2`; if it defers, the
+code-only `C1` node syncs and the docs are retried later (and attach as a child
+node if the code snapshot is already on the server).
 
 A node with a **queued** doc job — automatic or manual — is held out of the
 push queue until the job resolves to `:current` (docs committed as `C2`) or is
@@ -1084,12 +1092,33 @@ generation that happened after the push.
 
 ### 9.6 Worker design
 
-Doc agent runs in a **separate worker process** with its own rate limiter and
-retry logic. This isolates the most API-cost-heavy component from the commit
-pipeline.
+Doc generation runs outside the commit pipeline. A per-daemon `DocQueue`
+(GenServer) owns the job list and delegates each job to `DocAgentWorker` under a
+`Task.Supervisor`. The agent call is isolated because it is the most
+API-cost-heavy component: a slow or failing model never blocks a commit, the
+watcher, or sync.
 
-Recommended: a `Task.Supervisor` per project with a `Hammer`-based rate
-limiter shared across the daemon.
+- One `Hammer` limiter (key `:docs`) is shared across the daemon; the meld
+  limiter is separate and server-side.
+- The LLM client is injectable (`:docs_llm`) for tests; no test hits a real
+  provider.
+- `CAD_DOCS_TIMEOUT_MS` bounds one call. `CAD_DOCS_RETRY_ATTEMPTS` and
+  `CAD_DOCS_RETRY_BACKOFF_MS` bound retries with linear backoff; a raising job
+  is rescued and recorded as deferred rather than stranding the node.
+- Terminal job errors are `:not_configured`, `:missing_code_commit`,
+  `:no_location`, `:too_many_docs`, `:context_too_large`, and `:pushed`. They
+  stop retrying and leave the docs deferred (`docs_state: :pending`,
+  `metadata["docs"]["state"] = "deferred"`) so a local node can sync code-only.
+  A manual preflight skip marks code-only outcomes (`:disabled`, `:no_schema`,
+  `:legacy`) as `:skipped` and defers `:invalid_schema`, `:not_configured`, and
+  `:no_location`. Everything else retries with backoff until
+  `CAD_DOCS_RETRY_ATTEMPTS`, then defers.
+- The prompt template lives in `priv/prompts/docs.txt` (plain text, versioned);
+  every result records `provider`, `model`, and `prompt_version` in
+  `session_metadata["docs"]`.
+- `CAD_DOCS_MAX_OPS`, `CAD_DOCS_MAX_FILES`, `CAD_DOCS_MAX_FILE_BYTES`,
+  `CAD_DOCS_CONTEXT_BYTES`, and `CAD_DOCS_DIFF_MAX_BYTES` cap cost and prompt
+  size; unlisted or over-budget docs are read-only to the agent.
 
 ---
 
@@ -1703,11 +1732,23 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   reversible. The deterministic scanner, not the LLM, decides safety.
 
 **Phase 5 — Doc automation (week 16)**
-- Doc schema parsing.
-- Doc agent sub-process.
-- Deferred docs when offline.
-- Daemon `POST /docs/sync` (manual trigger: `202` queued, `200` skipped, `503`
-  unconfigured) and `GET /docs/diff` (§9.4); `:CadDocSync` and `:CadDocDiff`.
+- 5a — shared primitives: `.caddocs.yaml` schema parse/validation, pure glob
+  matching, trigger gating (`generated_from`, schema change, API-surface
+  heuristic), the docs prompt plus a strict MODIFY/CREATE parser with
+  read-only-path protection, `UTF8`, and a path-directed
+  `GitStore.merge_files/3` (§9.1, §9.3, §11).
+- 5b — daemon worker: `SchemaSource` caches `.caddocs.yaml` on the project row;
+  `CommitQueue` evaluates the trigger and sets `docs_state`;
+  `DocQueue`/`DocAgentWorker` generate `C2`, write the working tree
+  (schema-scoped, watcher-suspended, divergence-guarded), and defer with a
+  shape-only error; `SyncLedger` holds a queued node out of push; boot and
+  reconnect retries resume deferred nodes (§9.5, §9.6, §12.6).
+- 5c — daemon API + Neovim: `POST /docs/sync` (`202` queued / `200` skipped /
+  `503` / `404` / `422`) and `GET /docs/diff` (`200` / `404` / `409` / `400`),
+  `:CadDocSync`, and `:CadDocDiff` (§9.4).
+- P4 — deferred/pushed docs: the reconnect retry runs before the pass pushes;
+  an already-pushed node's docs attach as a child node; the project page shows a
+  read-only `docs_state` badge and links the docs child (§9.4, §9.5).
 
 **Phase 6 — Docker actions (week 17+)**
 - `ex_docker_api` integration.
@@ -1803,8 +1844,17 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - [ ] **Web docs review (approve/reject):** deferred from Phase 5. Nodes are
       immutable, so rejecting generated docs needs a review object (like a
       proposal) rather than mutating the node. Until then the web UI shows a
-      read-only `docs_state` badge, and review happens in Neovim via
-      `:CadDocDiff` (§9.4).
+      read-only `docs_state` badge (linking the docs child node when the
+      generation happened after the snapshot was pushed), and review happens in
+      Neovim via `:CadDocDiff` (§9.4).
+- [ ] **Docs for server-created meld nodes:** an approved meld node is inserted
+      with `docs_state: :pending` (§6.5), but doc generation requires local
+      provenance (a `SyncPending` row or a pushed-SHA stamp) and a pulled node
+      is `:legacy`, so no daemon job will ever move that node to `:current`.
+      Decide whether approval should record `:skipped` instead, or whether an
+      explicit daemon action may generate docs for a pulled node (which would
+      need its own review/revert path). Until then the badge shows the
+      approval-time state (§9.4).
 - [ ] **Local store:** SQLite via `ecto_sqlite3` is the obvious pick; confirm
       it fits the daemon's needs.
 - [ ] **Neovim plugin distribution:** plain Lua files, or a proper plugin with

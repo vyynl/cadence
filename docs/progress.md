@@ -1,13 +1,12 @@
 # Cadence — Progress
 
 ## Current Phase
-Phase 4 — unions, proposals & review is **complete**, as is the UI styling &
-freshness pass (4e). **Phase 5 — documentation automation**: 5a (shared
+Phase 5 — documentation automation is **complete through P4**: 5a (shared
 primitives), 5b (daemon doc worker + commit integration), 5c (daemon API +
-Neovim commands), **P4-T1 (reconnect docs retry), and P4-T2 (already-pushed
-docs child node) are complete**. Both 5c review passes and all P4-T1/P4-T2
-review findings are fixed. The next slice is **P4-T3** (read-only `docs_state`
-badge), followed by P4-T4/T5 (spec/docs closeout).
+Neovim commands), P4-T1 (reconnect docs retry), P4-T2 (already-pushed docs child
+node), P4-T3 (read-only `docs_state` badge), and P4-T4/T5 (spec/README
+closeout). The **P5 release gate** remains: the optional live smoke with a real
+`CAD_LLM_API_KEY`, then the final review/compound pass.
 
 ## Done (summary)
 
@@ -334,6 +333,27 @@ badge), followed by P4-T4/T5 (spec/docs closeout).
   and the watcher stays suspended across the node write. Spec §9.2/§9.5
   updated. 6 new daemon cases (3 rewritten); 793 tests green (251 shared + 188
   daemon + 354 server).
+- **Phase 5 P4-T3 (read-only docs badge)** — `Presentation.docs_state_label/1`
+  and `docs_badge_class/1` (docs current/pending/skipped, reusing the AA status
+  text tokens). `Portfolio.docs_child/2` finds the newest docs child only when
+  both `metadata["docs"]["docs_for"]` **and** DAG parentage agree, scoped to the
+  project (metadata-only claims are ignored; malformed/nil input returns `nil`).
+  `ProjectLive` renders the selected node's own badge plus a `patch` link to the
+  docs child (title: "Open the follow-up node carrying this snapshot's docs"),
+  and `{:nodes_pushed, …}` re-reads **only** that link — the DAG layout is not
+  rebuilt, so no intro replay. CSS gains `.docs-badge` hover/focus underlines.
+  Spec §9.4 records the parent/child rendering rule. Review verdict PASS WITH
+  WARNINGS; W2/S1–S4 fixed live (query-based child lookup, parentage check,
+  event refresh, neutral tooltip, link-class assertions, hover affordance); W1
+  (meld nodes stay `:pending`) recorded in §9.4/§16. 11 new tests; 804 total.
+- **Phase 5 P4-T4/T5 (spec/README closeout)** — spec §9.3 records the child
+  fallback in the commit model; §9.5 states the one-node-at-`C2` condition
+  precisely; §9.6 documents the shipped worker (Task.Supervisor, Hammer
+  `:docs`, timeout/retry/backoff, terminal errors, prompt versioning, caps);
+  §13 carries the 5a/5b/5c/P4 breakdown; §16 keeps the deferred web review and
+  adds the server-created-meld-node docs gap. `docs/README.md` marks Phase 5
+  code-complete with P5 pending and stops calling `phase-4-prep.md` the current
+  brief.
 - **4e gate:** 640 tests green (161 shared + 125 daemon + 354 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
@@ -347,22 +367,20 @@ badge), followed by P4-T4/T5 (spec/docs closeout).
 
 ## Next
 
-**Immediate step:** start **P4-T3 (read-only `docs_state` badge)** from
-`.claude/plans/phase-5-docs/plan.md`. P4-T2 shipped: an already-pushed node's
-docs become a child node (`docs_for`) while the parent keeps its SHA, so the
-badge must read both (see the P4-T3 prep note below).
+**Immediate step:** the **P5 release gate** from
+`.claude/plans/phase-5-docs/plan.md`. P5-T1..T4 are green as of the P4-T3 run
+(format, dev + prod compile, 804 tests). Remaining:
 
-- P4-T3 — read-only `docs_state` badge in `ProjectLive`'s inspector
-  (`Presentation` helper + LiveView tests; server tests need Postgres).
-- P4-T4/P4-T5 — spec §9.3/§9.4/§9.5/§9.6 and §13 closeout; `docs/README.md`
-  status.
+- **P5-T5 (optional live smoke):** with a real `CAD_LLM_API_KEY`, run
+  `docker compose up` + the demo stack, drive a schema-triggering edit, and
+  assert the docs commit and `:CadDocDiff`; record the result.
+- **P5-T6:** final read-only review/compound, then commit and hand off.
 
-**P4-T3 prep (noted during P4-T2).** The server only sees the snapshot that was
-pushed: a node pushed while its docs were still `:pending` keeps `:pending` on
-the server forever, and the docs child carries `:current` with
-`metadata["docs"]["docs_for"] = code_node.id`. Decide whether the badge renders
-"docs pending" on the parent, follows `docs_for` to the child, or shows both
-(the local daemon view already points the parent's metadata at `C2`).
+**P4-T3/T4/T5 shipped (2026-11-06).** The badge decision is resolved: the
+selected node's own `docs_state` is always rendered; when a docs child exists
+(metadata **and** DAG parentage), the page links the child with its own state.
+`Portfolio.docs_child/2` is the query, `ProjectLive` refreshes only that link on
+`{:nodes_pushed, …}`, and spec §9.4/§16 record the model.
 
 **Integration contract:** `LLM.Docs.build_prompt/4` returns
 `{:ok, prompt, %{writable_paths, read_only_paths}}`; `DocQueue` passes
@@ -397,16 +415,19 @@ Carry-over (small, not blocking Phase 5):
 4. **Manual styling check** (optional): `docker compose up`, then `/`,
    `/p/cadence-demo`, `/p/cadence-demo/reviews`, one pending proposal, and
    `/proposals/<token>` at wide and narrow widths in light and dark. There are
-   no browser tests; 4e verified server-rendered markup and CSS only.
+   no browser tests; 4e verified server-rendered markup and CSS only (the P4-T3
+   docs badge is also only test-verified, not browser-checked).
 
-**Spin-up:** `@phx-work .claude/plans/phase-5-docs/plan.md --from P4-T3`.
+**Spin-up:** run the P5-T5 live smoke when a real `CAD_LLM_API_KEY` is
+available; otherwise start the next phase brief (Phase 6 — Docker actions,
+spec §8/§13).
 
 ## Blocked
 
-- (none). P4-T2's review findings are fixed and verified. The one known residual
-  (a push that completes *after* the local `C2` write, leaving the server on
-  `C1`) is recorded in Spec Deltas; it is recoverable and does not block P4-T3 —
-  closing it fully needs a push-in-flight marker.
+- (none). P4-T2 and P4-T3 review findings are fixed and verified. The one known
+  residual (a push that completes *after* the local `C2` write, leaving the
+  server on `C1`) is recorded in Spec Deltas; it is recoverable and does not
+  block the P5 gate — closing it fully needs a push-in-flight marker.
 
 ## Spec Deltas / Open Items
 
@@ -451,7 +472,16 @@ Carry-over (small, not blocking Phase 5):
   instead of terminalizing to `:skipped`; and the watcher stays suspended across
   the node write, closing a duplicate-node window. A pushed parent keeps its
   server-side `docs_state: :pending` forever (its snapshot is immutable) — the
-  docs child carries `:current`; P4-T3's badge must decide how to render both.
+  docs child carries `:current`; P4-T3 renders the node's own state and links
+  the child node.
+- **Server-created meld nodes never reach docs `:current` (P4-T3 review W1,
+  2026-11-06)** — approval inserts a meld node with `docs_state: :pending`
+  (§6.5), but doc generation requires local provenance (a `SyncPending` row or
+  a pushed-SHA stamp) and a pulled node is `:legacy` on the daemon, so no job
+  will ever move that row to `:current`. The badge therefore shows "docs
+  pending" indefinitely for such nodes. Recorded in spec §9.4 and §16 as an
+  open decision (`:skipped` at approval vs. an explicit pulled-node generation
+  flow); not fixed in the badge slice.
 - **Reconnect doc retries while the server is still down (P4-T1)** — the
   trigger is `last_status != :ok`, so a project that keeps failing every pass
   re-asks `DocQueue.retry_pending/1` on each pass (30 s at defaults). That is
@@ -971,3 +1001,25 @@ commit before starting cold:
 `git add -A && git commit -m "feat: Phase 5 P4-T2 — docs child node for already-pushed nodes"`.
 Server tests need the test Postgres on `localhost:55432` (container
 `cadence-test-pg` is running).
+
+2026-11-06 — **Phase 5 P4-T3 + P4-T4/T5 (docs badge + closeout)** shipped from
+`.claude/plans/phase-5-docs/plan.md` (`@phx-full … --from P4-T3`). P4-T2 was
+committed first (`d17ebd2`) after re-running the gate. Badge:
+`Presentation.docs_state_label/1` / `docs_badge_class/1`;
+`Portfolio.docs_child/2` requires `metadata["docs"]["docs_for"]` **and** DAG
+parentage (metadata-only claims ignored), newest first, project-scoped;
+`ProjectLive` renders the selected node's own state plus a `patch` link to the
+docs child, and `{:nodes_pushed, …}` re-reads **only** that link (the DAG layout
+is untouched, so no intro replay). CSS `.docs-badge` reuses the AA status text
+tokens with hover/focus underlines. Independent review: **PASS WITH WARNINGS**;
+W2 (a child pushed while the parent was open never appeared) and S1–S4 were
+fixed (query-based lookup with parentage/self guards, live event refresh,
+neutral tooltip, link-class assertions, hover affordance); W1 (server-created
+meld nodes stay `:pending` forever) is recorded in spec §9.4/§16 and the Spec
+Deltas. P4-T4/T5: §9.3 commit model, §9.5 one-node-at-`C2` wording, §9.6 worker
+contract, §13 5a/5b/5c/P4 breakdown, §16 web-review + meld-node gap,
+`docs/README.md` status/read order. Verification: `mix format
+--check-formatted`, dev + `MIX_ENV=prod mix compile --warnings-as-errors`, 804
+tests green (251 shared + 188 daemon + 365 server; +11 net). Next: P5 release
+gate — optional live smoke with a real `CAD_LLM_API_KEY`, then final
+review/handoff.
