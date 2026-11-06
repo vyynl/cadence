@@ -993,7 +993,10 @@ generation leaves the node pointing at `C1` with `docs_state: :pending`.
   `session_metadata` (§4.1). The code change is never hidden or reverted.
 - `:CadDocDiff` shows it in Neovim.
 - A read-only `docs_state` badge (`:pending`, `:current`, `:skipped`) is shown
-  in the web UI.
+  in the web UI. `:current` means docs were generated and committed as `C2`;
+  `:pending` means a job is queued, deferred offline, or failed and is
+  retrying; `:skipped` means no schema or no trigger matched, so the commit is
+  code-only.
 - Web approve/reject for pending docs is deferred: nodes are immutable, so
   "reject" needs a review object that does not exist yet. Recorded in §16.
 - Reverting docs does not revert code — they're separate commits under one

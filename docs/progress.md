@@ -1,9 +1,10 @@
 # Cadence — Progress
 
 ## Current Phase
-Phase 4 — unions, proposals & review is **complete**, and so is the UI styling
-& freshness pass (4e: Session A freshness + Session B styling/review). The next
-slice is **Phase 5 — documentation automation** (spec §9, §13).
+Phase 4 — unions, proposals & review is **complete**, as is the UI styling &
+freshness pass (4e). **Phase 5 — documentation automation** is in progress:
+**5a (shared primitives) is complete and committed**; the next slice is **5b**
+(the daemon doc worker and follow-up docs commit).
 
 ## Done (summary)
 
@@ -239,7 +240,16 @@ slice is **Phase 5 — documentation automation** (spec §9, §13).
   routes. S3: the `aria-live` summary now includes the critical-count line, and
   the styling test asserts containment (`has_element?`) rather than document
   order. S4: `docs/README.md` marks 4e complete. 1 new test.
-- 640 tests green (161 shared + 125 daemon + 354 server);
+- **Phase 5a (doc automation shared primitives)** — `.caddocs.yaml` schema
+  parse/validation, pure glob matching, trigger gating (`generated_from`,
+  schema change, API-surface heuristic), docs prompt + strict MODIFY/CREATE
+  parser with read-only-path protection, `Cadence.Shared.UTF8`, and a
+  path-directed `GitStore.merge_files/3`. Adds `yaml_elixir` directly and
+  records §9.1/§9.3/§9.4/§9.5, §11, §12.6, and §16. Review verdict PASS WITH
+  WARNINGS; all 5 findings fixed (read-only doc writes, binary diff guard, NUL
+  paths, path-directed merge, `apply_ops` validation). 248 shared + 125 daemon
+  tests green; server suite not rerun.
+- **4e gate:** 640 tests green (161 shared + 125 daemon + 354 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
   `AshAuthentication.Info.strategy(User, :demo) == :error`.
@@ -252,9 +262,28 @@ slice is **Phase 5 — documentation automation** (spec §9, §13).
 
 ## Next
 
-**Immediate step:** start **Phase 5 — documentation automation** (spec §9,
-§13). Read §9 in full, then plan the doc schema parse, the doc agent
-sub-process, and deferred-doc handling before writing code.
+**Immediate step:** start **5b (P2) — daemon doc worker**. Plan:
+`.claude/plans/phase-5-docs/plan.md` (P2-T1..T11), with the decisions in
+`scratchpad.md` and the fixed review findings in
+`reviews/phase-5-docs-triage.md`.
+
+1. P2-T1 — `CAD_DOCS_*` config + `Cadence.Daemon.Env` accessors.
+2. P2-T2 — `Docs.SchemaSource` and the local `Project.docs_schema` cache.
+3. P2-T3 — `DocAgentWorker` (`Task.Supervisor` + Hammer `:docs`, injectable
+   `:docs_llm`).
+4. P2-T4 — `DocQueue` (enqueue/rehydrate/retry, `C1`→`C2` docs commit,
+   `docs_state` transitions).
+5. P2-T5 — `CommitQueue` integration (trigger evaluation, `code_commit_sha`,
+   no sync enqueue while a doc job is queued).
+6. P2-T6/P2-T7 — `Watcher.suspend/resume` and the working-tree write guard.
+7. P2-T8/P2-T9 — `SyncLedger` gating and `DocDiff`.
+8. P2-T10/P2-T11 — tests and `Application` children/reconnect retry hook.
+
+**Integration contract:** `LLM.Docs.build_prompt/4` returns
+`{:ok, prompt, %{writable_paths, read_only_paths}}`. Pass
+`read_only_paths:` to `parse/3`; only `writable_paths` may be overwritten,
+while new files under `docs_dir` are allowed. Binary diffs are already
+omitted; `apply_ops/2` enforces CREATE/MODIFY.
 
 Carry-over (small, not blocking Phase 5):
 
@@ -275,7 +304,7 @@ Carry-over (small, not blocking Phase 5):
    `/proposals/<token>` at wide and narrow widths in light and dark. There are
    no browser tests; 4e verified server-rendered markup and CSS only.
 
-**Spin-up:** read spec §9, then `@phx-plan` for the Phase 5 slice.
+**Spin-up:** `@phx-work .claude/plans/phase-5-docs/plan.md --from P2-T1`.
 
 ## Blocked
 
@@ -283,6 +312,24 @@ Carry-over (small, not blocking Phase 5):
   `docs/phase-4-prep.md` §5.
 
 ## Spec Deltas / Open Items
+
+- **Phase 5a implementation notes (2026-11-06)** — `docs_state` semantics are
+  now explicit in spec §9.4 (`:current` generated/committed, `:pending`
+  queued/deferred/retrying, `:skipped` no schema/trigger). `build_prompt/4`
+  returns `writable_paths`/`read_only_paths`; P2 must pass
+  `read_only_paths` to `parse/3`.
+- **`Project.docs_schema` server propagation is deferred** — `.caddocs.yaml`
+  remains the source of truth; P2 caches the parsed map locally on the project
+  row. Syncing it to the server is future work.
+- **Web docs review remains deferred** (spec §16) — Phase 5 ships
+  `:CadDocSync`/`:CadDocDiff` plus a read-only `docs_state` badge; rejecting
+  generated docs needs a review object that does not exist yet.
+- **Doc commit SHA gating/fallback is specified but unverified** — spec §9.5
+  records holding a doc-pending node out of the push queue and the
+  already-pushed child-node fallback; P2 must test both paths.
+- **Doc `max_words` is advisory** — the schema parses and records it, but the
+  required-heading check does not enforce a word count. Revisit if docs grow
+  unbounded.
 
 - **`proposal_url` assumes `CAD_SERVER_URL` is public (4d-3)** — the daemon
   builds the link from its API base. If a deployment points the daemon at an
@@ -567,3 +614,20 @@ document order; README status corrected. Verification: format clean,
 dev/prod compile clean, 640 tests green (161 + 125 + 354; +1). Deferred:
 5-pattern cap, double `details_pairs/1`, manual light/dark demo check. Next:
 Phase 5 (spec §9).
+
+2026-11-06 — **Phase 5a (doc automation shared primitives)** shipped and
+committed (`feat: Phase 5a — doc schema, trigger, and prompt primitives`).
+`Cadence.Shared.Docs.Schema` parses/validates `.caddocs.yaml`; `Glob` matches
+`generated_from` patterns without touching disk; `Docs.Trigger` gates on
+generated paths, schema changes, and an API-surface heuristic;
+`LLM.Docs` builds a bounded prompt and strictly parses MODIFY/CREATE ops with
+read-only-path protection; `UTF8` centralizes the invalid-UTF-8-or-NUL rule;
+`GitStore.merge_files/3` overlays only affected subtrees. `yaml_elixir` is a
+direct `cadence_shared` dependency; spec §9.1/§9.3/§9.4/§9.5, §11, §12.6, and
+§16 were updated. `/phx-review` verdict PASS WITH WARNINGS; all 5 findings
+fixed via triage (read-only doc writes, binary diff omission, NUL/control path
+rejection, path-directed merge, `apply_ops` CREATE/MODIFY validation).
+Verification: `mix format --check-formatted` and
+`mix compile --warnings-as-errors` clean; 248 shared + 125 daemon tests green
+(server suite not rerun — no Postgres). Next: 5b (P2-T1) daemon doc worker.
+
