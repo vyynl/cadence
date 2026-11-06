@@ -123,6 +123,151 @@ defmodule Cadence.ServerWeb.ProjectLiveTest do
     assert file_html =~ "defmodule Demo"
   end
 
+  describe "docs state badge" do
+    test "renders the selected node's own docs state", %{conn: conn} do
+      project = insert_project("docs-states")
+
+      pending =
+        insert_node(project, %{message: "pending docs", docs_state: :pending}, %{
+          "README.md" => "# Pending\n"
+        })
+
+      current =
+        insert_node(
+          project,
+          %{message: "current docs", parents: [pending.id], docs_state: :current},
+          %{"README.md" => "# Current\n"}
+        )
+
+      skipped =
+        insert_node(
+          project,
+          %{message: "skipped docs", parents: [pending.id], docs_state: :skipped},
+          %{"README.md" => "# Skipped\n"}
+        )
+
+      {:ok, view, _html} = live(conn, "/p/docs-states")
+
+      pending_html = render_patch(view, "/p/docs-states/n/#{pending.id}")
+      assert pending_html =~ "docs pending"
+      assert pending_html =~ "docs-badge docs-pending"
+      refute pending_html =~ "child node"
+
+      assert render_patch(view, "/p/docs-states/n/#{current.id}") =~ "docs current"
+
+      skipped_html = render_patch(view, "/p/docs-states/n/#{skipped.id}")
+      assert skipped_html =~ "docs skipped"
+      assert skipped_html =~ "docs-badge docs-skipped"
+    end
+
+    test "links a follow-up docs child without claiming the snapshot has docs", %{conn: conn} do
+      project = insert_project("docs-child")
+
+      code =
+        insert_node(
+          project,
+          %{message: "code node", docs_state: :pending},
+          %{"README.md" => "# Code\n"}
+        )
+
+      child =
+        insert_node(
+          project,
+          %{
+            message: "docs: update project documentation",
+            parents: [code.id],
+            docs_state: :current,
+            session_metadata: %{"docs" => %{"docs_for" => code.id}}
+          },
+          %{"README.md" => "# Docs\n"}
+        )
+
+      {:ok, view, _html} = live(conn, "/p/docs-child")
+
+      html = render_patch(view, "/p/docs-child/n/#{code.id}")
+
+      assert html =~ "docs pending"
+      assert html =~ "docs current · child node"
+
+      assert has_element?(
+               view,
+               "a.docs-badge.docs-current[href='/p/docs-child/n/#{child.id}']",
+               "docs current · child node"
+             )
+    end
+
+    test "a docs child pushed while the code node is open appears live", %{conn: conn} do
+      project = insert_project("docs-child-live")
+
+      code =
+        insert_node(
+          project,
+          %{message: "code node", docs_state: :pending},
+          %{"README.md" => "# Code\n"}
+        )
+
+      {:ok, view, _html} = live(conn, "/p/docs-child-live")
+
+      refute render_patch(view, "/p/docs-child-live/n/#{code.id}") =~ "child node"
+
+      child =
+        insert_node(
+          project,
+          %{
+            message: "docs: update project documentation",
+            parents: [code.id],
+            docs_state: :current,
+            session_metadata: %{"docs" => %{"docs_for" => code.id}}
+          },
+          %{"README.md" => "# Docs\n"}
+        )
+
+      Phoenix.PubSub.broadcast(
+        Cadence.Server.PubSub,
+        "project:#{project.id}",
+        {:nodes_pushed, project.id, [child.id]}
+      )
+
+      html = render(view)
+
+      assert html =~ "docs current · child node"
+
+      assert has_element?(
+               view,
+               "a.docs-badge.docs-current[href='/p/docs-child-live/n/#{child.id}']",
+               "docs current · child node"
+             )
+    end
+
+    test "a docs child does not link to itself", %{conn: conn} do
+      project = insert_project("docs-child-self")
+
+      code =
+        insert_node(project, %{message: "code node", docs_state: :pending}, %{
+          "README.md" => "# Code\n"
+        })
+
+      child =
+        insert_node(
+          project,
+          %{
+            message: "docs: update project documentation",
+            parents: [code.id],
+            docs_state: :current,
+            session_metadata: %{"docs" => %{"docs_for" => code.id}}
+          },
+          %{"README.md" => "# Docs\n"}
+        )
+
+      {:ok, view, _html} = live(conn, "/p/docs-child-self")
+
+      html = render_patch(view, "/p/docs-child-self/n/#{child.id}")
+
+      assert html =~ "docs current"
+      refute html =~ "child node"
+    end
+  end
+
   test "shows binary and oversized file notices", %{
     conn: conn,
     functioning: functioning

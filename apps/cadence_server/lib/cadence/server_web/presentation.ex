@@ -3,10 +3,11 @@ defmodule Cadence.ServerWeb.Presentation do
   Pure formatting and badge-class helpers shared by the server-rendered
   surfaces (spec §7.2).
 
-  The review hub, the member review page, the public proposal page, the project
-  home, and the portfolio index use the same vocabulary for proposal status,
-  incident severity, and file status. Keeping the class strings here means a
-  new variant cannot drift between templates.
+  The review hub, the member review page, the public proposal page, and the
+  project home use the same vocabulary for proposal status, incident severity,
+  and file status; the project home also labels a node's documentation state.
+  Keeping the class strings here means a new variant cannot drift between
+  templates.
 
   Nothing in this module touches Phoenix, Ecto, or the repository: every
   function is deterministic except `age/1`, which reads the current time.
@@ -79,4 +80,29 @@ defmodule Cadence.ServerWeb.Presentation do
   def file_status_class(:modified), do: "file-status file-status-modified"
   def file_status_class(:deleted), do: "file-status file-status-deleted"
   def file_status_class(_status), do: "file-status"
+
+  @doc """
+  Human label for a node's documentation state (spec §9.4).
+
+  `:current` means the generation was committed, `:pending` means a job is
+  queued, deferred, or retrying, and `:skipped` means the commit is code-only.
+  """
+  @spec docs_state_label(atom() | nil) :: String.t()
+  def docs_state_label(:current), do: "docs current"
+  def docs_state_label(:pending), do: "docs pending"
+  def docs_state_label(:skipped), do: "docs skipped"
+  def docs_state_label(_state), do: "docs unknown"
+
+  @doc """
+  Badge classes for a node's documentation state (`:current`, `:pending`,
+  `:skipped`).
+
+  The modifiers reuse the status text tokens so the badge follows the light and
+  dark palettes without introducing new hues.
+  """
+  @spec docs_badge_class(atom() | nil) :: String.t()
+  def docs_badge_class(:current), do: "badge docs-badge docs-current"
+  def docs_badge_class(:pending), do: "badge docs-badge docs-pending"
+  def docs_badge_class(:skipped), do: "badge docs-badge docs-skipped"
+  def docs_badge_class(_state), do: "badge docs-badge"
 end

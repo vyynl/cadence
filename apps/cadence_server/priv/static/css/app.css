@@ -615,6 +615,31 @@ code {
   color: var(--status-rejected-text);
 }
 
+/* Node documentation state (spec §9.4): reuses the status text scale. */
+.docs-badge {
+  text-transform: lowercase;
+  text-decoration: none;
+}
+
+.docs-badge.docs-current {
+  border-color: var(--status-approved);
+  color: var(--status-approved-text);
+}
+
+.docs-badge.docs-pending {
+  border-color: var(--status-pending);
+  color: var(--status-pending-text);
+}
+
+.docs-badge.docs-skipped {
+  color: var(--muted);
+}
+
+.docs-badge[href]:hover,
+.docs-badge[href]:focus-visible {
+  text-decoration: underline;
+}
+
 .count-badge {
   display: inline-flex;
   justify-content: center;

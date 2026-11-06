@@ -60,6 +60,34 @@ defmodule Cadence.Server.Portfolio do
   end
 
   @doc """
+  Fetch the newest docs child for a code node, if one exists (spec §9.5).
+
+  A node pushed before its docs resolved keeps its immutable snapshot; the
+  generation is attached as a child that records
+  `session_metadata["docs"]["docs_for"]` and has the code node as a DAG parent.
+  Both conditions are required so client-supplied metadata alone cannot claim a
+  child link. Returns `nil` for unknown/invalid IDs or malformed metadata.
+  """
+  @spec docs_child(Ecto.UUID.t() | String.t(), Ecto.UUID.t() | String.t()) :: Node.t() | nil
+  def docs_child(project_id, code_node_id) do
+    with {:ok, project_id} <- UUID.cast(project_id),
+         {:ok, code_node_id} <- UUID.cast(code_node_id) do
+      Repo.one(
+        from(n in Node,
+          where: n.project_id == ^project_id,
+          where: n.id != ^code_node_id,
+          where: fragment("?->'docs'->>'docs_for' = ?", n.session_metadata, ^code_node_id),
+          where: fragment("? = ANY(?)", type(^code_node_id, Ecto.UUID), n.parents),
+          order_by: [desc: n.created_at, desc: n.id],
+          limit: 1
+        )
+      )
+    else
+      :error -> nil
+    end
+  end
+
+  @doc """
   List public projects for the portfolio index, newest first.
 
   Returns `%{project: Project.t(), node_count: non_neg_integer()}` entries.

@@ -13,8 +13,10 @@ defmodule Cadence.ServerWeb.ProjectLive do
   always re-derives (Iron Law 5). Raw view stays unfiltered.
 
   Live DAG refresh is deliberately not subscribed: `DAGLayout.layout/2`
-  recomputes intro timing, so reacting to `{:nodes_pushed, …}` would replay the
-  animation and disturb the selected pane.
+  recomputes intro timing, so rebuilding the layout on `{:nodes_pushed, …}`
+  would replay the animation and disturb the selected pane. A push does re-read
+  only the selected node's docs child (a follow-up node can appear while the
+  code snapshot is open), which leaves `dag_layout` untouched.
   """
 
   use Cadence.ServerWeb, :live_view
@@ -93,6 +95,7 @@ defmodule Cadence.ServerWeb.ProjectLive do
               project: project,
               dag_layout: dag_layout,
               selected_node: selected_node,
+              docs_child: selected_node && Portfolio.docs_child(project.id, selected_node.id),
               not_found: false,
               quarantine: quarantine,
               quarantine_key: quarantine_key,
@@ -202,7 +205,16 @@ defmodule Cadence.ServerWeb.ProjectLive do
   def handle_info({:proposal_decided, _project_id, _proposal_id, _status}, socket),
     do: {:noreply, socket}
 
-  def handle_info({:nodes_pushed, _project_id, _node_ids}, socket), do: {:noreply, socket}
+  def handle_info({:nodes_pushed, project_id, _node_ids}, socket) do
+    project = socket.assigns.project
+    selected = socket.assigns.selected_node
+
+    if project && project.id == project_id && selected do
+      {:noreply, assign(socket, docs_child: Portfolio.docs_child(project.id, selected.id))}
+    else
+      {:noreply, socket}
+    end
+  end
 
   def handle_info({:preferences_updated, _project_id, _user_id}, socket), do: {:noreply, socket}
 
@@ -260,6 +272,17 @@ defmodule Cadence.ServerWeb.ProjectLive do
                     <span class="flag-badge">
                       {Presentation.format_flags(@selected_node.flags, @selected_node.pinned)}
                     </span>
+                    <span class={Presentation.docs_badge_class(@selected_node.docs_state)}>
+                      {Presentation.docs_state_label(@selected_node.docs_state)}
+                    </span>
+                    <.link
+                      :if={@docs_child}
+                      patch={~p"/p/#{@project.slug}/n/#{@docs_child.id}"}
+                      class={Presentation.docs_badge_class(@docs_child.docs_state)}
+                      title="Open the follow-up node carrying this snapshot's docs"
+                    >
+                      {Presentation.docs_state_label(@docs_child.docs_state)} · child node
+                    </.link>
                     <time datetime={DateTime.to_iso8601(@selected_node.created_at)}>
                       {Presentation.format_time(@selected_node.created_at)}
                     </time>
@@ -353,6 +376,7 @@ defmodule Cadence.ServerWeb.ProjectLive do
       project: nil,
       dag_layout: DAGLayout.layout([]),
       selected_node: nil,
+      docs_child: nil,
       not_found: false,
       quarantine: :ok,
       quarantine_key: nil,
@@ -551,7 +575,10 @@ defmodule Cadence.ServerWeb.ProjectLive do
         intro_ms: dag_intro_ms()
       )
 
-    assign(socket, selected_node: selected_node, dag_layout: dag_layout)
+    assign(socket,
+      selected_node: selected_node,
+      dag_layout: dag_layout
+    )
   end
 
   defp reload_repo(socket) do

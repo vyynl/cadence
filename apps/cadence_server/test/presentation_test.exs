@@ -98,4 +98,30 @@ defmodule Cadence.ServerWeb.PresentationTest do
       assert Presentation.file_status_class(:renamed) == "file-status"
     end
   end
+
+  describe "docs_state_label/1" do
+    test "labels each known docs state" do
+      assert Presentation.docs_state_label(:current) == "docs current"
+      assert Presentation.docs_state_label(:pending) == "docs pending"
+      assert Presentation.docs_state_label(:skipped) == "docs skipped"
+    end
+
+    test "falls back for an unknown or nil state" do
+      assert Presentation.docs_state_label(:other) == "docs unknown"
+      assert Presentation.docs_state_label(nil) == "docs unknown"
+    end
+  end
+
+  describe "docs_badge_class/1" do
+    test "returns a distinct variant per docs state" do
+      assert Presentation.docs_badge_class(:current) == "badge docs-badge docs-current"
+      assert Presentation.docs_badge_class(:pending) == "badge docs-badge docs-pending"
+      assert Presentation.docs_badge_class(:skipped) == "badge docs-badge docs-skipped"
+    end
+
+    test "falls back to the neutral docs badge" do
+      assert Presentation.docs_badge_class(:other) == "badge docs-badge"
+      assert Presentation.docs_badge_class(nil) == "badge docs-badge"
+    end
+  end
 end

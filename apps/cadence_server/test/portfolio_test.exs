@@ -142,6 +142,78 @@ defmodule Cadence.Server.PortfolioTest do
     end
   end
 
+  describe "docs_child/2" do
+    test "finds the newest docs child linked by metadata and DAG parentage" do
+      project = insert_project()
+      code = insert_node(project, %{message: "code"})
+
+      older =
+        insert_node(project, %{
+          message: "older docs",
+          parents: [code.id],
+          docs_state: :current,
+          session_metadata: %{"docs" => %{"docs_for" => code.id}},
+          created_at: ~U[2026-10-20 00:00:00Z]
+        })
+
+      newest =
+        insert_node(project, %{
+          message: "newest docs",
+          parents: [code.id],
+          docs_state: :current,
+          session_metadata: %{"docs" => %{"docs_for" => code.id}},
+          created_at: ~U[2026-10-24 00:00:00Z]
+        })
+
+      assert Portfolio.docs_child(project.id, code.id).id == newest.id
+      refute Portfolio.docs_child(project.id, code.id).id == older.id
+    end
+
+    test "ignores metadata-only claims and malformed metadata" do
+      project = insert_project()
+      code = insert_node(project, %{message: "code"})
+
+      # No DAG parentage: client-supplied metadata alone must not create a link.
+      insert_node(project, %{
+        message: "metadata only",
+        docs_state: :current,
+        session_metadata: %{"docs" => %{"docs_for" => code.id}}
+      })
+
+      # Parentage but a non-string docs_for, and a non-map docs value.
+      insert_node(project, %{
+        message: "bad id",
+        parents: [code.id],
+        session_metadata: %{"docs" => %{"docs_for" => 123}}
+      })
+
+      insert_node(project, %{
+        message: "bad docs",
+        parents: [code.id],
+        session_metadata: %{"docs" => "nope"}
+      })
+
+      assert Portfolio.docs_child(project.id, code.id) == nil
+    end
+
+    test "is scoped to the project and handles invalid or nil ids" do
+      project = insert_project()
+      other = insert_project("other")
+      code = insert_node(project, %{message: "code"})
+
+      insert_node(other, %{
+        message: "other docs",
+        parents: [code.id],
+        docs_state: :current,
+        session_metadata: %{"docs" => %{"docs_for" => code.id}}
+      })
+
+      assert Portfolio.docs_child(project.id, code.id) == nil
+      assert Portfolio.docs_child(project.id, nil) == nil
+      assert Portfolio.docs_child("not-a-uuid", code.id) == nil
+    end
+  end
+
   describe "repository snapshots" do
     setup do
       project = insert_project("repo")
