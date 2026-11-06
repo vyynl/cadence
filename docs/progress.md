@@ -2,14 +2,14 @@
 
 ## Current Phase
 Phase 4 — unions, proposals & review is **complete**, as is the UI styling &
-freshness pass (4e). **Phase 5 — documentation automation** is in progress:
-**5a (shared primitives), 5b (daemon doc worker + commit integration), and 5c
-(daemon API + Neovim commands) are complete**, and both review passes are fixed
-(legacy pushed-SHA guard, held-node release, already-current skip, doc-diff
-wrap, plus the manual-sync hold, `mark_current` pushed guard, conditional
-release, pushed-SHA stamp, and `mark_pending` current no-op). The next slice is
-**P4** (deferred docs + polish: pushed-node fallback, read-only `docs_state`
-badge, spec/docs closeout).
+freshness pass (4e). **Phase 5 — documentation automation**: 5a (shared
+primitives), 5b (daemon doc worker + commit integration), 5c (daemon API +
+Neovim commands), and **P4-T1 (reconnect docs retry) are complete**. Both review
+passes are fixed (legacy pushed-SHA guard, held-node release, already-current
+skip, doc-diff wrap, plus the manual-sync hold, `mark_current` pushed guard,
+conditional release, pushed-SHA stamp, and `mark_pending` current no-op). The
+next slice is **P4-T2** (already-pushed docs child node), followed by P4-T3..T5
+(read-only badge, spec/docs closeout).
 
 ## Done (summary)
 
@@ -301,6 +301,18 @@ badge, spec/docs closeout).
   pushed node reports `already_synced` until P4-T2. 9 new router tests, a new
   `cadence.nvim/spec/doc_spec.lua`; all Lua files pass `luac -p`. Spec
   §9.2/§9.4/§9.5/§12.6/§13 updated.
+- **Phase 5 P4-T1 (reconnect docs retry)** — the deferred-docs retry now runs
+  **before** the reconnect pass pushes. `Sync.sync/2` accepts `retry_docs:` and
+  calls `DocQueue.retry_pending/1` between `ensure_project/1` and
+  `push_pending/1`, so the hold is re-armed synchronously and the server
+  receives one node at `C2`; `SyncWorker.start_project/2` requests it only on
+  the first pass after boot or a failed pass (the post-pass hook in `finish/3`
+  is gone), so a permanently failing job is retried once per outage and the
+  node still syncs code-only. The old order could never work: a deferred node
+  is pushable, so `C1` was pushed and stamped immutable before the retry could
+  run. New `apps/cadence_daemon/test/doc_reconnect_test.exs` proves one pushed
+  node at `C2` (never `C1`, `parent == [C1]`) and the failed-retry code-only
+  fallback. Spec §9.5 updated; 182 daemon tests green (180 + 2).
 - **4e gate:** 640 tests green (161 shared + 125 daemon + 354 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
@@ -314,22 +326,62 @@ badge, spec/docs closeout).
 
 ## Next
 
-**Immediate step:** start **P4 (deferred docs + polish)** from
-`.claude/plans/phase-5-docs/plan.md` (P4-T1..T5). The 5c review fixes and the
-second-pass hold/guard/release fixes are shipped (see the triage
-`.claude/plans/phase-5-docs/reviews/phase-5-docs-5c-triage.md`).
-The daemon exposes `DocQueue.sync/2` (`202`/`200` status, `already_current`,
-`legacy`), `DocDiff.build/2` (node defaults to the session anchor), and
-`retry_pending/1`.
+**Immediate step:** start **P4-T2 (already-pushed docs child node)** from
+`.claude/plans/phase-5-docs/plan.md`. P4-T1 shipped: the reconnect retry runs
+before the push, so a deferred job that succeeds on reconnect reaches the server
+as one node at `C2` (see
+`.claude/plans/phase-5-docs/reviews/phase-5-docs-5c-triage.md` for the earlier
+guards).
 
-- P4-T1 — end-to-end reconnect test: offline commit → `:pending` → reconnect
-  → `C2` pushed as one node (the hook and `retry_pending/1` shipped in 5b).
-- P4-T2 — already-pushed fallback: create a docs child node instead of
-  rewriting the pushed SHA; `:CadDocSync` currently reports `already_synced`.
+- P4-T2 — already-pushed fallback: create a docs child node
+  (`parents: [code_node.id]`, `docs_state: :current`,
+  `metadata["docs"]["docs_for"] = code_node.id`) instead of rewriting the pushed
+  SHA; `:CadDocSync` still reports `already_synced` for a pushed node until
+  then.
 - P4-T3 — read-only `docs_state` badge in `ProjectLive`'s inspector
-  (`Presentation` helper + LiveView tests).
+  (`Presentation` helper + LiveView tests; server tests need Postgres).
 - P4-T4/P4-T5 — spec §9.3/§9.4/§9.5/§9.6 and §13 closeout; `docs/README.md`
   status.
+
+**P4-T2 prep (noted during P4-T1).** Four guards currently refuse a pushed node
+and must all learn the child-node path, not just `DocQueue.sync/2`:
+
+1. `DocQueue.run/2` — `pushed?(node) -> :drop` (a forced job never runs).
+2. `DocQueue.sync/2` — `check_pushed/1` returns `{:skip, :already_synced}`.
+3. `DocQueue.resumable_nodes/1` — `not pushed?(node)`, so `rehydrate/0` and
+   `retry_pending/1` ignore it.
+4. `DocQueue.mark_current/5` — returns `{:error, :pushed}` (terminal) when a
+   push lands mid-job; that is the mid-run variant of the same fallback.
+
+Shape to implement: run the job against the pushed SHA as `C1`, write `C2` with
+git parent `C1`, then **insert a new node** (`git_commit_sha: C2`,
+`parents: [code_node.id]`, `docs_state: :current`,
+`metadata["docs"] = %{code_commit_sha: C1, docs_commit_sha: C2, docs_for:
+code_node.id, ...}`), with its own `SyncPending` row written in the node
+transaction (mirror `CommitQueue.insert_sync_pending!/1`, currently private).
+Notes/decisions to settle first:
+
+- **Session pointer.** Advance it to the child (`Session.commit_after/2`-style):
+  the working tree now holds docs, so leaving the anchor on `C1` makes a late
+  watcher event compare the `C1` tree to the docs tree and create a duplicate
+  node (`skip_unchanged` only matches when the anchor's tree equals disk).
+- **Idempotency.** Look up an existing child by `metadata["docs"]["docs_for"]`
+  before creating one; a repeated `:CadDocSync` must not fan out duplicates.
+- **Manual sync must not re-hold the pushed parent.** `DocQueue.sync/2` calls
+  `mark_pending/1` + `SyncLedger.enqueue/2` before the cast; for a pushed node
+  that re-creates a `SyncPending` row and re-pushes the same SHA. The child (not
+  the parent) should be marked pending/queued.
+- **Response shape.** `{:queued, node_id}` is answered before the model runs, so
+  the child id does not exist yet. Decide: return the code node id and let the
+  Neovim notification say "docs queued", or add a `kind`/`docs_for` field.
+  `cadence.nvim/lua/cadence/doc.lua` maps `already_synced` today and needs the
+  new case if the skip goes away.
+- **Flag.** The child is a real commit created by the daemon, not a user
+  session; `[:"in-progress"]` (like a meld approval) vs `:functioning` (the
+  code it documents may not be) needs a call. `pinned` should stay false.
+- **`DocDiff.build/2`** already works for the child when its docs metadata
+  carries `code_commit_sha` (it diffs `C2.tree` against `C1.tree`); the
+  first-parent fallback would also resolve, but set it explicitly.
 
 **Integration contract:** `LLM.Docs.build_prompt/4` returns
 `{:ok, prompt, %{writable_paths, read_only_paths}}`; `DocQueue` passes
@@ -341,7 +393,10 @@ still supports a direct forced run on a `:skipped`/legacy node by falling back
 to `node.git_commit_sha`; `POST /docs/sync` gates that behind a `SyncPending`
 row (the local proof the node is unpushed) and reports `already_synced` for a
 stamped pushed node, `already_current` for generated docs, and `legacy`
-otherwise (P4-T2 owns the child-node fallback).
+otherwise (P4-T2 owns the child-node fallback). Reconnect ordering:
+`Sync.sync/2` `retry_docs: true` → `DocQueue.retry_pending/1` (re-arms the hold
+synchronously) → `push_pending/1`; `SyncWorker` asks for it only on the first
+pass after boot or a failed pass.
 
 Carry-over (small, not blocking Phase 5):
 
@@ -394,10 +449,22 @@ Carry-over (small, not blocking Phase 5):
   implemented and tested, and `mark_pushed/1` stamps a top-level
   `session_metadata["docs_pushed_sha"]` (covering `:skipped` nodes) so
   `rehydrate/0`, `retry_pending/0`, and the job runner never rewrite an
-  already-pushed SHA. A forced no-op run keeps the previous `C2`. P4-T2's
-  follow-up docs child node is still open: `:CadDocSync` /
-  `POST /docs/sync` reports `skipped: "already_synced"` and cannot generate
-  docs for a node that was already pushed (the queue drops it).
+  already-pushed SHA. A forced no-op run keeps the previous `C2`. P4-T1 closed
+  the reconnect hole by running the retry *before* the pass pushes, so a
+  deferred job on an unpushed node still gets its `C2` onto the server as one
+  node. P4-T2's follow-up docs child node remains open for a node that was
+  genuinely pushed before its docs resolved (mid-job push, or a manual sync
+  after a code-only push): `:CadDocSync` / `POST /docs/sync` reports
+  `skipped: "already_synced"` and cannot generate docs for it (the queue drops
+  it).
+- **Reconnect doc retries while the server is still down (P4-T1)** — the
+  trigger is `last_status != :ok`, so a project that keeps failing every pass
+  re-asks `DocQueue.retry_pending/1` on each pass (30 s at defaults). That is
+  intentional early on (the docs can be generated offline and wait at `C2`), and
+  the `:docs` Hammer limiter bounds the model cost, but a permanently broken doc
+  client during a long outage will churn the queue. Add a per-node retry marker
+  if that shows up in practice; once a pass succeeds the guard stops the
+  retries and the node syncs code-only.
 - **Phase 5c implementation notes (2026-11-06)** — `POST /docs/sync` resolves
   `node_id` to `Session.anchor_node/1` when omitted and returns `202` with the
   resolved `node_id`; the skip reasons are `already_synced`, `disabled`,
@@ -855,3 +922,18 @@ green (251 shared + 180 daemon + 354 server), format clean, dev/prod compile
 clean, `luac -p` and the Lua specs pass. Next session starts **P4-T1**:
 `@phx-work .claude/plans/phase-5-docs/plan.md --from P4-T1`.
 
+2026-11-06 — **Phase 5 P4-T1 (reconnect docs retry)** shipped from
+`.claude/plans/phase-5-docs/plan.md`. The deferred-docs retry moved **before**
+the push: `Sync.sync/2` takes `retry_docs:` and calls
+`DocQueue.retry_pending/1` between `ensure_project/1` and `push_pending/1`, so
+`mark_pending/1` re-arms the sync hold synchronously and the reconnect pass
+cannot send the code-only `C1`. `SyncWorker.start_project/2` requests it only on
+the first pass after boot or a failed pass (`last_status != :ok`) — replacing the
+post-pass hook in `finish/3` — so a permanently failing job is retried once per
+outage and the node still syncs code-only (D6). New
+`apps/cadence_daemon/test/doc_reconnect_test.exs` proves one pushed node at `C2`
+(never `C1`, `parent == [C1]`) and the failed-retry fallback. Spec §9.5 and the
+plan/scratchpad execution notes updated. Verification: `mix format
+--check-formatted` and `mix compile --warnings-as-errors` clean; 787 tests green
+(251 shared + 182 daemon + 354 server); server suite ran against the test
+Postgres on `localhost:55432`. Next: P4-T2 (already-pushed docs child node).
