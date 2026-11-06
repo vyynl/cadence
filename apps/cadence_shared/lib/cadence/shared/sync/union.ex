@@ -2,7 +2,8 @@ defmodule Cadence.Shared.Sync.Union do
   @moduledoc """
   Server-first meld/union request (spec §6.5, §10.6).
 
-  Requests a new meld node whose parents are `parent_node_ids`.
+  Requests a meld proposal for `parent_node_ids`. No node is created here; the
+  meld node exists only after approval.
   """
 
   @enforce_keys [:project_id, :parent_node_ids]

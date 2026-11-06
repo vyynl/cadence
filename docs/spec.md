@@ -445,7 +445,8 @@ Union is **server-first**. Offline union is disallowed (command greys out).
 The server pipeline **proposes, it does not create**:
 
 1. Validate the caller's role (`owner` or `trusted`) and load the parent nodes
-   (at least two distinct nodes, all belonging to the project).
+   (2–8 distinct nodes, all belonging to the project; each parent retains up to
+   the full scan cap in memory, so the list is capped).
 2. Walk each parent snapshot under the public scan caps; a cap overflow or a
    missing object is an incident, never a partial meld.
 3. Compute the deterministic union: paths on which every containing parent
@@ -458,7 +459,9 @@ The server pipeline **proposes, it does not create**:
    result tree and commit. The commit's parents are the selected parent
    commits.
 6. Create a **pending proposal** (§6.6) carrying the result tree/commit and
-   reproducible agent metadata (provider, model, prompt version, counts).
+   reproducible agent metadata (provider, model, prompt version, counts). A
+   pending meld for the same ordered parents is returned instead of running a
+   duplicate union; rejected work is re-submitted as a new proposal.
 7. Scan the result content for secrets; a finding keeps the proposal but opens
    a critical incident and isolates the result until resolved.
 
@@ -1087,11 +1090,21 @@ SyncMessage.PushPreferences
   membership: %{project_id, active_heads, session_pointer, updated_at}
 
 SyncMessage.Union
-  project_id, parent_node_ids: [uuid]
-  # Defined but unmatched in Phase 4b: union is a server-side context call
-  # (`Cadence.Server.Melds.propose/3`). The routed response becomes a proposal
-  # reference (`proposal_id` / `proposal_token`) in 4d; `meld_node_id` predates
-  # proposals and is no longer the response shape.
+  project_id, parent_node_ids: [uuid]   # 2..8 distinct parents
+  # Routed at POST /sync/union (4d-2): delegates to
+  # Cadence.Server.Melds.propose/3 synchronously. Members with can_propose?
+  # (owner or trusted) only. A pending meld for the same ordered parents is
+  # returned instead of running a duplicate union.
+
+SyncMessage.UnionResponse
+  proposal_id, proposal_token, status, kind
+  # Union creates a *proposal*, not a node. The meld node is created only if
+  # the proposal is approved. 201 on success; 403 not a proposer, 404 unknown
+  # project, 422 invalid/too many parents or payload, 429 meld rate limited
+  # (with Retry-After), 502 meld/model failure, 500 server object corruption.
+  # The synchronous call can take up to
+  # CAD_MELD_RETRY_ATTEMPTS × CAD_MELD_TIMEOUT_MS + CAD_MELD_RETRY_BACKOFF_MS
+  # (about 120.5 s at defaults); callers must budget above that.
 ```
 
 Node push errors are returned as `%{error: message, failed_local_id: uuid}` when
@@ -1344,7 +1357,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_PROPOSAL_MAX_FILES` | no | `200` | Max changed files listed on a public proposal page |
 | `CAD_SCAN_MAX_FILES` | no | `10000` | Max files scanned for secret quarantine |
 | `CAD_SCAN_MAX_BYTES` | no | `16777216` | Max snapshot bytes scanned for secret quarantine |
-| `CAD_MELD_TIMEOUT_MS` | no | `60000` | Meld agent request timeout |
+| `CAD_MELD_TIMEOUT_MS` | no | `60000` | Timeout per meld agent attempt (a synchronous union can take `retries × timeout + backoff`) |
 | `CAD_MELD_RATE_LIMIT` | no | `5` | Meld agent calls per server rate window |
 | `CAD_MELD_RATE_SCALE` | no | `60000` | Meld rate window in milliseconds |
 | `CAD_MELD_MAX_OPS` | no | `50` | Max file operations accepted from the agent |
@@ -1541,8 +1554,11 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   and integrity state, approve/reject with a verified result and node
   attach/pin, open-incident panel with re-scan/acknowledge resolution,
   shareable link, server-side authorization on every event.
-- 4d — Broadcast/pull convergence: approved meld reaches connected clients and
-  daemons; resolve web-pin propagation if promotion must be visible locally.
+- 4d — Broadcast/pull convergence + union trigger: approved melds and pin
+  changes reach connected daemons (`sync_available` fan-out, post-commit cursor
+  bumps); routed `POST /sync/union` creates a proposal through
+  `Melds.propose/3` and returns its token; daemon/Neovim submit the union
+  picker.
 - Proposal UI must not ship before 4a/4b exist; AI output stays reviewable and
   reversible. The deterministic scanner, not the LLM, decides safety.
 

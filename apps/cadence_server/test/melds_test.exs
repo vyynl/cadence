@@ -84,14 +84,31 @@ defmodule Cadence.Server.MeldsTest do
       assert result.files == []
     end
 
-    test "repeated successes are allowed (no dedupe of proposals)" do
+    test "a pending proposal for the same parents is reused (queue dedupe)" do
       {owner, project} = owner_project()
       [parent_a, parent_b] = parents(project, %{"a.txt" => "a"}, %{"b.txt" => "b"})
       ids = [parent_a.id, parent_b.id]
 
       assert {:ok, first} = Melds.propose(actor(owner), project.id, ids)
       assert {:ok, second} = Melds.propose(actor(owner), project.id, ids)
+      assert first.id == second.id
+      assert Repo.aggregate(Proposal, :count) == 1
+    end
+
+    test "a rejected proposal no longer blocks a re-proposal" do
+      {owner, project} = owner_project()
+      [parent_a, parent_b] = parents(project, %{"a.txt" => "a"}, %{"b.txt" => "b"})
+      ids = [parent_a.id, parent_b.id]
+
+      assert {:ok, first} = Melds.propose(actor(owner), project.id, ids)
+
+      first
+      |> Ecto.Changeset.change(status: :rejected)
+      |> Repo.update!()
+
+      assert {:ok, second} = Melds.propose(actor(owner), project.id, ids)
       assert first.id != second.id
+      assert Repo.aggregate(Proposal, :count) == 2
     end
   end
 

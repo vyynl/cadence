@@ -58,6 +58,23 @@ defmodule Cadence.ServerWeb.SyncController do
     end
   end
 
+  def union(conn, _params) do
+    case Sync.union(conn.assigns.current_user, conn.body_params) do
+      {:ok, proposal} -> json(conn, 201, union_response(proposal))
+      {:error, :forbidden} -> json(conn, 403, %{error: "insufficient project role"})
+      {:error, reason} -> error(conn, reason)
+    end
+  end
+
+  defp union_response(proposal) do
+    %Cadence.Shared.Sync.UnionResponse{
+      proposal_id: proposal.id,
+      proposal_token: proposal.token,
+      status: Atom.to_string(proposal.status),
+      kind: Atom.to_string(proposal.kind)
+    }
+  end
+
   defp project_json(project) do
     %{
       id: project.id,
@@ -72,6 +89,14 @@ defmodule Cadence.ServerWeb.SyncController do
     json(conn, status(reason), %{error: message(reason), failed_local_id: local_id})
   end
 
+  defp error(conn, {:meld, {:rate_limited, retry_after_ms}}) do
+    retry_after = max(div(retry_after_ms + 999, 1_000), 1)
+
+    conn
+    |> put_resp_header("retry-after", Integer.to_string(retry_after))
+    |> json(429, %{error: "meld rate limited"})
+  end
+
   defp error(conn, reason) do
     json(conn, status(reason), %{error: message(reason)})
   end
@@ -83,6 +108,11 @@ defmodule Cadence.ServerWeb.SyncController do
   defp status(:project_conflict), do: 409
   defp status(:duplicate_local_id), do: 409
   defp status(:object_store_incomplete), do: 500
+  defp status({:scan, reason}) when reason in [:too_many_files, :too_many_bytes], do: 422
+  defp status({:scan, _reason}), do: 500
+  defp status({:meld, _reason}), do: 502
+  defp status(:invalid_agent_output), do: 502
+  defp status(%Ecto.Changeset{}), do: 422
   defp status(_reason), do: 422
 
   defp message(:not_found), do: "project not found"
@@ -116,5 +146,11 @@ defmodule Cadence.ServerWeb.SyncController do
   defp message(:invalid_active_heads), do: "invalid active_heads"
   defp message(:invalid_preferences), do: "invalid preferences"
   defp message(:invalid_updated_at), do: "invalid updated_at"
+  defp message({:scan, :too_many_files}), do: "meld parent scan exceeded the file cap"
+  defp message({:scan, :too_many_bytes}), do: "meld parent scan exceeded the byte cap"
+  defp message({:scan, _reason}), do: "meld parent objects missing"
+  defp message({:meld, _reason}), do: "meld failed"
+  defp message(:invalid_agent_output), do: "meld output rejected"
+  defp message(%Ecto.Changeset{}), do: "invalid proposal"
   defp message(_reason), do: "sync failed"
 end

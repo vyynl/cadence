@@ -2,8 +2,8 @@
 
 ## Current Phase
 Phase 4 — unions, proposals & review. 4a-1, 4a-2, 4b, 4b-2, 4c-1, 4c-2, 4c-3,
-**4d-1 (convergence)** and the **demo stack** are complete; 4d-2 (union route)
-is next.
+**4d-1 (convergence)**, **4d-2 (union route)** and the **demo stack** are
+complete; 4d-3 (daemon + Neovim trigger) is next.
 
 ## Done (summary)
 
@@ -136,6 +136,17 @@ is next.
   and logged by shape only. 13 new tests; 578 total. Review verdict PASS WITH
   WARNINGS; all 3 Mediums fixed (post-commit bump, parent-tree check, approval
   cursor test) plus the Lows.
+- **Phase 4d-2 (union route)** — `POST /sync/union` (bearer PAT scope) takes
+  `project_id` + `parent_node_ids` (2–8 distinct) and delegates to
+  `Melds.propose/3` synchronously, returning `201 %{proposal_id,
+  proposal_token, status, kind}` (no node is created). Errors: 403
+  non-proposer, 404 unknown project, 422 invalid/too many parents or payload,
+  429 + `Retry-After` on the per-project meld rate limit, 502 model/agent
+  failure (with an incident), 500 for a server-side object corruption.
+  `Melds.propose/3` now returns an existing pending meld for the same ordered
+  parents (sequential queue dedupe; rejected work re-proposes), caps parents at
+  8, and keys the LLM limiter per project. `UnionResponse` is the proposal
+  reference. 8 request tests; 587 total.
 - **Demo stack (P0–P3)** — one `docker compose up` gives a browsable Cadence:
   `postgres:16-alpine` plus a `MIX_ENV=dev` server that migrates, seeds and
   boots only `cadence_server`. Compile-gated `password :demo` strategy
@@ -161,7 +172,7 @@ is next.
   §7.4/§11/§12.4/§12.5/§12.6 updates. 15 new tests; compose smoke verified
   (`/health`, `/`, both projects, a proposal token, `/sign-in` all 200;
   anonymous reviews 302; demo sign-in establishes a session).
-- 578 tests green (161 shared + 116 daemon + 301 server);
+- 587 tests green (161 shared + 116 daemon + 310 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
   `AshAuthentication.Info.strategy(User, :demo) == :error`.
@@ -174,19 +185,19 @@ is next.
 
 ## Next
 
-1. Execute **4d-2 — union route** from `.claude/plans/4d-convergence/plan.md`
-   P2-T1..T4: `Cadence.Server.Sync.union/3` delegating to `Melds.propose/3`,
-   `POST /sync/union` with the 201/403/404/422/502 mapping,
-   `Cadence.Shared.Sync.UnionResponse` → `%{proposal_id, proposal_token,
-   status, kind}`, and the server tests (owner/trusted create, viewer/anon
-   denied, invalid parents, LLM failure + incident, no node created).
-2. Then **4d-3** (plan P3-T1..T4): daemon `SyncClient.union/3` +
-   `Sync.propose_union/3`, daemon `POST /union` (503 when sync is off),
-   Neovim `<C-s>` submit with `on_union(selected_ids)`, and the Bypass/API
-   tests.
-3. After 4d: the UI styling/freshness pass (incident panel + review pages;
-   notes in `docs/ui-notes.md`), including the still-open PubSub freshness
-   item.
+1. Execute **4d-3 — daemon + Neovim union trigger** from
+   `.claude/plans/4d-convergence/plan.md` P3-T1..T4: `SyncClient.union/3` and
+   `Sync.propose_union/3` (ensure server user/project, then post with a
+   timeout above the ~120.5 s server bound — do **not** reuse the 5 s
+   `CAD_SYNC_REQUEST_TIMEOUT_MS`), daemon `POST /union` (201 token/URL, 503
+   when sync is off, 422 for <2/too many parents, 404 unknown project, 502
+   server meld failure), Neovim `<C-s>` via `on_union(selected_ids)` plus the
+   `/union` call, Bypass/API tests.
+2. Then the UI styling/freshness pass (incident + review pages; notes in
+   `docs/ui-notes.md`), including the still-open PubSub freshness item and the
+   cached quarantine assign.
+3. Optional polish after 4d: a `:CadProposals`/notification surface for the
+   returned token (not in spec; discuss before adding).
 
 ## Blocked
 
@@ -335,8 +346,11 @@ is next.
 - **4b has no trigger surface or job durability.** `Sync.Union` /
   `UnionResponse` remain unrouted, and the response shape (proposal token vs
   node) is unresolved until 4d.
-- Concurrent duplicate meld proposals for the same parents are accepted (two
-  LLM calls, two proposals) until 4d adds queue dedupe.
+- **Meld queue dedupe is sequential only (4d-2)** — `Melds.propose/3` returns
+  an existing **pending** meld for the same ordered parents, so retries and
+  double submits do not flood the queue. Two requests racing in the same
+  instant can still both miss the lookup and create two rows (no unique index);
+  rejected proposals do not block a new attempt.
 - Meld validation syntax-checks only `.ex`/`.exs`; other languages are
   reviewer-checked once review renders file content (not in 4c — it renders
   paths only).
@@ -370,3 +384,15 @@ approval-cursor tests) plus the Lows (node-changed semantics, full integrity on
 resolve, locked pin compare, non-raising `touch_node`, best-effort fan-out,
 per-topic notification tests, §16 resolved). Verification: format + dev/prod
 compile clean, 578 tests green (161 + 116 + 301). Next: 4d-2 (union route).
+
+2026-11-05 — **4d-2 (union route)** shipped: `POST /sync/union` delegates to
+`Melds.propose/3` synchronously and returns the proposal reference; the
+controller maps 403/404/422/429(+Retry-After)/502/500 without leaking
+internals. `Melds.propose/3` dedupes a pending meld for the same ordered
+parents, caps parents at 8, and the meld limiter is keyed per project.
+`UnionResponse` is no longer `meld_node_id`. Review verdict PASS WITH WARNINGS;
+H1 (uncapped parents) and all three Mediums fixed (parent cap, documented
+retry×timeout latency, 429 mapping, queue dedupe), plus the Lows (scan 5xx,
+403 wording, struct response, moduledoc, test gaps). Verification: format +
+dev/prod compile clean, 587 tests green (161 + 116 + 310). Next: 4d-3
+(daemon + Neovim trigger).

@@ -75,12 +75,20 @@ defmodule Cadence.Server.Melds do
 
   @default_author %{name: "Cadence", email: "cadence@localhost"}
 
+  # Each parent can retain up to the full scan cap in memory, so the list is
+  # capped well below anything a real DAG merge needs (spec §6.5).
+  @max_parents 8
+
   @doc """
   Builds a pending meld proposal for `actor` from `parent_ids`.
 
-  Owners and trusted members may propose. Parents must be at least two
-  distinct nodes of the same project. The result commit's parents are the
-  parent nodes' commits, in `parent_ids` order.
+  Owners and trusted members may propose. Parents must be 2..8 distinct nodes
+  of the same project. The result commit's parents are the parent nodes'
+  commits, in `parent_ids` order.
+
+  Queue dedupe: when a pending meld proposal already exists for the same
+  ordered `parent_ids` in the project, it is returned unchanged instead of
+  running the union again (rejected work is re-submitted as a new proposal).
   """
   @spec propose(map(), Ecto.UUID.t() | String.t(), [Ecto.UUID.t() | String.t()]) ::
           {:ok, Cadence.Server.Proposal.t()}
@@ -96,11 +104,30 @@ defmodule Cadence.Server.Melds do
     with {:ok, project_id} <- uuid(project_id),
          {:ok, project} <- fetch_project(project_id),
          {:ok, _membership} <- authorize_proposer(actor, project_id),
-         {:ok, parents} <- load_parents(project, parent_ids),
-         {:ok, walked} <- walk_parents(project, parents) do
-      union = Meld.union(walked)
-      resolve(project, actor, parents, walked, union)
+         {:ok, parents} <- load_parents(project, parent_ids) do
+      case pending_meld(project.id, Enum.map(parents, & &1.id)) do
+        %Proposal{} = pending ->
+          {:ok, pending}
+
+        nil ->
+          with {:ok, walked} <- walk_parents(project, parents) do
+            union = Meld.union(walked)
+            resolve(project, actor, parents, walked, union)
+          end
+      end
     end
+  end
+
+  defp pending_meld(project_id, parent_ids) do
+    Repo.one(
+      from(p in Proposal,
+        where:
+          p.project_id == ^project_id and p.kind == :meld and p.status == :pending and
+            p.parent_ids == ^parent_ids,
+        order_by: [desc: p.created_at, desc: p.id],
+        limit: 1
+      )
+    )
   end
 
   ## Union and model resolution
@@ -128,7 +155,7 @@ defmodule Cadence.Server.Melds do
   end
 
   defp resolve_with_model(project, walked, union) do
-    case MeldWorker.resolve(walked, union.conflicts) do
+    case MeldWorker.resolve(walked, union.conflicts, scope: project.id) do
       {:ok, result} ->
         {:ok, result}
 
@@ -359,7 +386,7 @@ defmodule Cadence.Server.Melds do
   defp load_parents(project, parent_ids) do
     with true <- is_list(parent_ids),
          {:ok, ids} <- cast_ids(parent_ids),
-         true <- distinct_minimum?(ids) do
+         true <- valid_parent_count?(ids) do
       nodes =
         Repo.all(
           from(n in Node,
@@ -379,8 +406,9 @@ defmodule Cadence.Server.Melds do
     end
   end
 
-  defp distinct_minimum?(ids) do
-    length(ids) >= 2 and length(Enum.uniq(ids)) == length(ids)
+  defp valid_parent_count?(ids) do
+    count = length(ids)
+    count >= 2 and count <= @max_parents and length(Enum.uniq(ids)) == count
   end
 
   defp cast_ids(ids) do

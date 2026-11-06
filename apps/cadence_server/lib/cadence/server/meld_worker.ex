@@ -17,8 +17,6 @@ defmodule Cadence.Server.MeldWorker do
   alias Cadence.Server.LLMRateLimit
   alias Cadence.Shared.LLM.Meld, as: MeldPrompt
 
-  @rate_key :meld
-
   def start_link(opts) do
     Task.Supervisor.start_link(Keyword.put(opts, :name, __MODULE__))
   end
@@ -34,14 +32,23 @@ defmodule Cadence.Server.MeldWorker do
   @doc """
   Ask the model to resolve `conflicts`.
 
+  Options: `:scope` namespaces the rate-limit bucket (the meld pipeline passes
+  the project id, so one project cannot exhaust another project's budget).
+
   Returns `{:ok, %{text, model, provider, prompt_version}}` or
   `{:error, reason}` where `reason` is `:not_configured`, `:timeout`,
   `:context_too_large`, `{:rate_limited, ms}`, `{:llm, term}`, or
   `{:exit, term}`.
+
+  `:timeout` is per attempt; provider errors are retried
+  `CAD_MELD_RETRY_ATTEMPTS` times, so a synchronous caller must budget
+  `attempts × timeout + backoff` (spec §10.6).
   """
-  @spec resolve([map()], map()) :: {:ok, map()} | {:error, term()}
-  def resolve(parents, conflicts) when is_list(parents) and is_map(conflicts) do
-    case LLMRateLimit.hit(@rate_key, rate_scale(), rate_limit()) do
+  @spec resolve([map()], map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def resolve(parents, conflicts, opts \\ []) when is_list(parents) and is_map(conflicts) do
+    rate_key = {:meld, Keyword.get(opts, :scope, :global)}
+
+    case LLMRateLimit.hit(rate_key, rate_scale(), rate_limit()) do
       {:allow, _count} -> run(parents, conflicts)
       {:deny, retry_after_ms} -> {:error, {:rate_limited, retry_after_ms}}
     end

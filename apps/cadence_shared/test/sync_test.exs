@@ -80,8 +80,20 @@ defmodule Cadence.Shared.SyncTest do
   end
 
   describe "UnionResponse" do
-    test "carries the meld node id" do
-      assert decode(%UnionResponse{meld_node_id: "m1"}) == %{"meld_node_id" => "m1"}
+    test "carries the pending proposal reference" do
+      response = %UnionResponse{
+        proposal_id: "p1",
+        proposal_token: "tok",
+        status: "pending",
+        kind: "meld"
+      }
+
+      assert decode(response) == %{
+               "proposal_id" => "p1",
+               "proposal_token" => "tok",
+               "status" => "pending",
+               "kind" => "meld"
+             }
     end
   end
 

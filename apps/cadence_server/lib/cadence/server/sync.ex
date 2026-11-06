@@ -13,7 +13,7 @@ defmodule Cadence.Server.Sync do
 
   import Ecto.Query
 
-  alias Cadence.Server.{NodeScans, ProjectGit, Repo, SyncNotifier}
+  alias Cadence.Server.{Melds, NodeScans, ProjectGit, Repo, SyncNotifier}
   alias Cadence.Shared.{GitStore, Membership, Node, Project, UUID}
   alias Cadence.Shared.Sync.NodeCodec
 
@@ -44,6 +44,24 @@ defmodule Cadence.Server.Sync do
   end
 
   def push_nodes(_user, _params), do: {:error, :invalid_payload}
+
+  @doc """
+  Requests a meld proposal for `parent_node_ids` (spec §6.5, §10.6).
+
+  Synchronous: `Melds.propose/3` may call the meld model, so the caller's HTTP
+  timeout must cover a model round trip. Authorization (`can_propose?/1`:
+  owner or trusted) and parent validation live in `Melds.propose/3`. No node
+  is created; the response is a pending proposal reference.
+  """
+  @spec union(user(), map()) :: {:ok, Cadence.Server.Proposal.t()} | {:error, term()}
+  def union(user, %{"project_id" => project_id, "parent_node_ids" => parent_ids})
+      when is_list(parent_ids) do
+    with {:ok, project_id} <- uuid(project_id) do
+      Melds.propose(user, project_id, parent_ids)
+    end
+  end
+
+  def union(_user, _params), do: {:error, :invalid_payload}
 
   @doc """
   Pull nodes for a project after an integer cursor.
