@@ -10,6 +10,24 @@
   --broken: #cf222e;
   --sandbox: #6e7781;
   --pinned: #8250df;
+  /* Semantic aliases over the palette: custom properties resolve per element,
+     so these follow the dark block below without being redeclared there. */
+  --severity-critical: var(--broken);
+  --severity-high: var(--in-progress);
+  --status-pending: var(--in-progress);
+  --status-approved: var(--functioning);
+  --status-rejected: var(--broken);
+  /* Text-safe variants. The hue tokens above are tuned for borders, tints, and
+     fills; as small text on --bg (or on their own tint) they measure 2.7–3.1:1
+     in light mode, below WCAG AA 4.5:1. These pass on both surfaces
+     (bg / own tint): critical 7.54 / 6.24, high 6.79 / 6.13, approved 7.08.
+     The status-* trio is the green/amber/red text scale, reused by file status
+     and button modifiers. Re-derive if the palette changes. */
+  --severity-critical-text: #a40e26;
+  --severity-high-text: #7d4e00;
+  --status-pending-text: #7d4e00;
+  --status-approved-text: #116329;
+  --status-rejected-text: #a40e26;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -24,6 +42,12 @@
     --broken: #f85149;
     --sandbox: #8b949e;
     --pinned: #bc8cff;
+    /* Dark text keeps the hue: these already measure 5.0–7.5:1. */
+    --severity-critical-text: var(--broken);
+    --severity-high-text: var(--in-progress);
+    --status-pending-text: var(--in-progress);
+    --status-approved-text: var(--functioning);
+    --status-rejected-text: var(--broken);
   }
 }
 
@@ -110,6 +134,8 @@ main:focus {
 
 .project-card .slug {
   margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
 }
 
 .project-card .note {
@@ -160,6 +186,20 @@ code {
 
 .project-header h1 {
   margin: 0;
+}
+
+.project-nav {
+  margin: 0.5rem 0 0;
+  font-size: 0.9rem;
+}
+
+.project-nav a {
+  text-decoration: none;
+}
+
+.project-nav a:hover,
+.project-nav a:focus-visible {
+  text-decoration: underline;
 }
 
 .project-home {
@@ -512,6 +552,282 @@ code {
   font-size: 0.8rem;
 }
 
+/* --- Badges: one vocabulary for status, severity, and counts --- */
+
+.badge {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+  padding: 0.1rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.severity-badge {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.severity-badge.severity-critical {
+  border-color: var(--severity-critical);
+  background: color-mix(in srgb, var(--severity-critical) 12%, transparent);
+  color: var(--severity-critical-text);
+}
+
+.severity-badge.severity-critical::before {
+  content: "!";
+  display: inline-flex;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  background: var(--severity-critical);
+  color: var(--bg);
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+.severity-badge.severity-high {
+  border-color: var(--severity-high);
+  background: color-mix(in srgb, var(--severity-high) 10%, transparent);
+  color: var(--severity-high-text);
+}
+
+.status-badge {
+  text-transform: lowercase;
+}
+
+.status-badge.status-pending {
+  border-color: var(--status-pending);
+  color: var(--status-pending-text);
+}
+
+.status-badge.status-approved {
+  border-color: var(--status-approved);
+  color: var(--status-approved-text);
+}
+
+.status-badge.status-rejected {
+  border-color: var(--status-rejected);
+  color: var(--status-rejected-text);
+}
+
+.count-badge {
+  display: inline-flex;
+  justify-content: center;
+  min-width: 1.6rem;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Incidents: severity accent on the row, readable without color --- */
+
+.incidents-panel {
+  margin-bottom: 0;
+}
+
+.incident-row {
+  padding: 0.65rem 0.8rem;
+  border-left: 3px solid var(--line);
+}
+
+.incident-row.severity-critical {
+  border-left-color: var(--severity-critical);
+}
+
+.incident-row.severity-high {
+  border-left-color: var(--severity-high);
+}
+
+.incident-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.7rem;
+  align-items: center;
+}
+
+.incident-kind {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
+
+.incident-title {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.panel-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: baseline;
+  margin-bottom: 0.6rem;
+}
+
+.panel-heading h2 {
+  margin: 0;
+}
+
+.critical-count {
+  margin: 0.35rem 0 0;
+  color: var(--severity-critical-text);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.incident-details {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.15rem 0.75rem;
+  margin: 0.4rem 0 0.6rem;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.incident-details dt {
+  color: var(--muted);
+}
+
+.incident-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.incident-hint {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.incident-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.5rem;
+}
+
+/* --- Callouts: protection, warnings, and quiet notes --- */
+
+.callout {
+  margin: 0 0 1.25rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--line);
+  border-left-width: 4px;
+  border-radius: 0.6rem;
+}
+
+.callout h2,
+.callout h3 {
+  margin: 0.15rem 0 0.35rem;
+  font-size: 1.05rem;
+}
+
+.callout .note {
+  margin: 0;
+}
+
+.callout-warning {
+  border-left-color: var(--severity-high);
+  background: color-mix(in srgb, var(--severity-high) 8%, var(--bg));
+}
+
+.callout-protected {
+  border-left-color: var(--pinned);
+  background: color-mix(in srgb, var(--pinned) 8%, var(--bg));
+}
+
+.callout-note {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg));
+}
+
+/* --- Review surfaces --- */
+
+.review-page {
+  max-width: 72rem;
+}
+
+.review-page section + section {
+  margin-top: 1.75rem;
+}
+
+.proposal-list {
+  margin: 0 0 1.75rem;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  list-style: none;
+  overflow: hidden;
+}
+
+.proposal-list li + li {
+  border-top: 1px solid var(--line);
+}
+
+.proposal-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.9rem;
+  align-items: center;
+  padding: 0.65rem 0.8rem;
+}
+
+.proposal-row:hover,
+.proposal-row:focus-within {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.proposal-row .file-name {
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.proposal-row .file-name:hover,
+.proposal-row .file-name:focus-visible {
+  text-decoration: underline;
+}
+
+.public-link {
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+
+.public-link:hover,
+.public-link:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.file-status {
+  min-width: 4.5rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
+
+.file-status-added {
+  color: var(--status-approved-text);
+}
+
+.file-status-modified {
+  color: var(--status-pending-text);
+}
+
+.file-status-deleted {
+  color: var(--status-rejected-text);
+}
+
 @keyframes cad-draw {
   to {
     stroke-dashoffset: 0;
@@ -628,6 +944,43 @@ code {
 .admin-button:focus-visible {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+.admin-button.button-primary {
+  border-color: var(--status-approved);
+  color: var(--status-approved-text);
+  font-weight: 600;
+}
+
+.admin-button.button-primary:hover,
+.admin-button.button-primary:focus-visible {
+  border-color: var(--status-approved);
+  background: color-mix(in srgb, var(--status-approved) 12%, transparent);
+  color: var(--status-approved-text);
+}
+
+.admin-button.button-danger {
+  border-color: var(--broken);
+  color: var(--status-rejected-text);
+}
+
+.admin-button.button-danger:hover,
+.admin-button.button-danger:focus-visible {
+  border-color: var(--broken);
+  background: color-mix(in srgb, var(--broken) 12%, transparent);
+  color: var(--status-rejected-text);
+}
+
+.admin-button.button-warning {
+  border-color: var(--in-progress);
+  color: var(--status-pending-text);
+}
+
+.admin-button.button-warning:hover,
+.admin-button.button-warning:focus-visible {
+  border-color: var(--in-progress);
+  background: color-mix(in srgb, var(--in-progress) 12%, transparent);
+  color: var(--status-pending-text);
 }
 
 .admin-warning {

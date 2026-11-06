@@ -13,27 +13,21 @@ styling pass is planned after 4c-3 (incident panel) unless a demo is imminent.
 
 ## Open
 
-- `:CadUnion` — `<C-s>` blocks Neovim while the synchronous union request runs
-  (a conflicted meld can wait on the model). The picker notifies "requesting
-  meld…" first and reports the token/URL on success, but the UI is frozen
-  until the daemon answers. Consider an async submit (job/notification) if
-  that becomes annoying.
-- `/p/:slug/reviews` — the open-incident panel reuses `.file-tree`/`.file-row`
-  and `.flag-badge`, so a **critical** incident looks the same as a `high` one
-  and as a proposal status badge. Give severity its own treatment (color,
-  icon, or label) in the styling pass.
-- `/p/:slug/reviews` — the panel renders *below* the proposal list. With a long
-  review queue the incidents (the things that block approval) are below the
-  fold; consider moving the panel above the list or adding an open count next
-  to the "Open incidents" heading.
-- `/p/:slug/reviews` — details render as one dense line
-  (`patterns: … · reason: …`) and a long reason is silently cut at 60 chars.
-  Decide whether to wrap, tooltip, or show "more".
-- `/p/:slug/reviews` — Resolve and Acknowledge share the `.admin-button` style
-  and the D8/D9 explanation is a trailing note, not next to the control. A
-  destructive/irreversible-looking "Acknowledge" may need different copy
-  placement.
+- (none) The 4e styling pass closed the review-page observations below. Add new
+  notes here as they come up; `docker compose up` plus the routes listed there
+  is still the place to catch purely visual regressions.
 
 ## Done
 
-- (none yet)
+- `:CadUnion` no longer blocks Neovim — 4d-3 submits asynchronously and reports
+  the proposal token/URL as a notification.
+- `/p/:slug/reviews` severity has its own treatment: a `critical` badge with a
+  marker, a `high` badge, and a left accent on the incident row. The severity
+  word stays visible, so the state is not conveyed by color alone.
+- `/p/:slug/reviews` incidents now render **above** the proposal queue with an
+  open count and a critical-count line.
+- Incident details render as a wrapped `<dl>` (patterns, sensitive paths, full
+  reason) instead of one truncated line.
+- Resolve and Acknowledge are distinguishable (`button-primary` vs
+  `button-warning`) with a one-line hint next to each control; the trailing
+  paragraph is gone.

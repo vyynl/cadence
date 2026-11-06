@@ -5,6 +5,8 @@ defmodule Cadence.ServerWeb.Components.DAG do
 
   use Cadence.ServerWeb, :html
 
+  alias Cadence.ServerWeb.Presentation
+
   attr(:layout, :map, required: true)
   attr(:selected_id, :string, default: nil)
   attr(:project_slug, :string, required: true)
@@ -74,7 +76,7 @@ defmodule Cadence.ServerWeb.Components.DAG do
                 >
                   <div xmlns="http://www.w3.org/1999/xhtml" class="dag-tooltip-body">
                     <strong>{node.message || "(no message)"}</strong>
-                    <span>{status_text(node)}</span>
+                    <span>{Presentation.format_flags(node.flags, node.pinned)}</span>
                   </div>
                 </foreignObject>
               </.link>
@@ -116,17 +118,7 @@ defmodule Cadence.ServerWeb.Components.DAG do
   end
 
   defp node_label(node) do
-    "Node: #{node.message || "(no message)"}. Status: #{status_text(node)}."
-  end
-
-  defp status_text(node) do
-    flags =
-      case node.flags do
-        [] -> "no flags"
-        flags -> Enum.map_join(flags, ", ", &Atom.to_string/1)
-      end
-
-    if node.pinned, do: flags <> " · pinned", else: flags
+    "Node: #{node.message || "(no message)"}. Status: #{Presentation.format_flags(node.flags, node.pinned)}."
   end
 
   defp tooltip_x(node, width) do

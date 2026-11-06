@@ -20,8 +20,9 @@ history, not current instructions.
 | Phase 2a — DAG structure, Neovim picker, diffs | Complete |
 | Phase 2b — cloud sync, auth, preferences, notifications | Complete |
 | Phase 3 — web UI & portfolio | Complete |
-| Phase 4 — unions & review | **In progress — 4a-1 complete, 4a-2 next** |
-| Phase 5+ — doc automation, actions, storage | Not started |
+| Phase 4 — unions & review | Complete |
+| UI styling & freshness pass (4e) | Complete |
+| Phase 5 — doc automation | Next |
 
 ## Current docs
 

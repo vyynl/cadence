@@ -431,8 +431,10 @@ defmodule Cadence.ServerWeb.ReviewLiveTest do
       {high_index, _} = :binary.match(html, "incident-#{high.id}")
       assert critical_index < high_index
 
-      assert html =~ "patterns: github_token"
-      assert html =~ "reason: too_many_files"
+      assert html =~ "<dt>patterns</dt>"
+      assert html =~ "github_token"
+      assert html =~ "<dt>reason</dt>"
+      assert html =~ "too_many_files"
       assert html =~ ~s(href="/p/demo/n/#{node.id}")
       refute html =~ "SHOULD_NOT_RENDER"
     end
@@ -727,6 +729,105 @@ defmodule Cadence.ServerWeb.ReviewLiveTest do
       unknown = render_click(view, "resolve_incident", %{"id" => Ecto.UUID.generate()})
       assert unknown =~ "This incident no longer exists."
       assert Repo.get!(Cadence.Server.Incident, other_incident.id).status == :open
+    end
+  end
+
+  describe "styling" do
+    test "incidents sit above the queue with distinct severity and full details", %{
+      conn: conn,
+      owner: owner,
+      project: project,
+      proposal: proposal
+    } do
+      node = node_with_snapshot(project, %{"scan.txt" => "scan me"}, %{message: "scan node"})
+
+      long_reason =
+        "the scanner stopped after the configured cap and could not inspect the remaining files"
+
+      {:ok, high} =
+        Incidents.open(%{
+          project_id: project.id,
+          node_id: node.id,
+          kind: :scan_incomplete,
+          severity: :high,
+          title: "Snapshot scan incomplete",
+          details: %{reason: long_reason}
+        })
+
+      {:ok, critical} =
+        Incidents.open(%{
+          project_id: project.id,
+          proposal_id: proposal.id,
+          kind: :secret_detected,
+          severity: :critical,
+          title: "Secret detected in meld result",
+          details: %{
+            patterns: [:github_token],
+            sensitive_paths: 2,
+            note: "SHOULD_NOT_RENDER"
+          }
+        })
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/demo/reviews")
+      html = render_async(view)
+
+      {panel_index, _} = :binary.match(html, ~s(id="incidents-panel"))
+      {queue_index, _} = :binary.match(html, "proposal-#{proposal.id}")
+      assert panel_index < queue_index
+
+      # The live region must cover the critical-count line, not only the count.
+      assert has_element?(
+               view,
+               ~s([aria-live="polite"] .critical-count),
+               "1 critical incident blocking approval."
+             )
+
+      {critical_index, _} = :binary.match(html, "incident-#{critical.id}")
+      {high_index, _} = :binary.match(html, "incident-#{high.id}")
+      assert critical_index < high_index
+
+      assert html =~ ~s(class="incident-row severity-critical")
+      assert html =~ ~s(class="incident-row severity-high")
+      assert html =~ "badge severity-badge severity-critical"
+      assert html =~ "badge severity-badge severity-high"
+      assert html =~ "1 critical incident blocking approval."
+      assert html =~ "2 sensitive paths hidden"
+
+      # The full reason is rendered, not the old 60-character summary.
+      assert html =~ long_reason
+      refute html =~ String.slice(long_reason, 0, 60) <> "…"
+      refute html =~ "SHOULD_NOT_RENDER"
+
+      assert html =~ ~s(class="admin-button button-primary")
+      assert html =~ ~s(class="admin-button button-warning")
+      assert html =~ "Re-scans the stored result"
+      assert html =~ "Acknowledges the alert only"
+      assert html =~ "badge status-badge status-pending"
+      assert html =~ ~s(class="public-link")
+    end
+
+    test "the queue and decision controls use the shared badge and button classes", %{
+      conn: conn,
+      owner: owner,
+      proposal: proposal
+    } do
+      {:ok, index, _html} = live(signed_conn(conn, owner), "/p/demo/reviews")
+      index_html = render_async(index)
+
+      assert index_html =~ ~s(class="proposal-list")
+      assert index_html =~ ~s(class="proposal-row")
+      assert index_html =~ "badge status-badge status-pending"
+      assert index_html =~ ~s(class="public-link")
+
+      {:ok, show, _html} = live(signed_conn(conn, owner), "/p/demo/reviews/#{proposal.id}")
+      show_html = render_async(show)
+
+      assert show_html =~ "badge status-badge status-pending"
+      assert show_html =~ ~s(class="admin-button button-primary")
+      assert show_html =~ ~s(class="admin-button button-danger")
+      assert show_html =~ "file-status file-status-added"
+      assert show_html =~ "file-status file-status-modified"
+      refute show_html =~ "file-status file-status-deleted"
     end
   end
 

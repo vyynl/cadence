@@ -33,6 +33,8 @@ defmodule Cadence.ServerWeb.ReviewLive.Index do
   require Logger
 
   alias Cadence.Server.{Authorization, Incidents, ProposalView, Proposals}
+  alias Cadence.ServerWeb.Components.Incident
+  alias Cadence.ServerWeb.Presentation
   alias Cadence.ServerWeb.ReviewAccess
 
   @impl true
@@ -144,7 +146,7 @@ defmodule Cadence.ServerWeb.ReviewLive.Index do
   @impl true
   def render(assigns) do
     ~H"""
-    <article>
+    <article class="review-page">
       <%= if @not_found do %>
         <p class="eyebrow">404</p>
         <h1>Project not found</h1>
@@ -159,109 +161,55 @@ defmodule Cadence.ServerWeb.ReviewLive.Index do
           </p>
         </header>
 
-        <.async_result :let={proposals} assign={@proposals}>
-          <:loading>
-            <p class="note">Loading proposals…</p>
-          </:loading>
+        <Incident.panel
+          incidents={@incidents}
+          can_decide?={@can_decide?}
+          project_slug={@project.slug}
+          max={Incidents.max_open_incidents()}
+        />
 
-          <:failed>
-            <p class="note">The proposal list could not be loaded.</p>
-          </:failed>
+        <section class="proposal-queue">
+          <div class="panel-heading">
+            <h2>Proposals</h2>
+          </div>
 
-          <p :if={proposals == []} class="empty">No proposals yet.</p>
+          <.async_result :let={proposals} assign={@proposals}>
+            <:loading>
+              <p class="note">Loading proposals…</p>
+            </:loading>
 
-          <ul :if={proposals != []} class="file-tree">
-            <li :for={proposal <- proposals} id={"proposal-#{proposal.id}"}>
-              <div class="file-row">
+            <:failed>
+              <p class="note">The proposal list could not be loaded.</p>
+            </:failed>
+
+            <p :if={proposals == []} class="empty">No proposals yet.</p>
+
+            <ul :if={proposals != []} class="proposal-list">
+              <li :for={proposal <- proposals} id={"proposal-#{proposal.id}"} class="proposal-row">
                 <span class="file-kind">{kind_label(proposal.kind)}</span>
                 <a
                   class="file-name"
                   href={~p"/p/#{@project.slug}/reviews/#{proposal.id}"}
                 >
-                  {kind_title(proposal.kind)}
+                  {Presentation.kind_title(proposal.kind)}
                 </a>
-              </div>
 
-              <p class="node-meta">
-                <span class="flag-badge">{proposal.status}</span>
-                <span>{parent_count(proposal)}</span>
-                <span :if={proposal.created_at}>
+                <span class={Presentation.status_badge_class(proposal.status)}>
+                  {proposal.status}
+                </span>
+
+                <span class="note">{parent_count(proposal)}</span>
+
+                <span :if={proposal.created_at} class="note">
                   opened
                   <time datetime={DateTime.to_iso8601(proposal.created_at)}>
-                    {age(proposal.created_at)}
+                    {Presentation.age(proposal.created_at)}
                   </time>
                 </span>
-                <a href={~p"/proposals/#{proposal.token}"}>Public link</a>
-              </p>
-            </li>
-          </ul>
-        </.async_result>
 
-        <section class="incidents-panel">
-          <h2>Open incidents</h2>
-
-          <.async_result :let={incidents} assign={@incidents}>
-            <:loading>
-              <p class="note">Loading incidents…</p>
-            </:loading>
-
-            <:failed>
-              <p class="note">The incident list could not be loaded.</p>
-            </:failed>
-
-            <p :if={incidents == []} class="empty">No open incidents.</p>
-
-            <ul :if={incidents != []} class="file-tree">
-              <li :for={incident <- incidents} id={"incident-#{incident.id}"}>
-                <div class="file-row">
-                  <span class="flag-badge">{incident.severity}</span>
-                  <span class="file-kind">{incident_kind_label(incident.kind)}</span>
-                  <span class="file-name">{incident.title}</span>
-                </div>
-
-                <p class="node-meta">
-                  <span :if={incident.proposal_id}>
-                    <a href={~p"/p/#{@project.slug}/reviews/#{incident.proposal_id}"}>Proposal</a>
-                  </span>
-                  <span :if={incident.node_id}>
-                    <a href={~p"/p/#{@project.slug}/n/#{incident.node_id}"}>Node</a>
-                  </span>
-                  <span :if={is_nil(incident.proposal_id) and is_nil(incident.node_id)}>
-                    Project-wide
-                  </span>
-                  <span :if={incident.created_at}>
-                    opened
-                    <time datetime={DateTime.to_iso8601(incident.created_at)}>
-                      {age(incident.created_at)}
-                    </time>
-                  </span>
-                </p>
-
-                <% summary = details_summary(incident.details) %>
-                <p :if={summary != ""} class="note">{summary}</p>
-                <button
-                  :if={@can_decide?}
-                  type="button"
-                  class="admin-button"
-                  phx-click="resolve_incident"
-                  phx-value-id={incident.id}
-                  phx-disable-with="Resolving…"
-                >
-                  {if incident.proposal_id, do: "Resolve", else: "Acknowledge"}
-                </button>
+                <a class="public-link" href={~p"/proposals/#{proposal.token}"}>Public link</a>
               </li>
             </ul>
-
-            <p :if={length(incidents) == Incidents.max_open_incidents()} class="note">
-              Showing the {Incidents.max_open_incidents()} newest open incidents.
-            </p>
-
-            <p :if={@can_decide? and incidents != []} class="note">
-              Resolving a proposal incident re-scans the result: a remaining secret cannot be
-              cleared here, so reject and re-propose instead. Acknowledging a node or project
-              incident does not restore its content — snapshots are immutable, so rotate the
-              secret and push a new node.
-            </p>
           </.async_result>
         </section>
       <% end %>
@@ -412,53 +360,6 @@ defmodule Cadence.ServerWeb.ReviewLive.Index do
     Authorization.can_decide?(Authorization.membership(user_id, project.id))
   end
 
-  # Only the redacted scanner metadata the panel is allowed to show. Keys and
-  # values are never taken from the map wholesale: a later incident kind may
-  # carry more, and `details` is not a rendering contract.
-  defp details_summary(details) when is_map(details) do
-    [
-      patterns_summary(Map.get(details, "patterns", Map.get(details, :patterns))),
-      sensitive_paths_summary(
-        Map.get(details, "sensitive_paths", Map.get(details, :sensitive_paths))
-      ),
-      reason_summary(Map.get(details, "reason", Map.get(details, :reason)))
-    ]
-    |> Enum.reject(&is_nil/1)
-    |> Enum.join(" · ")
-  end
-
-  defp details_summary(_details), do: ""
-
-  defp patterns_summary(patterns) when is_list(patterns) and patterns != [] do
-    names =
-      patterns
-      |> Enum.filter(&(is_binary(&1) or is_atom(&1)))
-      |> Enum.map(&to_string/1)
-      |> Enum.take(5)
-
-    if names == [], do: nil, else: "patterns: " <> Enum.join(names, ", ")
-  end
-
-  defp patterns_summary(_patterns), do: nil
-
-  defp sensitive_paths_summary(count) when is_integer(count) and count > 0 do
-    "#{count} sensitive #{if count == 1, do: "path", else: "paths"} hidden"
-  end
-
-  defp sensitive_paths_summary(_count), do: nil
-
-  defp reason_summary(reason) when is_binary(reason) do
-    case String.slice(reason, 0, 60) do
-      "" -> nil
-      short -> "reason: " <> short <> if(String.length(reason) > 60, do: "…", else: "")
-    end
-  end
-
-  defp reason_summary(reason) when is_atom(reason) and not is_nil(reason),
-    do: "reason: " <> Atom.to_string(reason)
-
-  defp reason_summary(_reason), do: nil
-
   # `Proposals.list/2` is newest first; this keeps that order inside each group.
   defp sort_pending_first(proposals) do
     Enum.sort_by(proposals, fn proposal ->
@@ -472,27 +373,4 @@ defmodule Cadence.ServerWeb.ReviewLive.Index do
   defp kind_label(:meld), do: "meld"
   defp kind_label(:promotion), do: "promotion"
   defp kind_label(_kind), do: "proposal"
-
-  defp kind_title(:meld), do: "Meld proposal"
-  defp kind_title(:promotion), do: "Promotion proposal"
-  defp kind_title(_kind), do: "Proposal"
-
-  defp incident_kind_label(:secret_detected), do: "secret detected"
-  defp incident_kind_label(:scan_incomplete), do: "scan incomplete"
-  defp incident_kind_label(:meld_failed), do: "meld failed"
-  defp incident_kind_label(:agent_output_invalid), do: "agent output invalid"
-  defp incident_kind_label(:missing_objects), do: "missing objects"
-  defp incident_kind_label(kind) when is_atom(kind), do: Atom.to_string(kind)
-  defp incident_kind_label(_kind), do: "incident"
-
-  defp age(%DateTime{} = created_at) do
-    seconds = max(DateTime.diff(DateTime.utc_now(), created_at, :second), 0)
-
-    cond do
-      seconds < 60 -> "just now"
-      seconds < 3_600 -> "#{div(seconds, 60)}m ago"
-      seconds < 86_400 -> "#{div(seconds, 3_600)}h ago"
-      true -> "#{div(seconds, 86_400)}d ago"
-    end
-  end
 end

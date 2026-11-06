@@ -1,10 +1,9 @@
 # Cadence — Progress
 
 ## Current Phase
-Phase 4 — unions, proposals & review is **complete** (4a-1, 4a-2, 4b, 4b-2,
-4c-1, 4c-2, 4c-3, 4d-1, 4d-2, 4d-3 and the demo stack). The UI
-styling/freshness pass is in progress: **Session A (freshness) is complete**;
-Session B (styling) is next, then Phase 5 (doc automation).
+Phase 4 — unions, proposals & review is **complete**, and so is the UI styling
+& freshness pass (4e: Session A freshness + Session B styling/review). The next
+slice is **Phase 5 — documentation automation** (spec §9, §13).
 
 ## Done (summary)
 
@@ -210,7 +209,37 @@ Session B (styling) is next, then Phase 5 (doc automation).
   the event targets the selected node. Incident resolution derives the
   transition inside the `FOR UPDATE` transaction, so concurrent resolves cannot
   double-broadcast. Spec §6.6/§6.7/§7.2 updated. 26 new tests.
-- 622 tests green (161 shared + 125 daemon + 336 server);
+- **UI styling pass, Session B (4e-2)** — `Cadence.ServerWeb.Presentation` is
+  the single source for `kind_title/1`, `format_flags/2`, `format_time/1`,
+  `age/1`, and composite `status_badge_class/1` / `severity_badge_class/1` /
+  `file_status_class/1` strings (15 tests); ProjectLive, both review LiveViews,
+  ProposalHTML, and DAG call it with no rendered-text change. New
+  `Components.Incident` owns the open-incident panel: **above** the queue,
+  `aria-live` count plus a critical count, a severity badge and left accent (the
+  severity word stays visible, so color is never the only signal), a closed
+  `<dl>` whitelist rendering the **full** wrapped reason, and distinct
+  Resolve (`button-primary`) / Acknowledge (`button-warning`) controls with
+  inline hints; the trailing paragraph is gone. CSS gained semantic
+  severity/status aliases over the existing palette (dark follows through
+  `var()`, no new hues), `.badge`/`.status-*`/`.severity-*`, incident row
+  accents, callouts, button modifiers, review-queue layout, and file-status
+  colors. The public proposal page (status/file classes + read-only callout),
+  the protected quarantine callout, and the portfolio node-count badge and
+  monospace slug share the same vocabulary; multi-flag node badges stay neutral
+  because a node can carry several flags. Spec §13 records 4e and §16 resolves
+  review/promotion placement; `docs/ui-notes.md` moved its observations to
+  Done. 17 new tests.
+- **4e styling review → triage fixes** — W1: light-mode `--*-text` tokens
+  (`#a40e26` 7.54/6.24:1, `#7d4e00` 6.79/6.13:1, `#116329` 7.08:1) now color
+  status/severity/file/button text while the hue tokens stay on borders, tints,
+  row accents, and the severity marker (dark aliases the existing hues, no
+  visual change). S1: the DAG's pinned/flagless normalization is pinned by a
+  component render test (tooltip and `aria-label` read `pinned`; previously
+  `no flags · pinned`). S2: `Components.Incident` links use `~p` verified
+  routes. S3: the `aria-live` summary now includes the critical-count line, and
+  the styling test asserts containment (`has_element?`) rather than document
+  order. S4: `docs/README.md` marks 4e complete. 1 new test.
+- 640 tests green (161 shared + 125 daemon + 354 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
   `AshAuthentication.Info.strategy(User, :demo) == :error`.
@@ -223,30 +252,30 @@ Session B (styling) is next, then Phase 5 (doc automation).
 
 ## Next
 
-**Immediate step:** Session B of `.claude/plans/ui-styling-freshness/plan.md` —
-styling (P3–P4). Session A is done; start at **P3-T11**
-(`Cadence.ServerWeb.Presentation`). Surface notes live in `docs/ui-notes.md`.
+**Immediate step:** start **Phase 5 — documentation automation** (spec §9,
+§13). Read §9 in full, then plan the doc schema parse, the doc agent
+sub-process, and deferred-doc handling before writing code.
 
-1. **Styling** — severity/status badges and tokens, incident panel moved above
-   the queue with a `<dl>` details block and distinct Resolve/Acknowledge
-   buttons plus inline copy, shared presentation helpers, callouts on the
-   public proposal page and the quarantine notice, and consistency on the
-   portfolio cards (`docs/ui-notes.md` bullets are the acceptance list).
-2. **Fold in two open review suggestions** (from the post-triage review; small):
-   - `ReviewLive.Show`: treat a node incident as relevant while the review
-     payload is still loading — `decision_node_ids/1` returns `[]` before the
-     async completes, so a decision-node incident in that window is dropped and
-     Approve stays enabled until reload (fail-closed on click).
-   - `ProjectLive`: reuse the quarantine cache only for `:ok`; a
-     `:quarantined` answer derived from a failed `walk_blobs` is currently
-     cached until an incident flips or the page remounts.
-3. **Smoke** — drive `:CadUnion` against the demo stack once
-   (`docker compose up`, `docs/demo.md`) and record the result in the session
-   handoff; the Neovim submit is the one 4d-3 surface without a live run.
-4. **After that** — Phase 5, documentation automation (spec §9, §13), then the
-   optional `:CadProposals` surface for the returned token.
+Carry-over (small, not blocking Phase 5):
 
-**Spin-up:** `@phx-work .claude/plans/ui-styling-freshness/plan.md --from P3-T11`
+1. **Union live smoke** — drive `:CadUnion` against the demo stack once
+   (`docker compose up`, `docs/demo.md`) and record the result; the Neovim
+   submit is the one 4d-3 surface without a live run.
+2. **Two open review suggestions from the freshness review:**
+   - `ReviewLive.Show`: an incident on the decision node that arrives while the
+     review payload is still loading is dropped (`decision_node_ids/1` returns
+     `[]` before the async completes) and Approve stays enabled until reload
+     (it still fails closed on click).
+   - `ProjectLive`: the quarantine cache is reused for a `:quarantined` answer
+     derived from a failed `walk_blobs`; reuse only `:ok` and re-derive a
+     failure-derived answer.
+3. **Optional `:CadProposals` surface** for the union token returned to Neovim.
+4. **Manual styling check** (optional): `docker compose up`, then `/`,
+   `/p/cadence-demo`, `/p/cadence-demo/reviews`, one pending proposal, and
+   `/proposals/<token>` at wide and narrow widths in light and dark. There are
+   no browser tests; 4e verified server-rendered markup and CSS only.
+
+**Spin-up:** read spec §9, then `@phx-plan` for the Phase 5 slice.
 
 ## Blocked
 
@@ -340,11 +369,19 @@ styling (P3–P4). Session A is done; start at **P3-T11**
   for role edits. Review pages refresh `can_decide?`/`can_manage?` on the next
   project event, and every mutation still re-reads the membership and fails
   closed.
-- **Render duplication (4c-2)** — the review page repeats the public proposal
-  result block (`proposal_html/show.html.heex`) with its own isolation sentinel,
-  and `kind_title`/`format_flags`/`format_time` are now duplicated across four
-  web modules. The public template is frozen by the plan; extract a shared
-  result component plus a format module when the public page next changes.
+- **`Presentation` classes fall back to neutral (4e-2)** — an unrecognized
+  proposal status, severity, or file status renders the neutral badge rather
+  than failing. A new status/severity needs a variant in both the helper and
+  the CSS; only the neutral styling signals a miss.
+- **The 4e palette was not checked in a browser (4e-2)** — severity/status
+  tokens alias existing palette values, so contrast is inherited, but the
+  light/dark render was not exercised visually. The optional demo check in
+  **Next** covers it.
+- **Result markup is still duplicated (4c-2 → 4e)** — the review page repeats
+  the public proposal result block (`proposal_html/show.html.heex`) with its own
+  isolation sentinel. The format/badge helpers now live in
+  `Cadence.ServerWeb.Presentation` (4e), so the remaining work is the result
+  component itself; extract it when the public page next changes.
 - **`{:nodes_pushed, ...}` semantics (4c-1)** — emitted only for meld
   approvals (plan D11), including when an already existing node was merely
   re-pinned; promotions broadcast `{:proposal_decided, ...}` alone, so 4d
@@ -380,8 +417,6 @@ styling (P3–P4). Session A is done; start at **P3-T11**
   alert is lost until the next event.
 - Proposal JSON representation and parent selection are not planned; line-level
   diffs and file content remain deferred to the UI pass.
-- `format_time/1` and `format_flags/2` now exist in three web modules
-  (`ProjectLive`, `DAG`, `ProposalHTML`); extraction is deferred tech debt.
 - Proposal decisions are resolved (spec §6.6/§16): single approver, promotion
   via `pinned`, public read-only links with filtering/quarantine, and meld
   results materialized at proposal creation.
@@ -505,3 +540,30 @@ reuse the snapshot scan, incident flips re-derive, no stale assign; Show
 normalizes the URL proposal id with `UUID.cast/1` so mixed-case links keep live
 updates. Spec §7.2 wording corrected. Verification: format + dev/prod compile
 clean, 622 tests green (161 + 125 + 336; +3 new, 1 extended).
+
+2026-11-06 — **UI styling, Session B (4e-2)** completed
+`.claude/plans/ui-styling-freshness/plan.md` P3–P4 (P3-T11..T16,
+P4-T17..T20). `Cadence.ServerWeb.Presentation` is now the only source for the
+format/badge/file-status helpers (15 tests); `Components.Incident` moved the
+open-incident panel above the queue with an `aria-live` count, severity
+treatment, a full-reason `<dl>`, and distinct Resolve/Acknowledge controls with
+inline copy; CSS gained semantic severity/status tokens, badges, callouts,
+button modifiers, review-queue layout, and file-status colors; the public
+proposal, project, and portfolio surfaces share the vocabulary. Spec §13
+records 4e and §16 resolves review/promotion placement; `docs/ui-notes.md`
+moved its observations to Done; `docs/README.md` status table corrected.
+Verification: format clean, dev/prod compile clean, 639 tests green
+(161 + 125 + 353; +17 new). Review pending. Next: Phase 5 (spec §9).
+
+2026-11-06 — **4e styling review → triage fixes**
+(`.claude/plans/ui-styling-fixes/plan.md`, from
+`reviews/ui-styling-freshness-styling-triage.md`). Light-mode contrast restored
+with `--*-text` tokens (text 6.1–7.5:1 while the hue tokens keep borders,
+tints, row accents, and the severity marker); the DAG's pinned/flagless
+normalization is pinned by a component render test (`pinned`, was
+`no flags · pinned`); incident links use `~p`; the `aria-live` summary includes
+the critical-count line, asserted by containment (`has_element?`) rather than
+document order; README status corrected. Verification: format clean,
+dev/prod compile clean, 640 tests green (161 + 125 + 354; +1). Deferred:
+5-pattern cap, double `details_pairs/1`, manual light/dark demo check. Next:
+Phase 5 (spec §9).

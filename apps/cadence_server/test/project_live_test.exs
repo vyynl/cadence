@@ -142,6 +142,7 @@ defmodule Cadence.ServerWeb.ProjectLiveTest do
     html = render_patch(view, "/p/demo/n/#{secret.id}")
 
     assert html =~ "Snapshot hidden for review"
+    assert html =~ ~s(class="quarantine-notice callout callout-protected")
     refute html =~ "config.txt"
     refute html =~ "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
   end

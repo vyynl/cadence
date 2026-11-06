@@ -1,23 +1,25 @@
 <article>
   <header class="project-header">
     <p class="eyebrow">Proposal</p>
-    <h1>{kind_title(@proposal.kind)}</h1>
+    <h1>{Presentation.kind_title(@proposal.kind)}</h1>
     <p class="slug">
       <a href={"/p/#{@project.slug}"}>{@project.name}</a>
       <span class="note">#{short_token(@proposal.token)}</span>
     </p>
     <p class="node-meta">
-      <span class="flag-badge">{@proposal.status}</span>
+      <span class={Presentation.status_badge_class(@proposal.status)}>
+        {@proposal.status}
+      </span>
       <span :if={@proposal.created_at}>
         created
         <time datetime={DateTime.to_iso8601(@proposal.created_at)}>
-          {format_time(@proposal.created_at)}
+          {Presentation.format_time(@proposal.created_at)}
         </time>
       </span>
       <span :if={@proposal.decided_at}>
         decided
         <time datetime={DateTime.to_iso8601(@proposal.decided_at)}>
-          {format_time(@proposal.decided_at)}
+          {Presentation.format_time(@proposal.decided_at)}
         </time>
       </span>
     </p>
@@ -33,7 +35,7 @@
           <span class="file-name">{parent.message || "(no message)"}</span>
         </a>
         <p class="node-meta">
-          <span class="flag-badge">{format_flags(parent.flags, parent.pinned)}</span>
+          <span class="flag-badge">{Presentation.format_flags(parent.flags, parent.pinned)}</span>
           <code>{String.slice(parent.git_commit_sha, 0, 12)}</code>
         </p>
       </li>
@@ -74,7 +76,9 @@
           <ul :if={result.files != []} class="file-tree">
             <li :for={file <- result.files}>
               <div class="file-row">
-                <span class="file-kind">{file.status}</span>
+                <span class={Presentation.file_status_class(file.status)}>
+                  {file.status}
+                </span>
                 <span class="file-name">{file.path}</span>
               </div>
             </li>
@@ -97,5 +101,7 @@
     <% end %>
   </section>
 
-  <p class="note">Approval is not available on this page.</p>
+  <div class="callout callout-note">
+    <p class="note">Approval is not available on this page.</p>
+  </div>
 </article>

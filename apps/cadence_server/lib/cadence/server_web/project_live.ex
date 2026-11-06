@@ -23,6 +23,7 @@ defmodule Cadence.ServerWeb.ProjectLive do
   alias Cadence.ServerWeb.Components.{DAG, Repo}
   alias Cadence.ServerWeb.DAGLayout
   alias Cadence.ServerWeb.Metadata
+  alias Cadence.ServerWeb.Presentation
   alias Cadence.Shared.{Node, Project}
 
   @impl true
@@ -257,10 +258,10 @@ defmodule Cadence.ServerWeb.ProjectLive do
                   <h2>{@selected_node.message || "(no message)"}</h2>
                   <p class="node-meta">
                     <span class="flag-badge">
-                      {format_flags(@selected_node.flags, @selected_node.pinned)}
+                      {Presentation.format_flags(@selected_node.flags, @selected_node.pinned)}
                     </span>
                     <time datetime={DateTime.to_iso8601(@selected_node.created_at)}>
-                      {format_time(@selected_node.created_at)}
+                      {Presentation.format_time(@selected_node.created_at)}
                     </time>
                     <code>{String.slice(@selected_node.git_commit_sha, 0, 12)}</code>
                   </p>
@@ -646,18 +647,6 @@ defmodule Cadence.ServerWeb.ProjectLive do
 
   defp redact_node(node) do
     Map.put(node, :message, PublicContent.redact_message(node.message))
-  end
-
-  defp format_flags([], false), do: "no flags"
-  defp format_flags([], true), do: "pinned"
-
-  defp format_flags(flags, pinned) do
-    text = Enum.map_join(flags, ", ", &Atom.to_string/1)
-    if pinned, do: text <> " · pinned", else: text
-  end
-
-  defp format_time(%DateTime{} = datetime) do
-    Calendar.strftime(datetime, "%Y-%m-%d %H:%M:%S UTC")
   end
 
   defp dag_intro_ms do

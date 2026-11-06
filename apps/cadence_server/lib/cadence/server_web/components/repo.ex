@@ -128,7 +128,7 @@ defmodule Cadence.ServerWeb.Components.Repo do
 
   def quarantine(assigns) do
     ~H"""
-    <div class="quarantine-notice">
+    <div class="quarantine-notice callout callout-protected">
       <p class="eyebrow">{@eyebrow}</p>
       <h2>{@title}</h2>
       <p class="note">{@body}</p>

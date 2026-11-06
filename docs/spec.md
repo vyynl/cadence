@@ -1584,6 +1584,13 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   bumps); routed `POST /sync/union` creates a proposal through
   `Melds.propose/3` and returns its token; daemon/Neovim submit the union
   picker.
+- 4e — UI styling & freshness: the review hub/detail subscribe to the project
+  topic after connect (creation, decision, and incident events; membership
+  re-read per event) and the public project page refreshes only a selected
+  node's quarantine on incident events. Shared presentation helpers plus
+  severity/status/file badges, callouts, button modifiers, and an incident
+  panel above the queue with an open count and wrapped details (§6.6, §6.7,
+  §7.2). Live DAG re-layout on `nodes_pushed` stays deferred.
 - Proposal UI must not ship before 4a/4b exist; AI output stays reviewable and
   reversible. The deterministic scanner, not the LLM, decides safety.
 
@@ -1674,9 +1681,12 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       `visibility`/`published` column and owner control are deferred until a
       concrete need appears; adding them later requires a migration. Public
       proposal links must respect project visibility once it exists.
-- [ ] **Review/promotion UI placement:** the proposal/incident backend exists as
-      of Phase 4a-1. The approval UI is deferred to 4c; Phase 3 ships no
-      approval actions.
+- [x] **Review/promotion UI placement:** resolved in 4c/4e — the review hub and
+      detail page ship with approve/reject, integrity and isolation state, and
+      the incident panel above the queue (§7.2). Live DAG refresh on
+      `nodes_pushed` remains deferred: `DAGLayout.layout/2` recomputes intro
+      timing, so a live refresh would replay the animation and disturb the
+      selected pane.
 - [ ] **Doc agent model:** which LLM(s) to support, and whether to allow
       per-project overrides.
 - [ ] **Local store:** SQLite via `ecto_sqlite3` is the obvious pick; confirm

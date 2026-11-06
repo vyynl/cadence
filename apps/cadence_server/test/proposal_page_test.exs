@@ -76,6 +76,12 @@ defmodule Cadence.ServerWeb.ProposalPageTest do
     assert html =~ "gone.txt"
     refute html =~ "keep.txt"
     assert html =~ "Approval is not available on this page."
+
+    assert html =~ "badge status-badge status-pending"
+    assert html =~ "file-status file-status-added"
+    assert html =~ "file-status file-status-modified"
+    assert html =~ "file-status file-status-deleted"
+    assert html =~ ~s(class="callout callout-note")
   end
 
   test "hides a sensitive result path and counts it", %{

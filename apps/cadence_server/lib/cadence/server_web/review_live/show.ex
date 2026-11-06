@@ -43,6 +43,7 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
   }
 
   alias Cadence.ServerWeb.Components.Repo
+  alias Cadence.ServerWeb.Presentation
   alias Cadence.ServerWeb.ReviewAccess
   alias Cadence.Shared.UUID
   alias Phoenix.LiveView.AsyncResult
@@ -133,7 +134,7 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
   @impl true
   def render(assigns) do
     ~H"""
-    <article>
+    <article class="review-page">
       <%= if @not_found do %>
         <p class="eyebrow">404</p>
         <h1>Project not found</h1>
@@ -166,20 +167,22 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
 
           <header class="project-header">
             <p class="eyebrow">Proposal</p>
-            <h1>{kind_title(review.proposal.kind)}</h1>
+            <h1>{Presentation.kind_title(review.proposal.kind)}</h1>
 
             <p class="node-meta">
-              <span class="flag-badge">{review.proposal.status}</span>
+              <span class={Presentation.status_badge_class(review.proposal.status)}>
+                {review.proposal.status}
+              </span>
               <span :if={review.proposal.created_at}>
                 opened
                 <time datetime={DateTime.to_iso8601(review.proposal.created_at)}>
-                  {format_time(review.proposal.created_at)}
+                  {Presentation.format_time(review.proposal.created_at)}
                 </time>
               </span>
               <span :if={review.proposal.decided_at}>
                 decided
                 <time datetime={DateTime.to_iso8601(review.proposal.decided_at)}>
-                  {format_time(review.proposal.decided_at)}
+                  {Presentation.format_time(review.proposal.decided_at)}
                 </time>
               </span>
             </p>
@@ -204,7 +207,7 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
                   <span class="file-name">{redact_message(parent.message) || "(no message)"}</span>
                 </a>
                 <p class="node-meta">
-                  <span class="flag-badge">{format_flags(parent.flags, parent.pinned)}</span>
+                  <span class="flag-badge">{Presentation.format_flags(parent.flags, parent.pinned)}</span>
                   <code>{String.slice(parent.git_commit_sha, 0, 12)}</code>
                 </p>
               </li>
@@ -249,7 +252,9 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
                       <ul :if={result.files != []} class="file-tree">
                         <li :for={file <- result.files}>
                           <div class="file-row">
-                            <span class="file-kind">{file.status}</span>
+                            <span class={Presentation.file_status_class(file.status)}>
+                              {file.status}
+                            </span>
                             <span class="file-name">{file.path}</span>
                           </div>
                         </li>
@@ -274,23 +279,35 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
                 <% end %>
             <% end %>
 
-            <p :if={review.integrity != :ok} class="note">
-              The stored result could not be verified ({integrity_label(review.integrity)}), so it cannot be approved.
-            </p>
+            <div :if={review.integrity != :ok} class="callout callout-warning">
+              <p class="note">
+                The stored result could not be verified ({integrity_label(review.integrity)}), so it cannot be approved.
+              </p>
+            </div>
           </section>
 
           <section :if={@can_decide? and review.proposal.status == :pending} class="admin-controls">
             <h2>Decision</h2>
 
             <%= if approvable?(review) do %>
-              <button type="button" class="admin-button" phx-click="approve" phx-disable-with="Deciding…">
+              <button
+                type="button"
+                class="admin-button button-primary"
+                phx-click="approve"
+                phx-disable-with="Deciding…"
+              >
                 Approve
               </button>
             <% else %>
               <p class="note">{blocked_reason(review)}</p>
             <% end %>
 
-            <button type="button" class="admin-button" phx-click="reject" phx-disable-with="Deciding…">
+            <button
+              type="button"
+              class="admin-button button-danger"
+              phx-click="reject"
+              phx-disable-with="Deciding…"
+            >
               Reject
             </button>
           </section>
@@ -541,19 +558,4 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
   # audience that may read the member list; viewers see a display name.
   defp identity(user, true), do: user.email || user.name || user.id
   defp identity(user, false), do: user.name || "a project member"
-
-  defp kind_title(:meld), do: "Meld proposal"
-  defp kind_title(:promotion), do: "Promotion proposal"
-  defp kind_title(_kind), do: "Proposal"
-
-  defp format_flags([], false), do: "no flags"
-  defp format_flags([], true), do: "pinned"
-
-  defp format_flags(flags, pinned) do
-    text = Enum.map_join(flags, ", ", &Atom.to_string/1)
-    if pinned, do: text <> " · pinned", else: text
-  end
-
-  defp format_time(%DateTime{} = datetime),
-    do: Calendar.strftime(datetime, "%Y-%m-%d %H:%M:%S UTC")
 end
