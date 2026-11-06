@@ -7,6 +7,8 @@ defmodule Cadence.Daemon.API.Router do
 
   alias Cadence.Daemon.{
     CommitQueue,
+    DocDiff,
+    DocQueue,
     Env,
     NodeDiff,
     Nodes,
@@ -16,7 +18,7 @@ defmodule Cadence.Daemon.API.Router do
     Sync
   }
 
-  alias Cadence.Shared.DAG
+  alias Cadence.Shared.{DAG, UUID}
 
   plug(Plug.Parsers, parsers: [:json], json_decoder: Jason)
   plug(:match)
@@ -98,6 +100,42 @@ defmodule Cadence.Daemon.API.Router do
     end
   end
 
+  post "/docs/sync" do
+    case docs_sync(conn.body_params) do
+      {:queued, node_id} ->
+        send_json(conn, 202, %{status: "queued", node_id: node_id})
+
+      {:skipped, reason} ->
+        send_json(conn, 200, %{status: "skipped", reason: Atom.to_string(reason)})
+
+      {:error, reason} ->
+        docs_sync_error(conn, reason)
+    end
+  end
+
+  get "/docs/diff" do
+    project_param = conn.query_params["project_id"]
+    node_id = conn.query_params["node_id"]
+
+    if is_nil(project_param) do
+      send_json(conn, 400, %{error: "project_id is required"})
+    else
+      case fetch_project(project_param) do
+        {:error, :not_found} ->
+          send_json(conn, 404, %{error: "project not found"})
+
+        {:ok, project_id} ->
+          case DocDiff.build(project_id, node_id) do
+            {:ok, payload} ->
+              send_json(conn, 200, payload)
+
+            {:error, reason} ->
+              docs_diff_error(conn, reason)
+          end
+      end
+    end
+  end
+
   post "/spawn" do
     case spawn_node(conn.body_params) do
       {:ok, node} ->
@@ -156,6 +194,88 @@ defmodule Cadence.Daemon.API.Router do
   end
 
   defp switch_node(_), do: {:error, :no_project}
+
+  defp docs_sync(%{"project_id" => project_id} = body) when is_binary(project_id) do
+    node_id = body["node_id"]
+
+    if is_nil(node_id) or is_binary(node_id) do
+      case UUID.cast(project_id) do
+        {:ok, project_id} ->
+          if Projects.get_project(project_id) do
+            DocQueue.sync(project_id, node_id)
+          else
+            {:error, :project_not_found}
+          end
+
+        :error ->
+          {:error, :invalid_payload}
+      end
+    else
+      {:error, :invalid_payload}
+    end
+  end
+
+  defp docs_sync(_body), do: {:error, :invalid_payload}
+
+  defp docs_sync_error(conn, :invalid_payload) do
+    send_json(conn, 422, %{error: "invalid payload"})
+  end
+
+  defp docs_sync_error(conn, :invalid_project) do
+    send_json(conn, 422, %{error: "invalid project_id"})
+  end
+
+  defp docs_sync_error(conn, :invalid_node) do
+    send_json(conn, 422, %{error: "invalid node_id"})
+  end
+
+  defp docs_sync_error(conn, :project_not_found) do
+    send_json(conn, 404, %{error: "project not found"})
+  end
+
+  defp docs_sync_error(conn, :not_found) do
+    send_json(conn, 404, %{error: "node not found in project"})
+  end
+
+  defp docs_sync_error(conn, :no_node) do
+    send_json(conn, 404, %{error: "no current node"})
+  end
+
+  defp docs_sync_error(conn, :no_location) do
+    send_json(conn, 404, %{error: "project location not found"})
+  end
+
+  defp docs_sync_error(conn, :not_configured) do
+    send_json(conn, 503, %{error: "doc agent is not configured"})
+  end
+
+  defp docs_sync_error(conn, :node_update_failed) do
+    send_json(conn, 500, %{error: "failed to queue docs"})
+  end
+
+  defp docs_diff_error(conn, :not_found) do
+    send_json(conn, 404, %{error: "node not found in project"})
+  end
+
+  defp docs_diff_error(conn, :no_location) do
+    send_json(conn, 404, %{error: "project location not found"})
+  end
+
+  defp docs_diff_error(conn, :no_commit) do
+    send_json(conn, 404, %{error: "commit not found"})
+  end
+
+  defp docs_diff_error(conn, :no_docs_commit) do
+    send_json(conn, 409, %{error: "no docs commit for this node"})
+  end
+
+  defp docs_diff_error(conn, :no_schema) do
+    send_json(conn, 409, %{error: "docs schema not found"})
+  end
+
+  defp docs_diff_error(conn, _reason) do
+    send_json(conn, 500, %{error: "failed to build docs diff"})
+  end
 
   defp propose_union(%{"project_id" => project_id, "parent_node_ids" => ids})
        when is_list(ids) do

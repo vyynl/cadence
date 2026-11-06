@@ -2,8 +2,17 @@ defmodule Cadence.Daemon.API.RouterTest do
   use ExUnit.Case, async: false
 
   alias Cadence.Daemon.API.Router
-  alias Cadence.Daemon.{ProjectLocation, Repo, SyncLedger}
-  alias Cadence.Shared.{Node, Project}
+  alias Cadence.Daemon.{DocQueue, ProjectLocation, Repo, SyncLedger, SyncPending}
+  alias Cadence.Shared.{GitStore, Membership, Node, Project}
+
+  @schema """
+  index_file: README.md
+  docs_dir: docs
+  sections:
+    - name: Overview
+      required: true
+      generated_from: "lib/**/*.ex"
+  """
 
   defp call(conn), do: Router.call(conn, [])
 
@@ -325,6 +334,351 @@ defmodule Cadence.Daemon.API.RouterTest do
     assert conn.status == 404
   end
 
+  test "POST /docs/sync validates its payload and resolves the project" do
+    assert post_json("/docs/sync", %{}).status == 422
+    assert post_json("/docs/sync", %{"project_id" => "not-a-uuid"}).status == 422
+    assert post_json("/docs/sync", %{"project_id" => Ecto.UUID.generate()}).status == 404
+
+    project = insert_local_project()
+
+    assert post_json("/docs/sync", %{
+             "project_id" => project.id,
+             "node_id" => "not-a-uuid"
+           }).status == 422
+
+    assert post_json("/docs/sync", %{
+             "project_id" => project.id,
+             "node_id" => Ecto.UUID.generate()
+           }).status == 404
+
+    assert post_json("/docs/sync", %{
+             "project_id" => project.id,
+             "node_id" => 123
+           }).status == 422
+
+    # No explicit node and no session anchor.
+    assert post_json("/docs/sync", %{"project_id" => project.id}).status == 404
+  end
+
+  test "POST /docs/sync skips disabled docs and a missing schema" do
+    project = insert_local_project()
+    node = insert_node_with(project.id, %{id: Ecto.UUID.generate()})
+    insert_sync_pending!(node)
+
+    Application.put_env(:cadence_daemon, :docs_enabled, false)
+    on_exit(fn -> Application.delete_env(:cadence_daemon, :docs_enabled) end)
+
+    conn = post_json("/docs/sync", %{"project_id" => project.id, "node_id" => node.id})
+
+    assert conn.status == 200
+    assert Jason.decode!(conn.resp_body) == %{"status" => "skipped", "reason" => "disabled"}
+
+    Application.delete_env(:cadence_daemon, :docs_enabled)
+
+    conn = post_json("/docs/sync", %{"project_id" => project.id, "node_id" => node.id})
+
+    assert conn.status == 200
+    assert Jason.decode!(conn.resp_body) == %{"status" => "skipped", "reason" => "no_schema"}
+  end
+
+  test "POST /docs/sync skips an invalid schema" do
+    fixture = insert_docs_fixture()
+    node = insert_node_with(fixture.project.id, %{})
+    insert_sync_pending!(node)
+    File.write!(Path.join(fixture.work_dir, ".caddocs.yaml"), "sections: []\n")
+
+    conn =
+      post_json("/docs/sync", %{
+        "project_id" => fixture.project.id,
+        "node_id" => node.id
+      })
+
+    assert conn.status == 200
+    assert Jason.decode!(conn.resp_body) == %{"status" => "skipped", "reason" => "invalid_schema"}
+  end
+
+  test "POST /docs/sync skips a node whose SHA was already pushed" do
+    project = insert_local_project()
+
+    node =
+      insert_node_with(project.id, %{
+        session_metadata: %{"docs_pushed_sha" => String.duplicate("a", 40)}
+      })
+
+    conn = post_json("/docs/sync", %{"project_id" => project.id, "node_id" => node.id})
+
+    assert conn.status == 200
+
+    assert Jason.decode!(conn.resp_body) == %{
+             "status" => "skipped",
+             "reason" => "already_synced"
+           }
+  end
+
+  test "POST /docs/sync returns 503 when the doc agent is not configured" do
+    fixture = insert_docs_fixture()
+    write_docs_schema(fixture.work_dir)
+    node = insert_node_with(fixture.project.id, %{})
+    insert_sync_pending!(node)
+
+    unconfigure_docs!()
+
+    conn =
+      post_json("/docs/sync", %{
+        "project_id" => fixture.project.id,
+        "node_id" => node.id
+      })
+
+    assert conn.status == 503
+    assert Jason.decode!(conn.resp_body)["error"] == "doc agent is not configured"
+  end
+
+  test "POST /docs/sync queues and defaults to the session anchor" do
+    fixture = insert_docs_fixture()
+    configure_docs!()
+    write_docs_schema(fixture.work_dir)
+
+    node = insert_node_with(fixture.project.id, %{id: Ecto.UUID.generate()})
+    insert_sync_pending!(node)
+    point_session!(fixture.project.id, node.id)
+
+    conn = post_json("/docs/sync", %{"project_id" => fixture.project.id})
+    assert conn.status == 202
+
+    body = Jason.decode!(conn.resp_body)
+    assert body["status"] == "queued"
+    assert body["node_id"] == node.id
+
+    conn =
+      post_json("/docs/sync", %{
+        "project_id" => fixture.project.id,
+        "node_id" => node.id
+      })
+
+    assert conn.status == 202
+  end
+
+  test "POST /docs/sync refuses a legacy node that may already be pushed" do
+    fixture = insert_docs_fixture()
+    configure_docs!()
+    write_docs_schema(fixture.work_dir)
+
+    node =
+      insert_node_with(fixture.project.id, %{
+        docs_state: :pending,
+        session_metadata: %{}
+      })
+
+    conn =
+      post_json("/docs/sync", %{
+        "project_id" => fixture.project.id,
+        "node_id" => node.id
+      })
+
+    assert conn.status == 200
+    assert Jason.decode!(conn.resp_body) == %{"status" => "skipped", "reason" => "legacy"}
+    assert Repo.get!(Node, node.id).git_commit_sha == node.git_commit_sha
+  end
+
+  test "POST /docs/sync allows a legacy node that is provably unpushed" do
+    fixture = insert_docs_fixture()
+    configure_docs!()
+    write_docs_schema(fixture.work_dir)
+
+    node =
+      insert_node_with(fixture.project.id, %{
+        docs_state: :pending,
+        session_metadata: %{}
+      })
+
+    insert_sync_pending!(node)
+
+    conn =
+      post_json("/docs/sync", %{
+        "project_id" => fixture.project.id,
+        "node_id" => node.id
+      })
+
+    assert conn.status == 202
+    assert Jason.decode!(conn.resp_body)["status"] == "queued"
+  end
+
+  test "POST /docs/sync skips a node whose docs are already current" do
+    fixture = insert_docs_fixture()
+    code_sha = String.duplicate("c", 40)
+    docs_sha = String.duplicate("d", 40)
+
+    node =
+      insert_node_with(fixture.project.id, %{
+        docs_state: :current,
+        session_metadata: %{
+          "docs" => %{
+            "state" => "current",
+            "code_commit_sha" => code_sha,
+            "docs_commit_sha" => docs_sha
+          },
+          "code_commit_sha" => code_sha
+        }
+      })
+
+    conn =
+      post_json("/docs/sync", %{
+        "project_id" => fixture.project.id,
+        "node_id" => node.id
+      })
+
+    assert conn.status == 200
+
+    assert Jason.decode!(conn.resp_body) == %{
+             "status" => "skipped",
+             "reason" => "already_current"
+           }
+
+    refute Map.has_key?(:sys.get_state(DocQueue).entries, node.id)
+  end
+
+  test "POST /docs/sync releases a held node when docs are disabled" do
+    fixture = insert_docs_fixture()
+    node = insert_held_node(fixture.project.id)
+
+    Application.put_env(:cadence_daemon, :docs_enabled, false)
+    on_exit(fn -> Application.delete_env(:cadence_daemon, :docs_enabled) end)
+
+    conn =
+      post_json("/docs/sync", %{
+        "project_id" => fixture.project.id,
+        "node_id" => node.id
+      })
+
+    assert conn.status == 200
+    assert Jason.decode!(conn.resp_body)["reason"] == "disabled"
+
+    released = Repo.get!(Node, node.id)
+    assert released.docs_state == :skipped
+    assert released.session_metadata["docs"]["state"] == "skipped"
+    assert pushable?(fixture.project.id, node.id)
+  end
+
+  test "POST /docs/sync releases a held node when the doc agent is unconfigured" do
+    fixture = insert_docs_fixture()
+    write_docs_schema(fixture.work_dir)
+    node = insert_held_node(fixture.project.id)
+    unconfigure_docs!()
+
+    conn =
+      post_json("/docs/sync", %{
+        "project_id" => fixture.project.id,
+        "node_id" => node.id
+      })
+
+    assert conn.status == 503
+
+    released = Repo.get!(Node, node.id)
+    assert released.docs_state == :pending
+    assert released.session_metadata["docs"]["state"] == "deferred"
+    assert pushable?(fixture.project.id, node.id)
+  end
+
+  test "POST /docs/sync releases a held node when the project location is missing" do
+    project = insert_project(Ecto.UUID.generate())
+    node = insert_held_node(project.id)
+
+    conn =
+      post_json("/docs/sync", %{
+        "project_id" => project.id,
+        "node_id" => node.id
+      })
+
+    assert conn.status == 404
+    assert Jason.decode!(conn.resp_body)["error"] == "project location not found"
+
+    released = Repo.get!(Node, node.id)
+    assert released.docs_state == :pending
+    assert released.session_metadata["docs"]["state"] == "deferred"
+    assert pushable?(project.id, node.id)
+  end
+
+  test "GET /docs/diff validates the project and node" do
+    assert get_conn("/docs/diff").status == 400
+    assert get_conn("/docs/diff?project_id=#{Ecto.UUID.generate()}").status == 404
+
+    project = insert_local_project()
+
+    assert get_conn("/docs/diff?project_id=#{project.id}&node_id=#{Ecto.UUID.generate()}").status ==
+             404
+
+    assert get_conn("/docs/diff?project_id=#{project.id}&node_id=not-a-uuid").status == 404
+  end
+
+  test "GET /docs/diff returns 404/409 for a missing docs state" do
+    fixture = insert_docs_fixture()
+    write_docs_schema(fixture.work_dir)
+
+    code_only = insert_node_with(fixture.project.id, %{docs_state: :skipped})
+
+    conn = get_conn("/docs/diff?project_id=#{fixture.project.id}&node_id=#{code_only.id}")
+    assert conn.status == 409
+    assert Jason.decode!(conn.resp_body)["error"] == "no docs commit for this node"
+
+    missing_commit =
+      insert_node_with(fixture.project.id, %{
+        git_commit_sha: String.duplicate("e", 40),
+        docs_state: :current
+      })
+
+    conn = get_conn("/docs/diff?project_id=#{fixture.project.id}&node_id=#{missing_commit.id}")
+    assert conn.status == 404
+    assert Jason.decode!(conn.resp_body)["error"] == "commit not found"
+  end
+
+  test "GET /docs/diff returns the doc-only diff and defaults to the session anchor" do
+    fixture = insert_docs_fixture()
+    write_docs_schema(fixture.work_dir)
+    git = GitStore.init(fixture.git_dir, bare: true)
+
+    {:ok, parent_tree} = GitStore.put_files(git, %{"README.md" => "# Project\n"})
+    parent_sha = GitStore.write_commit(git, parent_tree, [], docs_author(), "parent")
+
+    parent =
+      insert_node_with(fixture.project.id, %{
+        git_commit_sha: parent_sha,
+        docs_state: :skipped
+      })
+
+    {:ok, child_tree} =
+      GitStore.merge_files(git, parent_tree, %{"docs/guide.md" => "guide\n"})
+
+    child_sha = GitStore.write_commit(git, child_tree, [parent_sha], docs_author(), "docs")
+
+    child =
+      insert_node_with(fixture.project.id, %{
+        git_commit_sha: child_sha,
+        parents: [parent.id],
+        docs_state: :current
+      })
+
+    conn = get_conn("/docs/diff?project_id=#{fixture.project.id}&node_id=#{child.id}")
+    assert conn.status == 200
+
+    body = Jason.decode!(conn.resp_body)
+    assert body["node_id"] == child.id
+    assert body["code_commit_sha"] == nil
+    assert body["docs_commit_sha"] == child_sha
+    assert Enum.map(body["files"], & &1["path"]) == ["docs/guide.md"]
+
+    point_session!(fixture.project.id, child.id)
+
+    conn = get_conn("/docs/diff?project_id=#{fixture.project.id}")
+    assert conn.status == 200
+    assert Jason.decode!(conn.resp_body)["node_id"] == child.id
+
+    File.rm!(Path.join(fixture.work_dir, ".caddocs.yaml"))
+
+    conn = get_conn("/docs/diff?project_id=#{fixture.project.id}&node_id=#{child.id}")
+    assert conn.status == 409
+    assert Jason.decode!(conn.resp_body)["error"] == "docs schema not found"
+  end
+
   defp configure_sync!(project) do
     {:ok, _user_id} = SyncLedger.put_server_user_id(Ecto.UUID.generate())
     :ok = SyncLedger.mark_provisioned(project.id)
@@ -396,4 +750,145 @@ defmodule Cadence.Daemon.API.RouterTest do
     |> Node.changeset()
     |> Repo.insert!()
   end
+
+  defp insert_node_with(project_id, attrs) do
+    defaults = %{
+      project_id: project_id,
+      git_commit_sha: String.duplicate("d", 40),
+      parents: [],
+      flags: [:"in-progress"],
+      message: "m",
+      created_by: Application.get_env(:cadence_daemon, :local_user_id),
+      created_at: DateTime.utc_now(),
+      docs_state: :skipped
+    }
+
+    defaults
+    |> Map.merge(attrs)
+    |> Node.changeset()
+    |> Repo.insert!()
+  end
+
+  defp insert_docs_fixture do
+    project = insert_local_project()
+    location = Repo.get!(ProjectLocation, project.id)
+    %{project: project, work_dir: location.work_dir, git_dir: location.git_dir}
+  end
+
+  defp write_docs_schema(work_dir) do
+    File.write!(Path.join(work_dir, ".caddocs.yaml"), @schema)
+  end
+
+  defp insert_held_node(project_id) do
+    sha = String.duplicate("d", 40)
+
+    node =
+      insert_node_with(project_id, %{
+        docs_state: :pending,
+        session_metadata: %{
+          "docs" => %{"state" => "pending", "code_commit_sha" => sha},
+          "code_commit_sha" => sha
+        }
+      })
+
+    insert_sync_pending!(node)
+    node
+  end
+
+  defp insert_sync_pending!(node) do
+    now = DateTime.utc_now()
+
+    %SyncPending{}
+    |> SyncPending.changeset(%{
+      node_id: node.id,
+      project_id: node.project_id,
+      enqueued_at: now,
+      next_attempt_at: now
+    })
+    |> Repo.insert!()
+  end
+
+  defp pushable?(project_id, node_id) do
+    project_id
+    |> SyncLedger.pushable(nil, 10)
+    |> Enum.any?(&(&1.id == node_id))
+  end
+
+  defp unconfigure_docs! do
+    Application.delete_env(:cadence_daemon, :docs_llm)
+    previous = Application.get_env(:cadence_shared, Cadence.Shared.LLM)
+
+    Application.put_env(:cadence_shared, Cadence.Shared.LLM,
+      provider: "deepseek",
+      model: "test",
+      api_key: nil
+    )
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:cadence_shared, Cadence.Shared.LLM, previous)
+      else
+        Application.delete_env(:cadence_shared, Cadence.Shared.LLM)
+      end
+    end)
+  end
+
+  defp point_session!(project_id, node_id) do
+    %Membership{}
+    |> Membership.changeset(%{
+      user_id: Application.get_env(:cadence_daemon, :local_user_id),
+      project_id: project_id,
+      role: :owner,
+      active_heads: [],
+      session_pointer: node_id
+    })
+    |> Repo.insert!()
+  end
+
+  defp configure_docs! do
+    Application.put_env(:cadence_daemon, :docs_llm, Cadence.Daemon.TestDocsLLM)
+    Application.put_env(:cadence_daemon, :docs_retry_attempts, 1)
+    Application.put_env(:cadence_daemon, :docs_retry_backoff_ms, 1)
+    Application.put_env(:cadence_daemon, :docs_rate_limit, 1_000)
+
+    on_exit(fn ->
+      drain_doc_queue()
+
+      for key <- [
+            :docs_llm,
+            :docs_retry_attempts,
+            :docs_retry_backoff_ms,
+            :docs_rate_limit,
+            :docs_enabled,
+            :test_docs_llm_result
+          ] do
+        Application.delete_env(:cadence_daemon, key)
+      end
+    end)
+  end
+
+  defp drain_doc_queue do
+    deadline = System.monotonic_time(:millisecond) + 5_000
+    do_drain_doc_queue(deadline)
+  end
+
+  defp do_drain_doc_queue(deadline) do
+    state =
+      try do
+        :sys.get_state(DocQueue, 2_000)
+      catch
+        :exit, _reason -> %{}
+      end
+
+    if Map.get(state, :entries) == %{} or System.monotonic_time(:millisecond) >= deadline do
+      :ok
+    else
+      Process.sleep(20)
+      do_drain_doc_queue(deadline)
+    end
+  end
+
+  defp docs_author, do: %{name: "cadence", email: "cadence@local"}
+
+  defp get_conn(path), do: Plug.Test.conn(:get, path) |> call()
 end

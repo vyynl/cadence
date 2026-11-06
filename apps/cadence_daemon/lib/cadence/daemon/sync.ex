@@ -428,8 +428,13 @@ defmodule Cadence.Daemon.Sync do
         |> Enum.filter(&MapSet.member?(pending_ids, &1))
         |> Enum.uniq()
 
-      :ok = SyncLedger.mark_pushed(pushed_ids)
-      {:ok, length(pushed_ids)}
+      # Stamp the SHA that was actually sent: the node may have changed while
+      # the push was in flight (e.g. a docs job completed).
+      sha_by_id = Map.new(nodes, &{&1.id, &1.git_commit_sha})
+      pushed = Enum.map(pushed_ids, &{&1, Map.fetch!(sha_by_id, &1)})
+
+      :ok = SyncLedger.mark_pushed(pushed)
+      {:ok, length(pushed)}
     end
   end
 

@@ -276,6 +276,24 @@ defmodule Cadence.Daemon.SyncLedgerTest do
     assert SyncLedger.pending(project.id) == []
   end
 
+  test "mark_pushed stamps the pushed sha, not a newer local sha", %{project: project} do
+    node = insert_node(project.id, ~U[2026-10-23 12:00:00.000000Z])
+    pushed_sha = node.git_commit_sha
+    newer_sha = String.duplicate("f", 40)
+
+    node
+    |> Node.changeset(%{git_commit_sha: newer_sha})
+    |> Repo.update!()
+
+    SyncLedger.enqueue(project.id, node.id)
+    assert :ok = SyncLedger.mark_pushed([{node.id, pushed_sha}])
+
+    loaded = Repo.get!(Node, node.id)
+    assert loaded.git_commit_sha == newer_sha
+    assert loaded.session_metadata["docs_pushed_sha"] == pushed_sha
+    assert SyncLedger.pending(project.id) == []
+  end
+
   test "rehydrate keeps a doc-pending node queued for ordering", %{project: project} do
     node = insert_node(project.id, ~U[2026-10-23 12:00:00.000000Z])
 

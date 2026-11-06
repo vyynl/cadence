@@ -940,6 +940,20 @@ Doc automation is **not** run on every commit. Gate on:
 - The documentation schema (`.caddocs.yaml`) itself changed, OR
 - Manual `:CadDocSync`.
 
+A manual `:CadDocSync` bypasses the automatic trigger re-check but still
+respects `CAD_DOCS_ENABLED`; when disabled the daemon reports `skipped` with
+`reason: "disabled"`. A node whose commit was already pushed is reported as
+`skipped: "already_synced"` rather than queueing a rewrite (§9.5). A node
+whose docs are already generated (`docs_state: :current`) is reported as
+`skipped: "already_current"`. A node with no `SyncPending` row (and not already
+current or locally pushed) is reported as `skipped: "legacy"`: it may have been
+pulled from the server or may predate the pushed-SHA stamp, so forcing docs
+could rewrite an already-synced SHA. A manual job arms the same `metadata["docs"]["state"] == "pending"` hold as an
+automatic job before it is queued, so the node cannot be pushed while the model
+runs. When a manual skip or failure targets a docs-held node, the daemon
+releases it with the same terminal transition the job would use (`skipped` or
+`deferred`) so it cannot stay out of the sync queue.
+
 ### 9.3 Pipeline
 
 ```
@@ -992,7 +1006,10 @@ generation leaves the node pointing at `C1` with `docs_state: :pending`.
   its recorded `code_commit_sha` (`C1`), filtered to the schema's `index_file`
   and `docs_dir`. Both are Git objects; no diff is inlined in
   `session_metadata` (§4.1). The code change is never hidden or reverted.
-- `:CadDocDiff` shows it in Neovim.
+- `:CadDocDiff` shows it in Neovim. A code-only node, a skipped generation, or
+  an empty generation has no docs commit: the daemon returns `409` and the
+  command reports that no docs diff exists. A missing `.caddocs.yaml` is also
+  `409`, because the schema paths cannot be filtered.
 - A read-only `docs_state` badge (`:pending`, `:current`, `:skipped`) is shown
   in the web UI. `:current` means the generation completed and its docs were
   committed as `C2`; an empty generation writes no `C2`, so
@@ -1012,13 +1029,18 @@ If offline, commit with `docs_state: :pending`. On reconnect, run the agent,
 amend docs into a follow-up commit, then sync both as one node. If the job
 defers, the code-only node syncs and the docs are retried later.
 
-A node with a **queued** doc job is held out of the push queue until the job
-resolves to `:current` (docs committed as `C2`) or is deferred, so its
-`git_commit_sha` can move from `C1` to `C2` before the server ever sees it. A
-**deferred** job is pushed at `C1` code-only — docs never block sync — and is
-retried on reconnect or `:CadDocSync`. If a node with a doc job was already
+A node with a **queued** doc job — automatic or manual — is held out of the
+push queue until the job resolves to `:current` (docs committed as `C2`) or is
+deferred, so its `git_commit_sha` can move from `C1` to `C2` before the server
+ever sees it. A **deferred** job is pushed at `C1` code-only — docs never block
+sync — and is retried on reconnect or `:CadDocSync`. Boot/reconnect retries only
+resume local nodes with a `SyncPending` row; a pulled node (already owned by the
+server) is never regenerated locally. If a node with a doc job was already
 pushed, its SHA is never rewritten; the agent instead creates a follow-up docs
-child node linked by `session_metadata["docs"]["docs_for"]` (Phase 5c/P4).
+child node linked by `session_metadata["docs"]["docs_for"]` (Phase 5c/P4). A job
+that discovers a push mid-run leaves the node at the pushed SHA and records a
+deferred docs state. Until that fallback ships, a manual `:CadDocSync` on a
+pushed node reports `skipped: "already_synced"` instead of queueing a rewrite.
 
 ### 9.6 Worker design
 
@@ -1477,7 +1499,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_DIFF_MAX_FILES` | no | `20` | Max files in a node diff (hover preview) |
 | `CAD_DIFF_MAX_LINES_PER_FILE` | no | `400` | Max diff lines per file |
 | `CAD_DIFF_MAX_BYTES` | no | `262144` | Max combined file size diffed for a hover preview; larger files are marked truncated without running Myers |
-| `CAD_DOCS_ENABLED` | no | `true` | Master switch for documentation automation (§9) |
+| `CAD_DOCS_ENABLED` | no | `true` | Master switch for documentation automation, including manual `:CadDocSync` (§9) |
 | `CAD_DOCS_TIMEOUT_MS` | no | `30000` | Max LLM call time per doc job |
 | `CAD_DOCS_RATE_LIMIT` | no | `5` | Doc agent calls per daemon rate window |
 | `CAD_DOCS_RATE_SCALE` | no | `60000` | Doc rate window in milliseconds |
@@ -1644,6 +1666,8 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - Doc schema parsing.
 - Doc agent sub-process.
 - Deferred docs when offline.
+- Daemon `POST /docs/sync` (manual trigger: `202` queued, `200` skipped, `503`
+  unconfigured) and `GET /docs/diff` (§9.4); `:CadDocSync` and `:CadDocDiff`.
 
 **Phase 6 — Docker actions (week 17+)**
 - `ex_docker_api` integration.

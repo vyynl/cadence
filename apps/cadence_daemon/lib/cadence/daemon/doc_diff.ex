@@ -5,14 +5,15 @@ defmodule Cadence.Daemon.DocDiff do
   A node with a queued doc job points at the follow-up docs commit (`C2`); the
   docs diff is `diff(C1.tree, C2.tree)` filtered to the paths the project
   schema allows. Nodes that predate doc automation fall back to their first
-  logical parent's tree.
+  logical parent's tree. `node_id` may be omitted, in which case the session
+  anchor is used (`Cadence.Daemon.Session.anchor_node/1`).
 
   Both commits are read from the local Git store, so this only works on the
   machine that generated the docs; the web UI shows the combined node diff
   instead.
   """
 
-  alias Cadence.Daemon.{Env, NodeStore, ProjectLocation, Repo}
+  alias Cadence.Daemon.{Env, NodeStore, ProjectLocation, Repo, Session}
   alias Cadence.Daemon.Docs.SchemaSource
   alias Cadence.Shared.{Diff, GitStore, Node, UUID}
 
@@ -24,10 +25,9 @@ defmodule Cadence.Daemon.DocDiff do
   `:no_docs_commit` (code-only, skipped docs, or an empty generation with no
   `C2`), `:no_schema`, and `:unreadable`.
   """
-  @spec build(Ecto.UUID.t(), Ecto.UUID.t()) :: {:ok, map()} | {:error, atom()}
-  def build(project_id, node_id) do
+  @spec build(Ecto.UUID.t(), Ecto.UUID.t() | nil) :: {:ok, map()} | {:error, atom()}
+  def build(project_id, node_id \\ nil) do
     with {:ok, project_id} <- UUID.cast(project_id),
-         {:ok, node_id} <- UUID.cast(node_id),
          {:ok, node} <- fetch_node(project_id, node_id),
          {:ok, git} <- NodeStore.open(project_id),
          {:ok, docs_sha} <- docs_commit_sha(node),
@@ -58,9 +58,18 @@ defmodule Cadence.Daemon.DocDiff do
     end
   end
 
-  defp fetch_node(project_id, node_id) do
-    case Repo.get(Node, node_id) do
+  defp fetch_node(project_id, nil) do
+    case Session.anchor_node(project_id) do
       %Node{project_id: ^project_id} = node -> {:ok, node}
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp fetch_node(project_id, node_id) do
+    with {:ok, node_id} <- UUID.cast(node_id),
+         %Node{project_id: ^project_id} = node <- Repo.get(Node, node_id) do
+      {:ok, node}
+    else
       _ -> {:error, :not_found}
     end
   end

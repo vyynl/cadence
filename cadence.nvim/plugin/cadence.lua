@@ -1,7 +1,14 @@
 local cadence = require("cadence")
 local client = require("cadence.client")
+local doc = require("cadence.doc")
 local graph = require("cadence.graph")
 local ui = require("cadence.ui")
+
+local LEVELS = {
+  info = vim.log.levels.INFO,
+  warn = vim.log.levels.WARN,
+  error = vim.log.levels.ERROR,
+}
 
 local function socket()
   return cadence.socket_path()
@@ -82,6 +89,49 @@ local function open_picker(project, opts)
   })
 end
 
+--- Render a docs diff payload in a scratch split (spec §9.4).
+local function open_doc_diff(project, payload, formatted)
+  ui.setup_highlights()
+
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf].buftype = "nofile"
+  vim.bo[buf].bufhidden = "wipe"
+  vim.bo[buf].swapfile = false
+  vim.bo[buf].filetype = "cadence-doc"
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, formatted.lines)
+  vim.bo[buf].modifiable = false
+
+  local ns = vim.api.nvim_create_namespace("cadence_doc_diff")
+  for i, group in pairs(formatted.hl) do
+    vim.api.nvim_buf_set_extmark(buf, ns, i - 1, 0, {
+      end_row = i,
+      end_col = 0,
+      hl_group = group,
+      hl_eol = true,
+    })
+  end
+
+  local docs_sha = payload and payload.docs_commit_sha
+  local label = docs_sha and docs_sha:sub(1, 8) or project.slug
+  -- The same docs commit can be open already; a duplicate name is harmless.
+  pcall(vim.api.nvim_buf_set_name, buf, "cadence-docs://" .. label)
+
+  vim.cmd("botright split")
+  local win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(win, buf)
+  vim.wo[win].wrap = false
+
+  vim.keymap.set("n", "q", function()
+    if vim.api.nvim_buf_is_valid(buf) then
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end
+  end, { buffer = buf })
+end
+
+local function notify_result(result)
+  vim.notify(result.message, LEVELS[result.level] or vim.log.levels.INFO)
+end
+
 vim.api.nvim_create_user_command("CadOpen", function()
   with_project(function(project)
     open_picker(project, { title = project.slug })
@@ -93,6 +143,44 @@ vim.api.nvim_create_user_command("CadSwitch", function()
     open_picker(project, { title = "switch — " .. project.slug })
   end)
 end, {})
+
+vim.api.nvim_create_user_command("CadDocSync", function(args)
+  with_project(function(project)
+    local node_id = vim.trim(args.args or "")
+    local body = { project_id = project.id }
+
+    if node_id ~= "" then
+      body.node_id = node_id
+    end
+
+    -- The daemon answers immediately (queued/skipped); the generation runs in
+    -- the background, so the editor is never blocked on the model.
+    client.post_async("/docs/sync", body, socket(), function(res)
+      notify_result(doc.sync_result(res))
+    end)
+  end)
+end, { nargs = "?" })
+
+vim.api.nvim_create_user_command("CadDocDiff", function(args)
+  with_project(function(project)
+    local node_id = vim.trim(args.args or "")
+    local path = "/docs/diff?project_id=" .. project.id
+
+    if node_id ~= "" then
+      path = path .. "&node_id=" .. node_id
+    end
+
+    local result = doc.diff_result(client.get(path, socket()))
+
+    if result.kind == "diff" then
+      open_doc_diff(project, result.payload, doc.format(result.payload))
+    elseif result.kind == "empty" then
+      vim.notify(result.message, vim.log.levels.WARN)
+    else
+      vim.notify(result.message, vim.log.levels.ERROR)
+    end
+  end)
+end, { nargs = "?" })
 
 vim.api.nvim_create_user_command("CadUnion", function()
   with_project(function(project)

@@ -72,10 +72,29 @@ defmodule Cadence.Daemon.SyncLedger do
     GenServer.call(__MODULE__, {:pending_projects, now})
   end
 
-  @doc "Removes pushed nodes from the pending queue."
-  @spec mark_pushed(Ecto.UUID.t() | [Ecto.UUID.t()]) :: :ok
-  def mark_pushed(node_ids) do
-    GenServer.call(__MODULE__, {:mark_pushed, List.wrap(node_ids)})
+  @doc """
+  Removes pushed nodes from the pending queue.
+
+  Accepts node IDs or `{node_id, pushed_sha}` pairs. The sync worker passes the
+  SHA it actually sent so a node that changed while the push was in flight is
+  not stamped with the newer local SHA.
+  """
+  @spec mark_pushed(
+          Ecto.UUID.t()
+          | [Ecto.UUID.t()]
+          | [{Ecto.UUID.t(), String.t()}]
+        ) :: :ok
+  def mark_pushed(items) do
+    GenServer.call(__MODULE__, {:mark_pushed, normalize_pushed(items)})
+  end
+
+  defp normalize_pushed(items) do
+    items
+    |> List.wrap()
+    |> Enum.map(fn
+      {id, sha} when is_binary(sha) -> {id, sha}
+      id -> {id, nil}
+    end)
   end
 
   @doc """
@@ -257,11 +276,15 @@ defmodule Cadence.Daemon.SyncLedger do
     {:reply, projects, state}
   end
 
-  def handle_call({:mark_pushed, node_ids}, _from, state) do
-    ids = node_ids |> Enum.map(&cast_uuid/1) |> Enum.reject(&is_nil/1)
+  def handle_call({:mark_pushed, items}, _from, state) do
+    entries =
+      items
+      |> Enum.map(fn {id, sha} -> {cast_uuid(id), sha} end)
+      |> Enum.reject(fn {id, _sha} -> is_nil(id) end)
 
-    if ids != [] do
-      mark_docs_pushed(ids)
+    if entries != [] do
+      mark_docs_pushed(entries)
+      ids = Enum.map(entries, &elem(&1, 0))
       Repo.delete_all(from(p in SyncPending, where: p.node_id in ^ids))
     end
 
@@ -602,14 +625,16 @@ defmodule Cadence.Daemon.SyncLedger do
   # at the top level (not inside `docs`) so the ledger never rewrites the docs
   # state machine, and so skipped nodes (which have no `docs` map) are protected
   # too. P4-T2 replaces this with a follow-up docs child node.
-  defp mark_docs_pushed(ids) do
-    Enum.each(ids, fn node_id ->
+  defp mark_docs_pushed(entries) do
+    Enum.each(entries, fn {node_id, pushed_sha} ->
       case Repo.get(Node, node_id) do
         %Node{} = node ->
-          if node.session_metadata["docs_pushed_sha"] == node.git_commit_sha do
+          sha = pushed_sha || node.git_commit_sha
+
+          if node.session_metadata["docs_pushed_sha"] == sha do
             :ok
           else
-            metadata = Map.put(node.session_metadata, "docs_pushed_sha", node.git_commit_sha)
+            metadata = Map.put(node.session_metadata, "docs_pushed_sha", sha)
 
             case node |> Node.changeset(%{session_metadata: metadata}) |> Repo.update() do
               {:ok, _node} -> :ok
