@@ -1,9 +1,9 @@
 # Cadence — Progress
 
 ## Current Phase
-Phase 4 — unions, proposals & review. 4a-1, 4a-2, 4b, 4b-2, 4c-1, 4c-2, 4c-3 and
-the **demo stack** are complete; 4d (broadcast/pull + daemon convergence) is
-next.
+Phase 4 — unions, proposals & review. 4a-1, 4a-2, 4b, 4b-2, 4c-1, 4c-2, 4c-3,
+**4d-1 (convergence)** and the **demo stack** are complete; 4d-2 (union route)
+is next.
 
 ## Done (summary)
 
@@ -118,6 +118,24 @@ next.
   unknown failures log only their shape. 14 new tests (12 LiveView + 2
   context) — 565 total. Spec §6.6/§6.7/§7.1/§7.2/§7.6/§13 updated; styling
   observations in `docs/ui-notes.md`.
+- **Phase 4d-1 (convergence + pre-4d cleanup)** — approvals now reach daemons
+  and pinned state converges. New `Cadence.Server.SyncNotifier` fans
+  `{:sync_available, project_id}` out to **every project member's**
+  `sync:user:<id>` topic (pushes, every decision, every real pin change);
+  preference writes stay per-acting-user. `Proposals` emits
+  `{:nodes_pushed, ...}` only when a node is actually created or its pin flips
+  (promotions now included), and every committed decision fans out after
+  commit. Pinning bumps `nodes.seq` **after** the pin commits
+  (`Sync.touch_node/1`, raw parameterized SQL) so a concurrent pull cannot
+  advance past an uncommitted token; the daemon applies **only** `pinned` to an
+  existing pulled row (same id/sha/parents) and still treats anything else as a
+  conflict. `result_integrity/3` is now capped by `Portfolio.scan_limits/0`
+  (`:too_large`) and requires the first parent node/commit/tree to be walkable
+  (`:missing_parent`), closing the two approval gaps; resolution re-runs the
+  whole integrity check. Notification and cursor-bump failures are best-effort
+  and logged by shape only. 13 new tests; 578 total. Review verdict PASS WITH
+  WARNINGS; all 3 Mediums fixed (post-commit bump, parent-tree check, approval
+  cursor test) plus the Lows.
 - **Demo stack (P0–P3)** — one `docker compose up` gives a browsable Cadence:
   `postgres:16-alpine` plus a `MIX_ENV=dev` server that migrates, seeds and
   boots only `cadence_server`. Compile-gated `password :demo` strategy
@@ -143,7 +161,7 @@ next.
   §7.4/§11/§12.4/§12.5/§12.6 updates. 15 new tests; compose smoke verified
   (`/health`, `/`, both projects, a proposal token, `/sign-in` all 200;
   anonymous reviews 302; demo sign-in establishes a session).
-- 565 tests green (161 shared + 115 daemon + 289 server);
+- 578 tests green (161 shared + 116 daemon + 301 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
   `AshAuthentication.Info.strategy(User, :demo) == :error`.
@@ -156,17 +174,19 @@ next.
 
 ## Next
 
-1. Execute **4d — broadcast/pull convergence** (spec §10, §13; plan brief in
-   `docs/phase-4-prep.md` §5). Start by fixing the event contract: decide
-   whether `{:nodes_pushed, ...}` is emitted for re-pinned meld nodes and for
-   promotions (today only fresh meld approvals emit it), and which daemons
-   consume `{:proposal_decided, ...}`.
-2. Before 4d wires creation, close the two review deltas that affect it:
-   cap `Proposals.result_integrity/2` under `Portfolio.scan_limits/0` (map
-   overflow to its own error) and teach it about missing parents (the UI
-   already refuses, the context does not).
-3. Then the UI styling pass (incident panel is now styled in the same pass as
-   the portfolio/project/review surfaces; notes in `docs/ui-notes.md`).
+1. Execute **4d-2 — union route** from `.claude/plans/4d-convergence/plan.md`
+   P2-T1..T4: `Cadence.Server.Sync.union/3` delegating to `Melds.propose/3`,
+   `POST /sync/union` with the 201/403/404/422/502 mapping,
+   `Cadence.Shared.Sync.UnionResponse` → `%{proposal_id, proposal_token,
+   status, kind}`, and the server tests (owner/trusted create, viewer/anon
+   denied, invalid parents, LLM failure + incident, no node created).
+2. Then **4d-3** (plan P3-T1..T4): daemon `SyncClient.union/3` +
+   `Sync.propose_union/3`, daemon `POST /union` (503 when sync is off),
+   Neovim `<C-s>` submit with `on_union(selected_ids)`, and the Bypass/API
+   tests.
+3. After 4d: the UI styling/freshness pass (incident panel + review pages;
+   notes in `docs/ui-notes.md`), including the still-open PubSub freshness
+   item.
 
 ## Blocked
 
@@ -175,6 +195,20 @@ next.
 
 ## Spec Deltas / Open Items
 
+- **Pin convergence is best-effort after commit (4d-1)** — the pin is committed
+  first, then `Sync.touch_node/1` bumps `nodes.seq` outside the transaction
+  specifically so a concurrent pull cannot advance past an uncommitted token.
+  If the bump itself fails (DB error), the pin stands but daemons receive it
+  only on the next change/poll; the failure is logged by shape. The same
+  applies to `SyncNotifier.project_changed/1`: the write is already committed,
+  so a notification failure is swallowed after a warning.
+- **Approval integrity now walks twice (4d-1)** — the decision walks the result
+  under the scan caps **and** the first parent's commit/tree/blobs, then the
+  rendered diff walks the parent again. All are capped and approval is not a
+  hot path; consolidate into one walk if that changes.
+- **`{:nodes_pushed, ...}` is "node changed" (4d-1)** — emitted for a created
+  meld node or a pin that actually flipped; an already-pinned target or an
+  idempotent re-decision emits only `proposal_decided`. No consumer yet.
 - **Proposal result scanning has two scopes (4a-2 → 4c-3)** — the rendered diff
   filters sensitive paths and content-scans only visible files, while incident
   resolution re-scans **all** result blobs (a hidden-path filename alone keeps
@@ -205,22 +239,8 @@ next.
 - **`verify_resolution/1` goes beyond plan P2-T10** — it returns
   `integrity_failed` (in addition to `still_risky | unverifiable`) and the UI
   flashes "reject and re-propose". Review finding M1; recorded in spec §6.7.
-- **Approval integrity is uncapped (4c-1)** — `Proposals.result_integrity/2`
-  walks the result with `GitStore.objects_from/2` (no limits, as the approved
-  plan specifies), while the reviewer's diff is capped by
-  `Portfolio.scan_limits/0`. A result above those caps therefore renders as
-  "too large" but is still approvable, and the walk runs inside the decision
-  transaction. **4c-2 made this hot**: the review page now runs that walk on
-  every load (in its async task) alongside two capped walks. Fix before 4d by
-  checking under the scan caps and mapping overflow to its own integrity error.
-- **The UI blocks unreviewable results, the context does not (4c-2)** — the
-  review page hides Approve when `ProposalView.result/3` returns
-  `{:error, :too_large | :missing_objects}` or a quarantined result, but an
-  injected event still reaches `Proposals.approve/3`, whose integrity check only
-  covers the result commit/tree. If a result commit verifies while the first
-  parent is missing, approval would succeed with no diff ever shown. Accepted
-  for now (self-inflicted, `can_decide?` only); closing it means teaching
-  `result_integrity/2` about parent availability.
+  Since 4d-1 it re-runs the whole `result_integrity/3` check, so a
+  `missing_parent` incident is also unclickable.
 - **Demo-only password auth** — resolved 2026-11-05: spec §7.4 records the
   compile-gated `CAD_DEMO_AUTH` strategy, §11 the `bcrypt_elixir` dependency,
   §12.4/§12.5/§12.6 the demo stack and the build-time exception.
@@ -289,13 +309,10 @@ next.
 - **Push-scan alerting is best-effort (4b-2)** — a failed incident insert never
   fails the push; the read-path scan still quarantines the content, but the
   alert is lost until the next event.
-- Proposal JSON representation, line-level diffs, file content, and parent
-  selection are deferred to 4c.
+- Proposal JSON representation and parent selection are not planned; line-level
+  diffs and file content remain deferred to the UI pass.
 - `format_time/1` and `format_flags/2` now exist in three web modules
   (`ProjectLive`, `DAG`, `ProposalHTML`); extraction is deferred tech debt.
-- Web pinning is server-side only; the sync protocol does not propagate pinned
-  flags to daemons. Approval will set `pinned`, but daemons will not see it
-  until 4d resolves propagation. See spec §16.
 - Proposal decisions are resolved (spec §6.6/§16): single approver, promotion
   via `pinned`, public read-only links with filtering/quarantine, and meld
   results materialized at proposal creation.
@@ -339,3 +356,17 @@ plus the Lows (closed authorization assertion, refreshed `can_decide?`, summary
 computed once with an ellipsis, log shape only). Verification: format/compile
 clean in dev and prod, 565 tests green (161 + 115 + 289). Next slice is 4d; the
 UI styling pass follows it, with notes in `docs/ui-notes.md`.
+
+2026-11-05 — **4d-1 (convergence + pre-4d cleanup)** shipped the first session
+of `.claude/plans/4d-convergence/plan.md` (P0 + P1). `SyncNotifier` fans
+`sync_available` to every member on pushes/decisions/pin changes; decisions
+emit `nodes_pushed` only when a node is created or its pin flips (promotions
+included); pinning bumps `nodes.seq` **after** the pin commits and the daemon
+applies only `pinned` on a re-pulled row; `result_integrity/3` is capped
+(`:too_large`) and requires the first parent to be walkable
+(`:missing_parent`), and resolution re-runs it. Review verdict PASS WITH
+WARNINGS; all three Mediums fixed (post-commit cursor bump, parent-tree check,
+approval-cursor tests) plus the Lows (node-changed semantics, full integrity on
+resolve, locked pin compare, non-raising `touch_node`, best-effort fan-out,
+per-topic notification tests, §16 resolved). Verification: format + dev/prod
+compile clean, 578 tests green (161 + 116 + 301). Next: 4d-2 (union route).

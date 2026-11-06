@@ -378,9 +378,15 @@ defmodule Cadence.ServerWeb.ReviewLiveTest do
       {:ok, view, _html} = live(signed_conn(conn, owner), "/p/demo/reviews/#{proposal.id}")
       html = render_async(view)
 
-      assert html =~ "the result is not available yet"
+      assert html =~ "The meld result is not available yet."
+      assert html =~ "missing_parent"
       refute html =~ "Approve"
       assert html =~ "Reject"
+
+      refused = render_click(view, "approve")
+
+      assert refused =~ "could not be verified"
+      assert Repo.get!(Cadence.Server.Proposal, proposal.id).status == :pending
     end
   end
 
@@ -671,7 +677,7 @@ defmodule Cadence.ServerWeb.ReviewLiveTest do
       render_async(view)
 
       clicked = render_click(view, "resolve_incident", %{"id" => incident.id})
-      assert clicked =~ "still does not match the proposal"
+      assert clicked =~ "no longer verifiable"
 
       assert Repo.get!(Cadence.Server.Incident, incident.id).status == :open
     end

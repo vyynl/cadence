@@ -24,6 +24,7 @@ defmodule Cadence.Server.ProposalView do
     Portfolio,
     ProjectGit,
     Proposal,
+    Proposals,
     PublicContent,
     Repo
   }
@@ -103,8 +104,9 @@ defmodule Cadence.Server.ProposalView do
 
   - the result scans clean under the §7.6 caps — a remaining secret pattern or
     sensitive path is `{:error, :still_risky}`;
-  - the result commit's tree still equals `result_tree_sha`, the same invariant
-    approval enforces. An incident opened by approval integrity therefore
+  - the result commit's tree still equals `result_tree_sha` and the first
+    parent is still reviewable, the same invariants approval enforces
+    (`result_integrity/3`). An incident opened by approval integrity therefore
     cannot be acknowledged away while the mismatch holds
     (`{:error, :integrity_failed}`).
 
@@ -140,10 +142,10 @@ defmodule Cadence.Server.ProposalView do
 
     case walk(repo, commit_sha) do
       {:ok, blobs} ->
-        cond do
-          PublicContent.quarantine?(blobs) -> {:error, :still_risky}
-          result_tree_matches?(repo, commit_sha, proposal.result_tree_sha) -> :ok
-          true -> {:error, :integrity_failed}
+        if PublicContent.quarantine?(blobs) do
+          {:error, :still_risky}
+        else
+          resolution_integrity(project_id, proposal)
         end
 
       {:error, _reason} ->
@@ -151,10 +153,15 @@ defmodule Cadence.Server.ProposalView do
     end
   end
 
-  defp result_tree_matches?(repo, commit_sha, result_tree_sha) do
-    case GitStore.read_commit(repo, commit_sha) do
-      %{tree: tree} -> tree == result_tree_sha
-      nil -> false
+  # Resolving must re-assert everything approval enforces, or the incident can
+  # be cleared while the result remains unapprovable (resolve → approve →
+  # reopen loop). Unscannable/over-cap maps to `unverifiable`; a structural
+  # mismatch maps to `integrity_failed`.
+  defp resolution_integrity(project_id, proposal) do
+    case Proposals.result_integrity(project_id, proposal) do
+      :ok -> :ok
+      {:error, reason} when reason in [:too_large, :missing_objects] -> {:error, :unverifiable}
+      {:error, _reason} -> {:error, :integrity_failed}
     end
   end
 

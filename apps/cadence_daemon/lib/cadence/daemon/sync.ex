@@ -601,10 +601,25 @@ defmodule Cadence.Daemon.Sync do
 
       %Node{} = existing ->
         if same_node?(existing, changeset, project_id) do
-          :ok
+          apply_mutable(existing, changeset)
         else
           Repo.rollback({:node_conflict, id})
         end
+    end
+  end
+
+  # Only `pinned` is server-mutable after creation. Everything else about a
+  # snapshot node is immutable; a difference is still a conflict.
+  defp apply_mutable(existing, changeset) do
+    pinned = Ecto.Changeset.get_field(changeset, :pinned)
+
+    if existing.pinned == pinned do
+      :ok
+    else
+      case existing |> Ecto.Changeset.change(pinned: pinned) |> Repo.update() do
+        {:ok, _node} -> :ok
+        {:error, changeset} -> Repo.rollback({:invalid_node, changeset.errors})
+      end
     end
   end
 

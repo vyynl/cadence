@@ -276,7 +276,7 @@ defmodule Cadence.ServerWeb.ReviewLive.Index do
     put_flash(
       socket,
       :error,
-      "The stored result still does not match the proposal, so the incident stays open. Reject it and re-propose."
+      "The stored result is no longer verifiable against the proposal, so the incident stays open. Reject it and re-propose."
     )
   end
 

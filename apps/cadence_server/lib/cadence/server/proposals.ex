@@ -20,16 +20,31 @@ defmodule Cadence.Server.Proposals do
   unverifiable result cannot be approved until that incident is resolved.
 
   Successful decisions broadcast `{:proposal_decided, project_id, proposal_id,
-  status}`; a fresh meld approval also broadcasts `{:nodes_pushed, project_id,
-  [node_id]}` for the node ids a consumer should refresh (a new node or a
-  previously existing one that was just pinned). An idempotent re-decision
-  repeats `proposal_decided` with the stored status. Nothing is broadcast when
-  a decision is refused.
+  status}`. Any approval that touches a node also broadcasts
+  `{:nodes_pushed, project_id, [node_id]}` — a new meld node, a reused meld
+  node re-pinned, or a promotion target whose pin changed. Every successful
+  decision additionally wakes each project member's daemon through
+  `Cadence.Server.SyncNotifier` (`{:sync_available, project_id}`); pinning
+  bumps the node's pull cursor so the change is actually pulled. An idempotent
+  re-decision repeats `proposal_decided` with the stored status. Nothing is
+  broadcast when a decision is refused.
   """
 
   import Ecto.Query
 
-  alias Cadence.Server.{Authorization, Incidents, Portfolio, ProjectGit, Proposal, Repo}
+  require Logger
+
+  alias Cadence.Server.{
+    Authorization,
+    Incidents,
+    Portfolio,
+    ProjectGit,
+    Proposal,
+    Repo,
+    Sync,
+    SyncNotifier
+  }
+
   alias Cadence.Shared.{GitStore, Meld, Node, Project, UUID}
 
   @docs_state :pending
@@ -127,35 +142,78 @@ defmodule Cadence.Server.Proposals do
 
   Approval acts on `result_tree_sha`, while the reviewer saw the diff built
   from `meld_commit_sha`; this check closes that gap. The commit must exist,
-  be a commit, and every object reachable from it must be present, and its
-  tree must equal the proposal's `result_tree_sha`.
+  be a commit, its tree must be walkable under the §7.6 scan caps (an
+  over-cap result is `:too_large`), every reachable object must be present,
+  its tree must equal the proposal's `result_tree_sha`, and the first parent
+  node and commit must still exist (`:missing_parent`) — a result whose diff
+  could never have been shown is not approvable.
 
   `project_id` must be the project that owns the proposal: it selects the
   object store. Call it with a proposal obtained from `get/3` or
   `get_by_token/1`; passing a client-controlled `project_id` would make it an
   object-store probe. Promotions carry no result and are always `:ok`. Never
   raises, even on a corrupt object store.
-  """
-  @spec result_integrity(Ecto.UUID.t() | String.t(), Proposal.t()) ::
-          :ok | {:error, :missing_objects | :tree_mismatch | :not_a_commit}
-  def result_integrity(_project_id, %Proposal{kind: :promotion}), do: :ok
 
-  def result_integrity(project_id, %Proposal{kind: :meld} = proposal) do
-    with {:ok, commit_sha} <- cast_sha(proposal.meld_commit_sha) do
-      verify_result(project_id, commit_sha, proposal.result_tree_sha)
+  Options: `:max_files` / `:max_bytes` override the scan caps (tests only).
+  """
+  @spec result_integrity(Ecto.UUID.t() | String.t(), Proposal.t(), keyword()) ::
+          :ok
+          | {:error,
+             :missing_objects | :tree_mismatch | :not_a_commit | :too_large | :missing_parent}
+  def result_integrity(project_id, proposal, opts \\ [])
+
+  def result_integrity(_project_id, %Proposal{kind: :promotion}, _opts), do: :ok
+
+  def result_integrity(project_id, %Proposal{kind: :meld} = proposal, opts) do
+    with {:ok, commit_sha} <- cast_sha(proposal.meld_commit_sha),
+         :ok <- verify_result(project_id, commit_sha, proposal.result_tree_sha, opts),
+         :ok <- verify_first_parent(project_id, proposal) do
+      :ok
     end
   end
 
-  def result_integrity(_project_id, _proposal), do: {:error, :missing_objects}
+  def result_integrity(_project_id, _proposal, _opts), do: {:error, :missing_objects}
+
+  # The reviewer's diff walks the first parent under the scan caps; a missing
+  # node, commit, tree, or blob means the result was never reviewable, so
+  # approval fails closed.
+  defp verify_first_parent(project_id, %Proposal{parent_ids: [first | _rest]}) do
+    repo = ProjectGit.open(project_id)
+    limits = Portfolio.scan_limits()
+
+    with %Node{git_commit_sha: commit_sha} <-
+           Repo.get_by(Node, id: first, project_id: project_id),
+         {:ok, _blobs} <-
+           GitStore.walk_blobs(repo, commit_sha,
+             max_files: limits.max_files,
+             max_bytes: limits.max_bytes
+           ) do
+      :ok
+    else
+      _other -> {:error, :missing_parent}
+    end
+  rescue
+    _error -> {:error, :missing_parent}
+  catch
+    _kind, _value -> {:error, :missing_parent}
+  end
+
+  defp verify_first_parent(_project_id, %Proposal{}), do: {:error, :missing_parent}
 
   # The store holds untrusted bytes: a structurally corrupt but decompressible
   # object can raise inside the decoder. Integrity is a fence, so anything
   # unexpected fails closed as "objects missing" instead of escaping.
-  defp verify_result(project_id, commit_sha, result_tree_sha) do
+  defp verify_result(project_id, commit_sha, result_tree_sha, opts) do
     repo = ProjectGit.open(project_id)
+    limits = Portfolio.scan_limits()
 
-    case GitStore.objects_from(repo, commit_sha) do
-      {:ok, _objects} -> check_result_tree(repo, commit_sha, result_tree_sha)
+    case GitStore.walk_blobs(repo, commit_sha,
+           max_files: Keyword.get(opts, :max_files, limits.max_files),
+           max_bytes: Keyword.get(opts, :max_bytes, limits.max_bytes)
+         ) do
+      {:ok, _blobs} -> check_result_tree(repo, commit_sha, result_tree_sha)
+      {:error, :too_many_files} -> {:error, :too_large}
+      {:error, :too_many_bytes} -> {:error, :too_large}
       {:error, :not_a_commit} -> {:error, :not_a_commit}
       {:error, _reason} -> {:error, :missing_objects}
     end
@@ -221,8 +279,12 @@ defmodule Cadence.Server.Proposals do
          {:ok, _project} <- fetch_project(project_id),
          {:ok, _membership} <- authorize_decider(actor, project_id) do
       case Repo.transaction(fn -> transition(actor, project_id, proposal_id, decision) end) do
-        {:ok, {proposal, node_id}} ->
-          broadcast_decision(proposal, node_id)
+        {:ok, {proposal, attachment}} ->
+          # The pin is committed; bumping the pull cursor afterwards (not inside
+          # the transaction) means a concurrent pull can never advance past a
+          # sequence value that was allocated before this commit.
+          touch_pin(attachment)
+          broadcast_decision(proposal, attachment)
           {:ok, proposal}
 
         {:error, {:integrity_failed, reason}} ->
@@ -235,8 +297,11 @@ defmodule Cadence.Server.Proposals do
     end
   end
 
-  # Returns `{proposal, attached_node_id | nil}`. Only a fresh meld approval
-  # attaches a node; idempotent re-decisions and rejections attach nothing.
+  # Returns `{proposal, attachment | nil}` where an attachment is
+  # `%{node_id, created?, pin_changed?}`. Only a fresh meld approval creates a
+  # node; a reused meld node or a promotion reports whether the pin actually
+  # flipped, so `nodes_pushed` means "node changed" and no redundant cursor
+  # bumps happen. Idempotent re-decisions and rejections attach nothing.
   #
   # The project row is locked first so concurrent approvals of two proposals
   # for the same result cannot both miss `existing_meld_node/1` and insert the
@@ -280,8 +345,8 @@ defmodule Cadence.Server.Proposals do
     case result_integrity(proposal.project_id, proposal) do
       :ok ->
         case materialize(proposal) do
-          {:ok, node_id} ->
-            {decide_status(proposal, actor, :approved), node_id}
+          {:ok, attachment} ->
+            {decide_status(proposal, actor, :approved), attachment}
 
           {:error, reason} ->
             Repo.rollback(reason)
@@ -295,7 +360,9 @@ defmodule Cadence.Server.Proposals do
   defp materialize(%Proposal{kind: :meld} = proposal), do: attach_meld_node(proposal)
 
   defp materialize(%Proposal{kind: :promotion} = proposal) do
-    with :ok <- pin_target_node(proposal), do: {:ok, nil}
+    with {:ok, node, pin_changed?} <- pin_target_node(proposal) do
+      {:ok, %{node_id: node.id, created?: false, pin_changed?: pin_changed?}}
+    end
   end
 
   # The commit SHA is the node's identity (D7), so a second proposal for the
@@ -316,14 +383,14 @@ defmodule Cadence.Server.Proposals do
         }
 
         case %Node{} |> Node.changeset(attrs) |> Repo.insert() do
-          {:ok, node} -> {:ok, node.id}
+          {:ok, node} -> {:ok, %{node_id: node.id, created?: true, pin_changed?: false}}
           {:error, %Ecto.Changeset{}} -> {:error, :invalid_result_node}
         end
 
       node ->
         with :ok <- ensure_node_approvable(proposal.project_id, node),
-             :ok <- pin_node(node) do
-          {:ok, node.id}
+             {:ok, pin_changed?} <- pin_node(node) do
+          {:ok, %{node_id: node.id, created?: false, pin_changed?: pin_changed?}}
         end
     end
   end
@@ -334,7 +401,10 @@ defmodule Cadence.Server.Proposals do
         {:error, :not_found}
 
       node ->
-        with :ok <- ensure_node_approvable(proposal.project_id, node), do: pin_node(node)
+        with :ok <- ensure_node_approvable(proposal.project_id, node),
+             {:ok, pin_changed?} <- pin_node(node) do
+          {:ok, node, pin_changed?}
+        end
     end
   end
 
@@ -345,13 +415,30 @@ defmodule Cadence.Server.Proposals do
     if Incidents.blocking_node?(project_id, node.id), do: {:error, :blocked}, else: :ok
   end
 
+  # Pinned is server-authoritative and mutable. Returns whether the value
+  # actually changed; the post-commit `touch_pin/1` bumps the pull cursor.
+  defp pin_node(%Node{pinned: true}), do: {:ok, false}
+
   defp pin_node(node) do
-    node
-    |> Ecto.Changeset.change(pinned: true)
-    |> Repo.update()
-    |> case do
-      {:ok, _node} -> :ok
+    case node |> Ecto.Changeset.change(pinned: true) |> Repo.update() do
+      {:ok, _updated} -> {:ok, true}
       {:error, %Ecto.Changeset{}} -> {:error, :invalid_result_node}
+    end
+  end
+
+  # Best-effort: the decision is already committed, so a failed cursor bump
+  # must not fail the approval. Daemons converge on the next change or poll.
+  defp touch_pin(nil), do: :ok
+  defp touch_pin(%{pin_changed?: false}), do: :ok
+
+  defp touch_pin(%{node_id: node_id}) do
+    case Sync.touch_node(node_id) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("could not bump the pull cursor for node #{node_id}: #{inspect(reason)}")
+        :ok
     end
   end
 
@@ -380,7 +467,7 @@ defmodule Cadence.Server.Proposals do
     end
   end
 
-  defp broadcast_decision(proposal, node_id) do
+  defp broadcast_decision(proposal, attachment) do
     topic = "project:#{proposal.project_id}"
 
     Phoenix.PubSub.broadcast(
@@ -389,16 +476,26 @@ defmodule Cadence.Server.Proposals do
       {:proposal_decided, proposal.project_id, proposal.id, proposal.status}
     )
 
-    if node_id do
+    if node_changed?(attachment) do
       Phoenix.PubSub.broadcast(
         Cadence.Server.PubSub,
         topic,
-        {:nodes_pushed, proposal.project_id, [node_id]}
+        {:nodes_pushed, proposal.project_id, [attachment.node_id]}
       )
     end
 
+    # Every decision wakes each member's daemon: a meld adds a node, a
+    # promotion changes `pinned`, and a rejection changes review state only
+    # (a harmless extra poll). A refused decision never reaches this function.
+    SyncNotifier.project_changed(proposal.project_id)
+
     :ok
   end
+
+  defp node_changed?(nil), do: false
+  defp node_changed?(%{created?: true}), do: true
+  defp node_changed?(%{pin_changed?: true}), do: true
+  defp node_changed?(_attachment), do: false
 
   # The incident is outside the rolled-back transaction on purpose: it is the
   # record that keeps an unverifiable result unapprovable (spec §6.7).

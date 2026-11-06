@@ -13,7 +13,7 @@ defmodule Cadence.Server.Sync do
 
   import Ecto.Query
 
-  alias Cadence.Server.{NodeScans, ProjectGit, Repo}
+  alias Cadence.Server.{NodeScans, ProjectGit, Repo, SyncNotifier}
   alias Cadence.Shared.{GitStore, Membership, Node, Project, UUID}
   alias Cadence.Shared.Sync.NodeCodec
 
@@ -38,7 +38,7 @@ defmodule Cadence.Server.Sync do
       # Post-commit and best-effort: alerting must never fail the push.
       NodeScans.scan_nodes(project_id, created_nodes)
       broadcast(project_id, Enum.map(mappings, & &1.cloud_id))
-      broadcast_sync_available(user.id, project_id)
+      SyncNotifier.project_changed(project_id)
       {:ok, %{mappings: mappings}}
     end
   end
@@ -412,7 +412,7 @@ defmodule Cadence.Server.Sync do
     case membership |> Membership.changeset(attrs) |> Repo.update() do
       {:ok, membership} ->
         broadcast_preferences(project_id, user.id)
-        broadcast_sync_available(user.id, project_id)
+        SyncNotifier.user_changed(user.id, project_id)
         {:ok, %{preferences: preferences_json(membership)}}
 
       {:error, _changeset} ->
@@ -462,12 +462,31 @@ defmodule Cadence.Server.Sync do
 
   defp parse_updated_at(_value), do: {:error, :invalid_updated_at}
 
-  defp broadcast_sync_available(user_id, project_id) do
-    Phoenix.PubSub.broadcast(
-      Cadence.Server.PubSub,
-      "sync:user:#{user_id}",
-      {:sync_available, project_id}
-    )
+  @doc """
+  Bumps a node's pull cursor (`nodes.seq`) after a mutable field changed.
+
+  Pull is cursor-based and `seq` is otherwise immutable. `pinned` is
+  server-authoritative and mutable, so a pin/unpin must bump `seq` or members'
+  daemons never receive the row again (spec §10.3). Reuses the cursor instead
+  of adding an `updated_at` column. Scoped by node id; never raises on a bad
+  id.
+  """
+  @spec touch_node(Ecto.UUID.t() | String.t()) :: :ok | {:error, :not_found | :failed}
+  def touch_node(node_id) do
+    case uuid(node_id) do
+      {:ok, node_id} ->
+        case Repo.query(
+               "UPDATE nodes SET seq = nextval(pg_get_serial_sequence('nodes', 'seq')) WHERE id = $1",
+               [Ecto.UUID.dump!(node_id)]
+             ) do
+          {:ok, %{num_rows: 1}} -> :ok
+          {:ok, _result} -> {:error, :not_found}
+          {:error, _reason} -> {:error, :failed}
+        end
+
+      {:error, _reason} ->
+        {:error, :not_found}
+    end
   end
 
   defp broadcast_preferences(project_id, user_id) do

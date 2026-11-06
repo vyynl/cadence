@@ -329,15 +329,20 @@ defmodule Cadence.ServerWeb.SyncNodesTest do
              |> json_response(500)
   end
 
-  test "broadcasts successful pushes", %{
+  test "broadcasts successful pushes to every member's daemon", %{
     conn: conn,
     user: user,
     project: project,
     plaintext: plaintext
   } do
     project_id = project.id
+    member = seed_user("member")
+    insert_membership(member, project, :viewer)
+
     Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "project:#{project_id}")
-    Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "sync:user:#{user.id}")
+    subscribe_as(user.id)
+    subscribe_as(member.id)
+
     dag = build_dag(tmp_dir())
 
     payload = %{"nodes" => [node_payload(project, dag.root_id, dag.root, [], dag.repo, "root")]}
@@ -349,7 +354,48 @@ defmodule Cadence.ServerWeb.SyncNodesTest do
              |> json_response(200)
 
     assert_receive {:nodes_pushed, ^project_id, [^cloud_id]}
-    assert_receive {:sync_available, ^project_id}
+    assert_receive {user_id, {:sync_available, ^project_id}}
+    assert user_id == user.id
+    assert_receive {member_id, {:sync_available, ^project_id}}
+    assert member_id == member.id
+    refute_receive {_user_id, {:sync_available, _project_id}}
+  end
+
+  test "pinning a node bumps the cursor and redelivers it on the next pull", %{
+    conn: conn,
+    user: user,
+    project: project,
+    plaintext: plaintext
+  } do
+    dag = build_dag(tmp_dir())
+
+    payload = %{"nodes" => [node_payload(project, dag.root_id, dag.root, [], dag.repo, "root")]}
+
+    assert %{"mappings" => _mappings} =
+             conn
+             |> authed(plaintext)
+             |> post_json("/sync/nodes", payload)
+             |> json_response(200)
+
+    pulled = authed_conn(plaintext) |> get("/sync/nodes?project_id=#{project.id}")
+    assert %{"nodes" => [%{"pinned" => false}], "cursor" => cursor} = json_response(pulled, 200)
+
+    Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "sync:user:#{user.id}")
+
+    assert {:ok, %{pinned: true}} =
+             Cadence.Server.ProjectAdmin.set_pinned(project.id, dag.root_id, true)
+
+    assert_receive {:sync_available, project_id}
+    assert project_id == project.id
+
+    again =
+      authed_conn(plaintext)
+      |> get("/sync/nodes?project_id=#{project.id}&since=#{cursor}")
+
+    assert %{"nodes" => [node], "cursor" => next_cursor} = json_response(again, 200)
+    assert node["id"] == dag.root_id
+    assert node["pinned"] == true
+    assert next_cursor != cursor
   end
 
   describe "push scan" do
@@ -508,6 +554,22 @@ defmodule Cadence.ServerWeb.SyncNodesTest do
     conn
     |> put_req_header("content-type", "application/json")
     |> post(path, Jason.encode!(body))
+  end
+
+  defp subscribe_as(user_id) do
+    parent = self()
+    ref = make_ref()
+
+    spawn_link(fn ->
+      Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "sync:user:#{user_id}")
+      send(parent, {ref, :subscribed})
+
+      receive do
+        message -> send(parent, {user_id, message})
+      end
+    end)
+
+    assert_receive {^ref, :subscribed}
   end
 
   defp seed_user(label) do

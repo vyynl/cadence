@@ -123,6 +123,24 @@ defmodule Cadence.Daemon.SyncTest do
     assert length(Nodes.list(project.id)) == 1
   end
 
+  test "pull applies a server-side pin to an existing node", %{
+    project: project,
+    server: server
+  } do
+    {wire, commit_sha, _expected} = remote_node(project.id)
+    local = insert_node(project.id, wire["id"], commit_sha, [])
+    refute local.pinned
+
+    TestSyncServer.seed_node(server, project.id, Map.put(wire, "pinned", true))
+    configure_sync()
+
+    assert :ok = Sync.sync(project.id)
+
+    # Only `pinned` is server-mutable; the snapshot metadata stays local.
+    assert %{pinned: true, git_commit_sha: ^commit_sha, message: "local"} =
+             Repo.get(Node, wire["id"])
+  end
+
   test "pull conflict aborts before advancing the cursor", %{
     project: project,
     server: server

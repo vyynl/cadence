@@ -1,6 +1,8 @@
 defmodule Cadence.Server.ProjectAdminTest do
   use ExUnit.Case, async: false
 
+  import Ecto.Query
+
   alias Cadence.Server.{ProjectAdmin, Repo}
   alias Cadence.Shared.{Node, Project}
 
@@ -22,6 +24,22 @@ defmodule Cadence.Server.ProjectAdminTest do
     refute updated.pinned
   end
 
+  test "pinning and unpinning bump the pull cursor; a no-op does not" do
+    project = insert_project()
+    node = insert_node(project)
+    original = seq(node.id)
+
+    assert {:ok, _pinned} = ProjectAdmin.set_pinned(project.id, node.id, true)
+    pinned_seq = seq(node.id)
+    assert pinned_seq > original
+
+    assert {:ok, _again} = ProjectAdmin.set_pinned(project.id, node.id, true)
+    assert seq(node.id) == pinned_seq
+
+    assert {:ok, _unpinned} = ProjectAdmin.set_pinned(project.id, node.id, false)
+    assert seq(node.id) > pinned_seq
+  end
+
   test "rejects nodes outside the project and invalid flags" do
     project = insert_project()
     other = insert_project("other")
@@ -30,6 +48,10 @@ defmodule Cadence.Server.ProjectAdminTest do
     assert ProjectAdmin.set_pinned(project.id, node.id, true) == {:error, :not_found}
     assert ProjectAdmin.set_pinned(project.id, "bad-id", true) == {:error, :not_found}
     assert ProjectAdmin.set_pinned(project.id, node.id, :yes) == {:error, :not_found}
+  end
+
+  defp seq(node_id) do
+    Repo.one(from(n in Node, where: n.id == ^node_id, select: fragment("seq")))
   end
 
   defp insert_project(slug \\ "admin") do

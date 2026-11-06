@@ -506,21 +506,27 @@ human approves it.
   that locks the project row and then the proposal row, so concurrent approvals
   of two proposals for the same result cannot attach two nodes. The stored
   result is verified before anything changes: for a meld the result commit must
-  exist, every object reachable from it must be present, and its tree must equal
-  the proposal's `result_tree_sha`; a promotion has no result and always
-  passes. A failed check rolls the decision back unchanged (status stays
-  `pending`), opens a critical `scan_incomplete` proposal incident, and reports
-  `integrity_failed`; an unverifiable result is never approvable. A meld
-  approval then attaches the node carrying the result commit — reusing the
-  existing node for that commit when there is one — with `parents =
-  parent_ids`, flags `[in-progress]`, `pinned: true`, and `docs_state: pending`;
-  a promotion approval pins its target node. Both fail closed (`blocked`) when
-  an open critical node incident quarantines the node. Approval never sets
-  `functioning` (§3.1): approval moves the line, validation sets the flag.
-- **Decision broadcast (4c)** — a successful decision broadcasts
-  `{:proposal_decided, project_id, proposal_id, status}`; a fresh meld approval
-  also broadcasts `{:nodes_pushed, project_id, [node_id]}`. Refused decisions
-  broadcast nothing. Phase 4d owns the consumers.
+  exist, its tree must be walkable under the §7.6 scan caps (an over-cap result
+  is refused rather than half-checked), every object reachable from the result
+  tree must be present, its tree must equal the proposal's `result_tree_sha`, and
+  the first parent node and commit must still exist (a result whose diff could
+  never have been shown is not approvable); a promotion has no result and always
+  passes. A failed check rolls the decision back unchanged (status stays `pending`), opens
+  a critical `scan_incomplete` proposal incident, and reports `integrity_failed`;
+  an unverifiable result is never approvable. A meld approval then attaches the
+  node carrying the result commit — reusing the existing node for that commit
+  when there is one — with `parents = parent_ids`, flags `[in-progress]`,
+  `pinned: true`, and `docs_state: pending`; a promotion approval pins its
+  target node. Both fail closed (`blocked`) when an open critical node incident
+  quarantines the node. Approval never sets `functioning` (§3.1): approval moves
+  the line, validation sets the flag.
+- **Decision broadcast (4c/4d)** — a successful decision broadcasts
+  `{:proposal_decided, project_id, proposal_id, status}`. An approval that
+  creates a node — or flips its `pinned` value — also broadcasts
+  `{:nodes_pushed, project_id, [node_id]}`; approving an already-pinned target
+  emits no node-changed event. Every successful decision additionally wakes each
+  project member's daemon with `{:sync_available, project_id}` (§10.5). Refused
+  decisions broadcast nothing. Phase 4d owns the consumers.
 - **Guards** — a meld is still never auto-promoted to `functioning` (§3.1);
   approval promotes the *line*, validation sets the *flag*. Critical incidents
   (§6.7) block approval until resolved.
@@ -996,6 +1002,14 @@ or `config/`.
   by it and capped by `CAD_SYNC_PULL_LIMIT`.
 - Local daemon fetches and merges into its local Git repo.
 - Updates active heads and session pointer from the user's synced prefs.
+- Node snapshots are immutable, but `pinned` is server-authoritative and
+  mutable. A pin/unpin bumps that node's `nodes.seq` **after** the pin commits
+  (a `nextval` allocated inside a transaction is not visible until commit, so
+  an earlier bump could sit below a cursor a concurrent pull already advanced
+  past). The next pull redelivers the row; the daemon applies **only** `pinned`
+  to an existing node (same id, commit, parents) and treats any other
+  difference as a conflict. A failed cursor bump is logged and the pin stands;
+  redelivery then waits for the next change or poll.
 
 ### 10.4 Conflict handling
 
@@ -1022,12 +1036,15 @@ an unknown node is ignored (the local pointer is retained). Applied remote
 versions are recorded as both remote and pushed so they are not echoed back.
 
 The server broadcasts `{:sync_available, project_id}` after successful node
-pushes and accepted preference writes. Daemons connect to `/socket/websocket`,
-authenticate with an `x-cadence-token` header (never a query parameter), and join
-`sync:user:<server_user_id>`. The channel is a **latency accelerator only**: it
-carries a `sync_available` hint with `%{project_id}`, never DAG or preference
-state, and polling remains the correctness fallback. `CAD_SYNC_CHANNEL_ENABLED=false`
-disables the socket without disabling sync.
+pushes, every proposal decision, and every server-side pin change, fanning out
+to **every project member's** user topic (daemons only join their own); an
+accepted preference write notifies the acting user. Daemons connect to
+`/socket/websocket`, authenticate with an `x-cadence-token` header (never a
+query parameter), and join `sync:user:<server_user_id>`. The channel is a
+**latency accelerator only**: it carries a `sync_available` hint with
+`%{project_id}`, never DAG or preference state, and polling remains the
+correctness fallback. `CAD_SYNC_CHANNEL_ENABLED=false` disables the socket
+without disabling sync.
 
 ### 10.6 Message formats
 
@@ -1596,10 +1613,12 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       raw toggle for the selected node. It resets on node change; viewers and
       anonymous visitors cannot enable it. Auditing the reveal action is
       deferred.
-- [ ] **Pin propagation to daemons:** web pin/unpin is currently server-side
-      only. The sync protocol pulls/inserts nodes but does not carry pinned-flag
-      updates back to the daemon, so a web pin changes the public preview but not
-      the local picker's pinned state. Revisit in a later sync-protocol slice.
+- [x] **Pin propagation to daemons:** resolved in 4d-1 — a pin/unpin bumps
+      the node's `nodes.seq` after the update commits, and the daemon applies
+      only `pinned` to an existing node on pull (§10.3, §10.5). A pin change
+      also wakes every member's daemon via `sync_available`. If the cursor bump
+      itself fails, the change is not redelivered until the next change/poll;
+      the pin is still committed.
 - [ ] **Secret filter overrides:** per-project allowlists or custom patterns for
       legitimate files that trip the scanner. Deferred until false positives are
       observed.

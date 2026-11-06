@@ -18,7 +18,7 @@ defmodule Cadence.Server.ProposalsTest do
       owner = Ecto.UUID.generate()
       project = project(owner)
       membership(project, owner, :owner)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
 
       assert {:ok, proposal} =
                Proposals.create(actor(owner), meld_attrs(project, [parent_a, parent_b]))
@@ -44,7 +44,7 @@ defmodule Cadence.Server.ProposalsTest do
       membership(project, owner, :owner)
       membership(project, trusted, :trusted)
       membership(project, viewer, :viewer)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
       attrs = meld_attrs(project, [parent_a, parent_b])
 
       assert {:ok, _proposal} = Proposals.create(actor(trusted), attrs)
@@ -66,7 +66,7 @@ defmodule Cadence.Server.ProposalsTest do
       owner = Ecto.UUID.generate()
       project = project(owner)
       membership(project, owner, :owner)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
 
       assert {:error, %Ecto.Changeset{}} =
                Proposals.create(actor(owner), %{project_id: project.id, kind: :meld})
@@ -158,7 +158,7 @@ defmodule Cadence.Server.ProposalsTest do
       other = project(Ecto.UUID.generate())
       membership(project, owner, :owner)
       membership(project, viewer, :viewer)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
 
       {:ok, proposal} = Proposals.create(actor(owner), meld_attrs(project, [parent_a, parent_b]))
 
@@ -187,7 +187,7 @@ defmodule Cadence.Server.ProposalsTest do
       membership(project, owner, :owner)
       membership(project, viewer, :viewer)
       membership(other, owner, :owner)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
 
       {:ok, proposal} =
         Proposals.create(actor(owner), meld_attrs(project, [parent_a, parent_b]))
@@ -241,6 +241,28 @@ defmodule Cadence.Server.ProposalsTest do
       assert Proposals.result_integrity(project.id, %Proposal{kind: :meld}) ==
                {:error, :not_a_commit}
     end
+
+    test "a result above the scan caps fails closed as too_large" do
+      project = project(Ecto.UUID.generate())
+      proposal = meld_struct(project, result(project))
+
+      assert Proposals.result_integrity(project.id, proposal) == :ok
+
+      assert Proposals.result_integrity(project.id, proposal, max_files: 0) ==
+               {:error, :too_large}
+    end
+
+    test "a missing first parent is not approvable" do
+      project = project(Ecto.UUID.generate())
+      proposal = meld_struct(project, result(project))
+
+      assert Proposals.result_integrity(project.id, proposal) == :ok
+
+      [first | _rest] = proposal.parent_ids
+      Repo.delete!(Repo.get!(Node, first))
+
+      assert Proposals.result_integrity(project.id, proposal) == {:error, :missing_parent}
+    end
   end
 
   describe "approve/3" do
@@ -254,7 +276,7 @@ defmodule Cadence.Server.ProposalsTest do
       membership(project, trusted, :trusted)
       membership(project, approver, :trusted, %{approver: true})
       membership(project, viewer, :viewer)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
 
       {:ok, proposal_a} =
         Proposals.create(actor(owner), meld_attrs(project, [parent_a, parent_b]))
@@ -283,7 +305,7 @@ defmodule Cadence.Server.ProposalsTest do
       owner = Ecto.UUID.generate()
       project = project(owner)
       membership(project, owner, :owner)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
       result = result(project)
 
       {:ok, proposal} =
@@ -312,7 +334,7 @@ defmodule Cadence.Server.ProposalsTest do
       owner = Ecto.UUID.generate()
       project = project(owner)
       membership(project, owner, :owner)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
       result = result(project)
 
       {:ok, proposal} =
@@ -337,7 +359,7 @@ defmodule Cadence.Server.ProposalsTest do
       owner = Ecto.UUID.generate()
       project = project(owner)
       membership(project, owner, :owner)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
       attrs = meld_attrs(project, [parent_a, parent_b])
 
       {:ok, first} = Proposals.create(actor(owner), attrs)
@@ -356,7 +378,7 @@ defmodule Cadence.Server.ProposalsTest do
       owner = Ecto.UUID.generate()
       project = project(owner)
       membership(project, owner, :owner)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
       attrs = meld_attrs(project, [parent_a, parent_b])
       existing = node_fixture(project, %{git_commit_sha: attrs.meld_commit_sha, pinned: false})
       {:ok, proposal} = Proposals.create(actor(owner), attrs)
@@ -372,7 +394,7 @@ defmodule Cadence.Server.ProposalsTest do
       owner = Ecto.UUID.generate()
       project = project(owner)
       membership(project, owner, :owner)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
       attrs = meld_attrs(project, [parent_a, parent_b])
       existing = node_fixture(project, %{git_commit_sha: attrs.meld_commit_sha, pinned: false})
       {:ok, incident} = critical_node_incident(project, existing)
@@ -409,7 +431,7 @@ defmodule Cadence.Server.ProposalsTest do
       owner = Ecto.UUID.generate()
       project = project(owner)
       membership(project, owner, :owner)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
       result = result(project)
 
       {:ok, proposal} =
@@ -436,7 +458,7 @@ defmodule Cadence.Server.ProposalsTest do
       owner = Ecto.UUID.generate()
       project = project(owner)
       membership(project, owner, :owner)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
 
       {:ok, proposal} =
         Proposals.create(
@@ -453,11 +475,81 @@ defmodule Cadence.Server.ProposalsTest do
       assert project_nodes(project) |> length() == 2
     end
 
+    test "a missing first parent fails approval and stays pending" do
+      owner = Ecto.UUID.generate()
+      project = project(owner)
+      membership(project, owner, :owner)
+      [parent_a, parent_b] = meld_parents(project)
+
+      {:ok, proposal} =
+        Proposals.create(actor(owner), meld_attrs(project, [parent_a, parent_b]))
+
+      Repo.delete!(Repo.get!(Node, parent_a.id))
+
+      assert Proposals.approve(actor(owner), project.id, proposal.id) ==
+               {:error, :integrity_failed}
+
+      assert Repo.get!(Proposal, proposal.id).status == :pending
+      assert nodes_with_commit(project, proposal.meld_commit_sha) == []
+      assert incident = proposal_incident(proposal)
+      assert incident.details["reason"] == "missing_parent"
+    end
+
+    test "an over-cap result fails approval and opens an incident" do
+      owner = Ecto.UUID.generate()
+      project = project(owner)
+      membership(project, owner, :owner)
+      [parent_a, parent_b] = meld_parents(project)
+
+      {:ok, proposal} =
+        Proposals.create(actor(owner), meld_attrs(project, [parent_a, parent_b]))
+
+      previous = Application.get_env(:cadence_server, :scan_max_files)
+
+      try do
+        Application.put_env(:cadence_server, :scan_max_files, 0)
+
+        assert Proposals.approve(actor(owner), project.id, proposal.id) ==
+                 {:error, :integrity_failed}
+      after
+        if previous do
+          Application.put_env(:cadence_server, :scan_max_files, previous)
+        else
+          Application.delete_env(:cadence_server, :scan_max_files)
+        end
+      end
+
+      assert Repo.get!(Proposal, proposal.id).status == :pending
+      assert incident = proposal_incident(proposal)
+      assert incident.details["reason"] == "too_large"
+    end
+
+    test "a parent commit whose tree is missing is not approvable" do
+      owner = Ecto.UUID.generate()
+      project = project(owner)
+      membership(project, owner, :owner)
+      [parent_a, parent_b] = meld_parents(project)
+
+      {:ok, proposal} =
+        Proposals.create(actor(owner), meld_attrs(project, [parent_a, parent_b]))
+
+      parent = Repo.get!(Node, parent_a.id)
+      tree = GitStore.read_commit(ProjectGit.open(project.id), parent.git_commit_sha).tree
+      File.rm!(object_path(project.id, tree))
+
+      assert Proposals.approve(actor(owner), project.id, proposal.id) ==
+               {:error, :integrity_failed}
+
+      assert Repo.get!(Proposal, proposal.id).status == :pending
+      assert incident = proposal_incident(proposal)
+      assert incident.details["reason"] == "missing_parent"
+    end
+
     test "a result SHA that is a blob fails integrity as not_a_commit" do
       owner = Ecto.UUID.generate()
       project = project(owner)
       membership(project, owner, :owner)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
       blob_sha = GitStore.write_blob(ProjectGit.init(project.id), "not a commit")
 
       {:ok, proposal} =
@@ -479,7 +571,7 @@ defmodule Cadence.Server.ProposalsTest do
       owner = Ecto.UUID.generate()
       project = project(owner)
       membership(project, owner, :owner)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
 
       {:ok, proposal} =
         Proposals.create(
@@ -531,7 +623,7 @@ defmodule Cadence.Server.ProposalsTest do
       owner = Ecto.UUID.generate()
       project = project(owner)
       membership(project, owner, :owner)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
       result = result(project)
 
       {:ok, proposal} =
@@ -565,7 +657,7 @@ defmodule Cadence.Server.ProposalsTest do
       owner = Ecto.UUID.generate()
       project = project(owner)
       membership(project, owner, :owner)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
       result = result(project)
 
       {:ok, proposal} =
@@ -584,12 +676,13 @@ defmodule Cadence.Server.ProposalsTest do
       assert node_id == Proposals.result_node(approved).id
     end
 
-    test "a promotion approval broadcasts the decision only" do
+    test "a promotion approval broadcasts the decision, pins, and bumps the cursor" do
       owner = Ecto.UUID.generate()
       project = project(owner)
       membership(project, owner, :owner)
       target = node_fixture(project, %{pinned: false})
       proposal = promotion_proposal(project, owner, target)
+      original_seq = seq(target.id)
 
       Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "project:#{project.id}")
 
@@ -598,7 +691,54 @@ defmodule Cadence.Server.ProposalsTest do
       assert_receive {:proposal_decided, project_id, proposal_id, :approved}
       assert project_id == project.id
       assert proposal_id == approved.id
+
+      assert_receive {:nodes_pushed, ^project_id, [node_id]}
+      assert node_id == target.id
+
+      assert Repo.get!(Node, target.id).pinned
+      assert seq(target.id) > original_seq
+    end
+
+    test "approving an already-pinned target emits no node-changed event" do
+      owner = Ecto.UUID.generate()
+      project = project(owner)
+      membership(project, owner, :owner)
+      target = node_fixture(project, %{pinned: true})
+      proposal = promotion_proposal(project, owner, target)
+      original_seq = seq(target.id)
+
+      Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "project:#{project.id}")
+
+      assert {:ok, _approved} = Proposals.approve(actor(owner), project.id, proposal.id)
+
+      assert_receive {:proposal_decided, _project_id, _proposal_id, :approved}
       refute_receive {:nodes_pushed, _project_id, _node_ids}
+      assert seq(target.id) == original_seq
+    end
+
+    test "every member's daemon is woken on a decision; a refusal wakes nobody" do
+      owner = Ecto.UUID.generate()
+      approver = Ecto.UUID.generate()
+      stranger = Ecto.UUID.generate()
+      project = project(owner)
+      membership(project, owner, :owner)
+      membership(project, approver, :trusted, %{approver: true})
+      [parent_a, parent_b] = meld_parents(project)
+      {:ok, proposal} = Proposals.create(actor(owner), meld_attrs(project, [parent_a, parent_b]))
+
+      for user_id <- [owner, approver, stranger] do
+        Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "sync:user:#{user_id}")
+      end
+
+      assert Proposals.approve(actor(stranger), project.id, proposal.id) == {:error, :forbidden}
+      refute_receive {:sync_available, _project_id}
+
+      assert {:ok, _approved} = Proposals.approve(actor(approver), project.id, proposal.id)
+
+      assert_receive {:sync_available, project_id}
+      assert project_id == project.id
+      assert_receive {:sync_available, ^project_id}
+      refute_receive {:sync_available, _project_id}
     end
 
     test "a refusal broadcasts nothing" do
@@ -607,7 +747,7 @@ defmodule Cadence.Server.ProposalsTest do
       project = project(owner)
       membership(project, owner, :owner)
       membership(project, viewer, :viewer)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
       {:ok, proposal} = Proposals.create(actor(owner), meld_attrs(project, [parent_a, parent_b]))
 
       Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "project:#{project.id}")
@@ -621,7 +761,7 @@ defmodule Cadence.Server.ProposalsTest do
       owner = Ecto.UUID.generate()
       project = project(owner)
       membership(project, owner, :owner)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
       result = result(project)
 
       {:ok, proposal} =
@@ -644,7 +784,7 @@ defmodule Cadence.Server.ProposalsTest do
       owner = Ecto.UUID.generate()
       project = project(owner)
       membership(project, owner, :owner)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
       result = result(project)
 
       {:ok, proposal} =
@@ -665,7 +805,7 @@ defmodule Cadence.Server.ProposalsTest do
       owner = Ecto.UUID.generate()
       project = project(owner)
       membership(project, owner, :owner)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
 
       {:ok, proposal} =
         Proposals.create(
@@ -684,7 +824,7 @@ defmodule Cadence.Server.ProposalsTest do
       owner = Ecto.UUID.generate()
       project = project(owner)
       membership(project, owner, :owner)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
       result = result(project)
 
       {:ok, proposal} =
@@ -708,7 +848,7 @@ defmodule Cadence.Server.ProposalsTest do
       owner = Ecto.UUID.generate()
       project = project(owner)
       membership(project, owner, :owner)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
 
       {:ok, approved_proposal} =
         Proposals.create(actor(owner), meld_attrs(project, [parent_a, parent_b]))
@@ -723,7 +863,7 @@ defmodule Cadence.Server.ProposalsTest do
       owner = Ecto.UUID.generate()
       project = project(owner)
       membership(project, owner, :owner)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
       {:ok, proposal} = Proposals.create(actor(owner), meld_attrs(project, [parent_a, parent_b]))
 
       Phoenix.PubSub.subscribe(Cadence.Server.PubSub, "project:#{project.id}")
@@ -742,7 +882,7 @@ defmodule Cadence.Server.ProposalsTest do
       other = project(Ecto.UUID.generate())
       membership(project, owner, :owner)
       membership(other, owner, :owner)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
 
       {:ok, proposal} =
         Proposals.create(actor(owner), meld_attrs(project, [parent_a, parent_b]))
@@ -762,7 +902,7 @@ defmodule Cadence.Server.ProposalsTest do
       owner = Ecto.UUID.generate()
       project = project(owner)
       membership(project, owner, :owner)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
       {:ok, proposal} = Proposals.create(actor(owner), meld_attrs(project, [parent_a, parent_b]))
 
       assert Proposals.result_node(proposal) == nil
@@ -774,7 +914,7 @@ defmodule Cadence.Server.ProposalsTest do
       owner = Ecto.UUID.generate()
       project = project(owner)
       membership(project, owner, :owner)
-      [parent_a, parent_b] = [node_fixture(project), node_fixture(project)]
+      [parent_a, parent_b] = meld_parents(project)
 
       assert {:ok, proposal} =
                Proposals.create(actor(owner), meld_attrs(project, [parent_a, parent_b]))
@@ -874,10 +1014,31 @@ defmodule Cadence.Server.ProposalsTest do
       project_id: project.id,
       kind: :meld,
       status: :pending,
-      parent_ids: [],
+      parent_ids: Enum.map(meld_parents(project), & &1.id),
       result_tree_sha: result.tree,
       meld_commit_sha: result.commit
     }
+  end
+
+  # Approval requires the first parent's commit to exist (the reviewer's diff
+  # walks it), so meld parents in these tests are real snapshots, not rows with
+  # a placeholder SHA.
+  defp meld_parents(project) do
+    sha = snapshot(project, %{"parent.txt" => "parent"}, "meld parent")
+    [node_fixture(project, %{git_commit_sha: sha}), node_fixture(project, %{git_commit_sha: sha})]
+  end
+
+  defp object_path(project_id, sha) do
+    Path.join([
+      ProjectGit.path(project_id),
+      "objects",
+      String.slice(sha, 0, 2),
+      String.slice(sha, 2, 38)
+    ])
+  end
+
+  defp seq(node_id) do
+    Repo.one(from(n in Node, where: n.id == ^node_id, select: fragment("seq")))
   end
 
   defp sha(char), do: String.duplicate(char, 40)
