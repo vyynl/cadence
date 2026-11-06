@@ -3,9 +3,13 @@
 ## Current Phase
 Phase 4 — unions, proposals & review is **complete**, as is the UI styling &
 freshness pass (4e). **Phase 5 — documentation automation** is in progress:
-**5a (shared primitives) and 5b (daemon doc worker + commit integration) are
-complete and committed**; the next slice is **5c** (daemon API + Neovim
-commands, plan P3).
+**5a (shared primitives), 5b (daemon doc worker + commit integration), and 5c
+(daemon API + Neovim commands) are complete**, and both review passes are fixed
+(legacy pushed-SHA guard, held-node release, already-current skip, doc-diff
+wrap, plus the manual-sync hold, `mark_current` pushed guard, conditional
+release, pushed-SHA stamp, and `mark_pending` current no-op). The next slice is
+**P4** (deferred docs + polish: pushed-node fallback, read-only `docs_state`
+badge, spec/docs closeout).
 
 ## Done (summary)
 
@@ -281,6 +285,22 @@ commands, plan P3).
   `retry_pending/1` is project-scoped, `:force` sync works on code-only nodes,
   worktree writes reject symlinks, `docs_enabled?` releases queued nodes, and
   the tests use a barrier/queue drain/`:fs_poll` instead of timing races.
+- **Phase 5c (daemon doc API + Neovim commands)** — `DocQueue.sync/2` is a
+  synchronous manual-sync decision point (project/node/anchor, pushed guard,
+  `CAD_DOCS_ENABLED`, schema parse, LLM configured) that then casts
+  `force: true`; `POST /docs/sync` maps it to `202 queued` (with `node_id`),
+  `200 skipped` (`already_synced | disabled | no_schema | invalid_schema`),
+  `503` unconfigured, `404`, `422`. `GET /docs/diff` maps `DocDiff.build/2` to
+  `200` / `404` (node or commit) / `409` (no docs commit or no schema) / `400`;
+  both endpoints default `node_id` to `Session.anchor_node/1` and
+  `DocDiff.build/2` accepts `nil`. Neovim gained a pure `cadence.doc` helper
+  (response→notification mapping + `diff.lua`-based formatting):
+  `:CadDocSync [node_id]` posts asynchronously, and `:CadDocDiff [node_id]`
+  opens a scratch split (`C1 → C2` header) or warns when there is no docs
+  commit. Manual sync now respects `CAD_DOCS_ENABLED` (spec §9.2), and a
+  pushed node reports `already_synced` until P4-T2. 9 new router tests, a new
+  `cadence.nvim/spec/doc_spec.lua`; all Lua files pass `luac -p`. Spec
+  §9.2/§9.4/§9.5/§12.6/§13 updated.
 - **4e gate:** 640 tests green (161 shared + 125 daemon + 354 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
@@ -294,28 +314,34 @@ commands, plan P3).
 
 ## Next
 
-**Immediate step:** start **5c (P3) — daemon API + Neovim doc commands**. Plan:
-`.claude/plans/phase-5-docs/plan.md` (P3-T1..T5). P2 is complete; the daemon
-already exposes `DocQueue.enqueue/3` (`force: true` bypasses the trigger
-re-check) and `DocDiff.build/2`.
+**Immediate step:** start **P4 (deferred docs + polish)** from
+`.claude/plans/phase-5-docs/plan.md` (P4-T1..T5). The 5c review fixes and the
+second-pass hold/guard/release fixes are shipped (see the triage
+`.claude/plans/phase-5-docs/reviews/phase-5-docs-5c-triage.md`).
+The daemon exposes `DocQueue.sync/2` (`202`/`200` status, `already_current`,
+`legacy`), `DocDiff.build/2` (node defaults to the session anchor), and
+`retry_pending/1`.
 
-1. P3-T1 — `POST /docs/sync` (`{project_id, node_id?}`): 202 queued, 200
-   skipped with a reason, 503 when the doc LLM is unconfigured
-   (`DocAgentWorker.configured?/0`), 404, 422.
-2. P3-T2 — `GET /docs/diff` → `DocDiff.build/2`; 409 for `:no_docs_commit`.
-3. P3-T3/P3-T4 — `:CadDocSync` (async) and `:CadDocDiff` (scratch buffer,
-   reuse `diff.lua`).
-4. P3-T5 — API router tests + `luac -p`.
+- P4-T1 — end-to-end reconnect test: offline commit → `:pending` → reconnect
+  → `C2` pushed as one node (the hook and `retry_pending/1` shipped in 5b).
+- P4-T2 — already-pushed fallback: create a docs child node instead of
+  rewriting the pushed SHA; `:CadDocSync` currently reports `already_synced`.
+- P4-T3 — read-only `docs_state` badge in `ProjectLive`'s inspector
+  (`Presentation` helper + LiveView tests).
+- P4-T4/P4-T5 — spec §9.3/§9.4/§9.5/§9.6 and §13 closeout; `docs/README.md`
+  status.
 
 **Integration contract:** `LLM.Docs.build_prompt/4` returns
 `{:ok, prompt, %{writable_paths, read_only_paths}}`; `DocQueue` passes
 `read_only_paths` to `parse/3`. A node's docs commit is
 `session_metadata["docs"]["docs_commit_sha"]` (absent with `"empty": true` for
 a no-op generation); the code commit is
-`session_metadata["docs"]["code_commit_sha"]`. `enqueue(force: true)` works on a
-`:skipped`/legacy node by falling back to `node.git_commit_sha`, but a node
-with `metadata["docs"]["pushed_sha"]` is dropped (P4-T2 fallback): `/docs/sync`
-should report that as skipped/already-synced rather than queued.
+`session_metadata["docs"]["code_commit_sha"]`. `DocQueue.enqueue(force: true)`
+still supports a direct forced run on a `:skipped`/legacy node by falling back
+to `node.git_commit_sha`; `POST /docs/sync` gates that behind a `SyncPending`
+row (the local proof the node is unpushed) and reports `already_synced` for a
+stamped pushed node, `already_current` for generated docs, and `legacy`
+otherwise (P4-T2 owns the child-node fallback).
 
 Carry-over (small, not blocking Phase 5):
 
@@ -336,12 +362,12 @@ Carry-over (small, not blocking Phase 5):
    `/proposals/<token>` at wide and narrow widths in light and dark. There are
    no browser tests; 4e verified server-rendered markup and CSS only.
 
-**Spin-up:** `@phx-work .claude/plans/phase-5-docs/plan.md --from P2-T1`.
+**Spin-up:** `@phx-work .claude/plans/phase-5-docs/plan.md --from P4-T1`.
 
 ## Blocked
 
-- (none) The Phase 4 gating decisions are resolved in spec §6.6/§6.7/§16 and
-  `docs/phase-4-prep.md` §5.
+- (none) The 5c review passes are complete; the Phase 4 gating decisions are
+  resolved in spec §6.6/§6.7/§16 and `docs/phase-4-prep.md` §5.
 
 ## Spec Deltas / Open Items
 
@@ -369,11 +395,19 @@ Carry-over (small, not blocking Phase 5):
   `session_metadata["docs_pushed_sha"]` (covering `:skipped` nodes) so
   `rehydrate/0`, `retry_pending/0`, and the job runner never rewrite an
   already-pushed SHA. A forced no-op run keeps the previous `C2`. P4-T2's
-  follow-up docs child node is still open: `:CadDocSync` cannot generate docs
-  for a node that was already pushed (the queue drops it).
-- **`:force` sync bypasses `CAD_DOCS_ENABLED` (5b)** — the manual path runs even
-  with the master switch off. Decide in P3 whether `/docs/sync` should map that
-  to `200 skipped, reason: "disabled"` or document the explicit override.
+  follow-up docs child node is still open: `:CadDocSync` /
+  `POST /docs/sync` reports `skipped: "already_synced"` and cannot generate
+  docs for a node that was already pushed (the queue drops it).
+- **Phase 5c implementation notes (2026-11-06)** — `POST /docs/sync` resolves
+  `node_id` to `Session.anchor_node/1` when omitted and returns `202` with the
+  resolved `node_id`; the skip reasons are `already_synced`, `disabled`,
+  `no_schema`, and `invalid_schema`. Manual sync respects `CAD_DOCS_ENABLED`
+  (spec §9.2) instead of overriding it. `GET /docs/diff` also defaults
+  `node_id` to the anchor, returns `400` without `project_id`, `404` for an
+  unknown node/commit, and `409` for no docs commit or no schema.
+  `DocDiff.build/2` accepts `nil`. The Neovim commands accept an optional node
+  id; `:CadDocSync` uses `post_async`, and `:CadDocDiff` renders through
+  `cadence.doc.format/1` (which wraps `diff.lua`).
 - **Phase 5a implementation notes (2026-11-06)** — `docs_state` semantics are
   now explicit in spec §9.4 (`:current` generated/committed, `:pending`
   queued/deferred/retrying, `:skipped` no schema/trigger). `build_prompt/4`
@@ -737,4 +771,87 @@ child be pushed first; (3) a forced no-op run keeps the previous
 skipped-node force guard (no model call), atomic sync row, repeated-force `C2`
 preservation. Verification: format + dev/prod compile clean; 766 tests green
 (251 shared + 161 daemon + 354 server). Next: 5c (P3).
+
+2026-11-06 — **Phase 5c (daemon doc API + Neovim commands)** shipped
+`.claude/plans/phase-5-docs/plan.md` P3-T1..T5. `DocQueue.sync/2` performs the
+manual-sync preflight synchronously (project/node/anchor, pushed guard,
+`CAD_DOCS_ENABLED`, schema, LLM configured) and then queues with `force: true`;
+`POST /docs/sync` returns `202 %{status: "queued", node_id}`, `200
+%{status: "skipped", reason}`, `503`, `404`, or `422`. `GET /docs/diff` wraps
+`DocDiff.build/2` (`200`/`400`/`404`/`409`), and both endpoints default
+`node_id` to the session anchor (`DocDiff.build/2` now accepts `nil`). Neovim
+gained a pure `cadence.doc` module (response mapping + a `C1 → C2` header over
+`diff.lua`) so `:CadDocSync [node_id]` posts asynchronously and
+`:CadDocDiff [node_id]` opens a scratch split or warns when there is no docs
+commit. Manual sync now respects `CAD_DOCS_ENABLED` (resolving the 5b open
+question) and a pushed node reports `already_synced` until P4-T2. Spec
+§9.2/§9.4/§9.5/§12.6/§13 updated. Verification: `mix format
+--check-formatted`, `mix compile --warnings-as-errors`, and `mix test` clean;
+775 tests green (251 shared + 170 daemon + 354 server; 9 new router tests),
+all Lua files pass `luac -p`, and `cadence.nvim/spec/doc_spec.lua` passes.
+Next: P4 (deferred docs + polish).
+
+2026-11-06 — **5c review + triage.** `/phx-review` verdict **REQUIRES
+CHANGES**: B1 (the new manual endpoint can force-regenerate a pre-5b node whose
+SHA was already pushed; `check_pushed` only trusts the 5b stamp, and the force
+path falls back to `node.git_commit_sha`), W1 (a manual skip/503 does not
+release a docs-held node, so it can stay out of sync), S1 (the plan's
+“already current” skip is not implemented; current nodes force-regenerate),
+S2 (the doc-diff split inherits wrapping). Triage selected all four; the user
+chose `200 skipped, reason: "already_current"` for current nodes. Fix Queue in
+`.claude/plans/phase-5-docs/reviews/phase-5-docs-5c-triage.md`. Fixes pending;
+the gate and P4 wait for them.
+
+2026-11-06 — **5c review fixes.** All four triaged findings shipped.
+`DocQueue.check_forceable/1` requires a `SyncPending` row (`200 skipped,
+reason: "legacy"` otherwise), so a pre-5b pushed node **or a pulled node**
+cannot be force-regenerated and have its immutable SHA rewritten;
+`already_current` is checked first. `resumable_nodes/1` requires the same row,
+so boot/reconnect retries ignore pulled nodes. `maybe_release/2` releases a
+docs-held node on a manual skip/error with the job's terminal transition
+(`mark_skipped` for disabled/no_schema/legacy, `mark_deferred` for
+invalid_schema/not_configured/no_location), so it cannot stay out of sync.
+`check_current/1` returns `already_current` for generated docs; spawn nodes
+(`:current` with empty metadata) remain forceable. The `:CadDocDiff` split now
+sets `wrap=false`. Tests: legacy refusal + SHA unchanged, legacy-unpushed
+allowance, pulled `retry_pending` guard, disabled/503/no-location held-node
+release, already-current skip. Verification: format + dev/prod compile clean;
+782 tests green (251 shared + 177 daemon + 354 server; +7); `luac -p` and all
+Lua specs pass. Spec §9.2/§9.5 updated. Next: P4-T1.
+
+2026-11-06 — **5c second-pass review fixes.** The re-review found two
+ordering/race issues, both fixed. `DocQueue.sync/2` now marks the target
+docs-pending (`docs_state: :pending`, `metadata["docs"]["state"] = "pending"`,
+`code_commit_sha`) and re-enqueues sync before the cast, so `SyncLedger` holds
+the node while the model runs; `maybe_requeue/1` reuses the same
+`mark_pending/1`. `mark_current/5` re-reads the node and returns `:pushed` when
+a `docs_pushed_sha` appeared while the job ran; `:pushed` is terminal, the node
+stays at the pushed `C1`, and `mark_deferred` records the docs as deferred
+(P4-T2 owns the child-node attach). `mark_skipped/2`/`mark_deferred/2` no-op
+when the current docs state is `"current"`, and `mark_deferred/2` builds from
+the current row, so a manual release cannot wipe `docs_commit_sha` and a later
+forced no-op cannot rewind `C2` to `C1`. Tests: blocked manual job is excluded
+from `pushable` until it resolves; a push during a blocked job keeps the SHA
+and defers the docs. Verification: format + dev/prod compile clean; 784 tests
+green (251 shared + 179 daemon + 354 server; +2); `luac -p` and all Lua specs
+pass. Spec §9.2/§9.5 updated. Next: re-review, then P4-T1.
+
+2026-11-06 — **5c third-pass review fixes.** The final re-review found no
+blockers. W2: `SyncLedger.mark_pushed/1` now accepts `{node_id, pushed_sha}`
+pairs and `Sync.push_batch/2` passes the snapshot SHA it encoded, so an
+in-flight push stamps the SHA the server received rather than a newer local
+SHA; plain IDs remain supported with a current-SHA fallback. S3:
+`mark_pending/1` returns `{:skip, :already_current}` when the current node is
+already current, and `DocQueue.sync/2` maps it to the skipped response, so a
+concurrent success is not re-armed as pending. Test added for the pushed-SHA
+stamp; the hold/guard/release tests remain green. Verification: format +
+dev/prod compile clean; 785 tests green (251 shared + 180 daemon + 354 server;
++1); `luac -p` and all Lua specs pass. Next: re-review or commit, then P4-T1.
+
+Session closed 2026-11-06 — Phase 5c is complete at `a7202db`
+(`feat: Phase 5c — daemon doc API, Neovim commands, and sync hardening`),
+with the handoff commit following. Working tree clean. Verification: 785 tests
+green (251 shared + 180 daemon + 354 server), format clean, dev/prod compile
+clean, `luac -p` and the Lua specs pass. Next session starts **P4-T1**:
+`@phx-work .claude/plans/phase-5-docs/plan.md --from P4-T1`.
 

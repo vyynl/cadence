@@ -22,7 +22,7 @@ history, not current instructions.
 | Phase 3 — web UI & portfolio | Complete |
 | Phase 4 — unions & review | Complete |
 | UI styling & freshness pass (4e) | Complete |
-| Phase 5 — doc automation | In progress (5a shared primitives complete; 5b daemon worker next) |
+| Phase 5 — doc automation | In progress (5a shared primitives, 5b daemon worker, and 5c daemon API + Neovim complete; P4 deferred/polish next) |
 
 ## Current docs
 
