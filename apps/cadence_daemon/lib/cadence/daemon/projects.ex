@@ -12,7 +12,16 @@ defmodule Cadence.Daemon.Projects do
 
   require Logger
 
-  alias Cadence.Daemon.{Dirs, Env, ProjectLocation, ProjectRegistry, Repo, Session}
+  alias Cadence.Daemon.{
+    Dirs,
+    Docs.SchemaSource,
+    Env,
+    ProjectLocation,
+    ProjectRegistry,
+    Repo,
+    Session
+  }
+
   alias Cadence.Shared.{Membership, Project, UUID}
 
   @doc """
@@ -115,6 +124,9 @@ defmodule Cadence.Daemon.Projects do
       end)
 
     with {:ok, %{project: project, git_dir: git_dir}} <- result do
+      # Best-effort: the working-tree file remains the source of truth.
+      _ = SchemaSource.refresh(project.id, work_dir)
+
       case ProjectRegistry.start_project(
              project_id: project.id,
              work_dir: work_dir,

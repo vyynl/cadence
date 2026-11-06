@@ -1,8 +1,17 @@
 defmodule Cadence.Daemon.CommitQueueTest do
   use ExUnit.Case, async: false
 
-  alias Cadence.Daemon.{CommitQueue, ProjectLocation, Repo, Session}
+  alias Cadence.Daemon.{CommitQueue, ProjectLocation, Repo, Session, SyncLedger, SyncPending}
   alias Cadence.Shared.{GitStore, Node, Project}
+
+  @docs_schema """
+  index_file: README.md
+  docs_dir: docs
+  sections:
+    - name: Overview
+      required: true
+      generated_from: "lib/**/*.ex"
+  """
 
   setup do
     root = Path.join(System.tmp_dir!(), "cadence_queue_#{System.unique_integer([:positive])}")
@@ -194,6 +203,134 @@ defmodule Cadence.Daemon.CommitQueueTest do
     assert node.message == "session commit"
     assert node.flags == [:"in-progress"]
     assert node.session_metadata["message_pending"] == true
+  end
+
+  test "a commit without a docs schema skips docs and enqueues sync",
+       %{work_dir: work_dir, git_dir: git_dir, project: project} do
+    queue =
+      start_supervised!(
+        {CommitQueue, [project_id: project.id, work_dir: work_dir, git_dir: git_dir]}
+      )
+
+    File.write!(Path.join(work_dir, "a.txt"), "hi\n")
+
+    {:ok, node} = CommitQueue.commit(queue, "first")
+
+    assert node.docs_state == :skipped
+    refute Map.has_key?(node.session_metadata, "docs")
+    assert eventually(fn -> SyncLedger.pending(project.id) != [] end)
+  end
+
+  test "a matching trigger queues a doc job and holds sync until it resolves",
+       %{work_dir: work_dir, git_dir: git_dir, project: project} do
+    Application.put_env(:cadence_daemon, :docs_llm, Cadence.Daemon.TestDocsLLM)
+    Application.put_env(:cadence_daemon, :test_docs_llm_result, {:sleep, 150})
+
+    on_exit(fn ->
+      Application.delete_env(:cadence_daemon, :docs_llm)
+      Application.delete_env(:cadence_daemon, :test_docs_llm_result)
+    end)
+
+    queue =
+      start_supervised!(
+        {CommitQueue, [project_id: project.id, work_dir: work_dir, git_dir: git_dir]}
+      )
+
+    File.write!(Path.join(work_dir, ".caddocs.yaml"), @docs_schema)
+    File.mkdir_p!(Path.join(work_dir, "lib"))
+    File.write!(Path.join(work_dir, "lib/demo.ex"), "defmodule Demo do\nend\n")
+
+    {:ok, node} = CommitQueue.commit(queue, "code")
+
+    assert node.docs_state == :pending
+    assert node.session_metadata["code_commit_sha"] == node.git_commit_sha
+    assert node.session_metadata["docs"]["state"] == "pending"
+    assert node.session_metadata["docs"]["code_commit_sha"] == node.git_commit_sha
+    assert SyncLedger.pushable(project.id, nil, 10) == []
+
+    # The job finishes, pushes the node to its docs commit, then hands it to
+    # the sync ledger (D5).
+    assert eventually(fn -> Repo.get!(Node, node.id).docs_state == :current end)
+
+    assert eventually(fn ->
+             SyncLedger.pushable(project.id, nil, 10) |> Enum.any?(&(&1.id == node.id))
+           end)
+  end
+
+  test "a schema present without a trigger skips docs",
+       %{work_dir: work_dir, git_dir: git_dir, project: project} do
+    Application.put_env(:cadence_daemon, :docs_enabled, false)
+    on_exit(fn -> Application.delete_env(:cadence_daemon, :docs_enabled) end)
+
+    queue =
+      start_supervised!(
+        {CommitQueue, [project_id: project.id, work_dir: work_dir, git_dir: git_dir]}
+      )
+
+    File.write!(Path.join(work_dir, ".caddocs.yaml"), @docs_schema)
+    File.write!(Path.join(work_dir, "notes.txt"), "one\n")
+    {:ok, _first} = CommitQueue.commit(queue, "schema")
+
+    Application.delete_env(:cadence_daemon, :docs_enabled)
+
+    File.write!(Path.join(work_dir, "notes.txt"), "two\n")
+    {:ok, second} = CommitQueue.commit(queue, "notes")
+
+    assert second.docs_state == :skipped
+    refute Map.has_key?(second.session_metadata, "docs")
+  end
+
+  test "a schema parse error is recorded as shape-only metadata and never blocks",
+       %{work_dir: work_dir, git_dir: git_dir, project: project} do
+    queue =
+      start_supervised!(
+        {CommitQueue, [project_id: project.id, work_dir: work_dir, git_dir: git_dir]}
+      )
+
+    File.write!(Path.join(work_dir, ".caddocs.yaml"), "index_file: [unclosed\n")
+    File.write!(Path.join(work_dir, "a.txt"), "hi\n")
+
+    {:ok, node} = CommitQueue.commit(queue, "broken schema")
+
+    assert node.docs_state == :skipped
+    assert node.session_metadata["docs"]["state"] == "skipped"
+    assert node.session_metadata["docs"]["error"] == "invalid_yaml"
+  end
+
+  test "a corrupt base tree does not crash the commit",
+       %{work_dir: work_dir, git_dir: git_dir, project: project} do
+    queue =
+      start_supervised!(
+        {CommitQueue, [project_id: project.id, work_dir: work_dir, git_dir: git_dir]}
+      )
+
+    File.write!(Path.join(work_dir, "a.txt"), "one\n")
+    {:ok, first} = CommitQueue.commit(queue, "first")
+
+    git = GitStore.init(git_dir, bare: true)
+    tree = GitStore.read_commit(git, first.git_commit_sha).tree
+    <<dir::binary-size(2)>> <> rest = tree
+    File.rm!(Path.join([git.home_dir, "objects", dir, rest]))
+
+    File.write!(Path.join(work_dir, "b.txt"), "two\n")
+    {:ok, second} = CommitQueue.commit(queue, "second")
+
+    assert second.parents == [first.id]
+    assert second.docs_state == :skipped
+  end
+
+  test "a commit persists its sync row atomically",
+       %{work_dir: work_dir, git_dir: git_dir, project: project} do
+    queue =
+      start_supervised!(
+        {CommitQueue, [project_id: project.id, work_dir: work_dir, git_dir: git_dir]}
+      )
+
+    File.write!(Path.join(work_dir, "a.txt"), "hi\n")
+    {:ok, node} = CommitQueue.commit(queue, "first")
+
+    assert %SyncPending{} = pending = Repo.get(SyncPending, node.id)
+    assert pending.project_id == project.id
   end
 
   defp insert_node(project, id, created_at) do

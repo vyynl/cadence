@@ -127,4 +127,56 @@ defmodule Cadence.Daemon.Env do
   def sync_req_options do
     Application.get_env(:cadence_daemon, :sync_req_options, [])
   end
+
+  @doc "Whether doc automation is enabled (default `true`, spec §9)."
+  @spec docs_enabled?() :: boolean()
+  def docs_enabled?, do: Application.get_env(:cadence_daemon, :docs_enabled, true)
+
+  @doc "Maximum time a doc-generation job waits for the LLM (default 30 s)."
+  @spec docs_timeout_ms() :: pos_integer()
+  def docs_timeout_ms, do: Application.get_env(:cadence_daemon, :docs_timeout_ms, 30_000)
+
+  @doc "Doc-agent calls allowed per rate-limit window (default 5)."
+  @spec docs_rate_limit() :: pos_integer()
+  def docs_rate_limit, do: Application.get_env(:cadence_daemon, :docs_rate_limit, 5)
+
+  @doc "Doc-agent rate-limit window in milliseconds (default 60 s)."
+  @spec docs_rate_scale() :: pos_integer()
+  def docs_rate_scale, do: Application.get_env(:cadence_daemon, :docs_rate_scale, 60_000)
+
+  @doc "Attempts before a doc job is deferred (default 3)."
+  @spec docs_retry_attempts() :: pos_integer()
+  def docs_retry_attempts, do: Application.get_env(:cadence_daemon, :docs_retry_attempts, 3)
+
+  @doc "Linear backoff base between doc-job retries (default 5 s)."
+  @spec docs_retry_backoff_ms() :: non_neg_integer()
+  def docs_retry_backoff_ms do
+    Application.get_env(:cadence_daemon, :docs_retry_backoff_ms, 5_000)
+  end
+
+  @doc "Maximum file operations accepted from one doc generation (default 20)."
+  @spec docs_max_ops() :: pos_integer()
+  def docs_max_ops, do: Application.get_env(:cadence_daemon, :docs_max_ops, 20)
+
+  @doc "Maximum number of files under `docs_dir` included in one doc job (default 200)."
+  @spec docs_max_files() :: pos_integer()
+  def docs_max_files, do: Application.get_env(:cadence_daemon, :docs_max_files, 200)
+
+  @doc "Maximum content size per doc operation in bytes (default 256 KiB)."
+  @spec docs_max_file_bytes() :: pos_integer()
+  def docs_max_file_bytes do
+    Application.get_env(:cadence_daemon, :docs_max_file_bytes, 262_144)
+  end
+
+  @doc "Shared prompt budget for the schema and current docs (default 64 KiB)."
+  @spec docs_context_bytes() :: pos_integer()
+  def docs_context_bytes do
+    Application.get_env(:cadence_daemon, :docs_context_bytes, 65_536)
+  end
+
+  @doc "Maximum diff text sent to the doc model (default 32 KiB)."
+  @spec docs_diff_max_bytes() :: pos_integer()
+  def docs_diff_max_bytes do
+    Application.get_env(:cadence_daemon, :docs_diff_max_bytes, 32_768)
+  end
 end

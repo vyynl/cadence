@@ -26,7 +26,11 @@ defmodule Cadence.Daemon.ProjectSupervisor do
     queue_name = {:via, Registry, {Cadence.Daemon.Queues, project_id}}
 
     watcher_opts =
-      [dir: work_dir, commit_queue: queue_name]
+      [
+        dir: work_dir,
+        commit_queue: queue_name,
+        name: {:via, Registry, {Cadence.Daemon.Queues, {:watcher, project_id}}}
+      ]
       |> maybe_put(:debounce_ms, opts[:debounce_ms])
       |> maybe_put(:backend, opts[:backend])
       |> maybe_put(:interval, opts[:interval])

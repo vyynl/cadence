@@ -34,4 +34,18 @@ defmodule Cadence.Daemon.EnvTest do
     Application.put_env(:cadence_daemon, :sync_channel_enabled, false)
     refute Env.sync_channel_enabled?()
   end
+
+  test "doc automation defaults match the env contract" do
+    assert Env.docs_enabled?()
+    assert Env.docs_timeout_ms() == 30_000
+    assert Env.docs_rate_limit() == 5
+    assert Env.docs_rate_scale() == 60_000
+    assert Env.docs_retry_attempts() == 3
+    assert Env.docs_retry_backoff_ms() == 5_000
+    assert Env.docs_max_ops() == 20
+    assert Env.docs_max_files() == 200
+    assert Env.docs_max_file_bytes() == 262_144
+    assert Env.docs_context_bytes() == 65_536
+    assert Env.docs_diff_max_bytes() == 32_768
+  end
 end

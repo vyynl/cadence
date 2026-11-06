@@ -19,8 +19,21 @@ defmodule Cadence.Daemon.CommitQueue do
 
   use GenServer
 
-  alias Cadence.Daemon.{Dirs, Env, MessageQueue, Nodes, Repo, Session, SyncLedger}
+  alias Cadence.Daemon.{
+    Dirs,
+    DocQueue,
+    Docs.SchemaSource,
+    Env,
+    MessageQueue,
+    Nodes,
+    Repo,
+    Session,
+    SyncLedger,
+    SyncPending
+  }
+
   alias Cadence.Shared.{GitStore, Node}
+  alias Cadence.Shared.Docs.{Schema, Trigger}
 
   @default_message "session commit"
 
@@ -38,9 +51,17 @@ defmodule Cadence.Daemon.CommitQueue do
 
   `message` may be an explicit string or `:auto` (default) to generate one via
   the LLM agent.
+
+  Options:
+
+    * `:skip_unchanged` — return the base node without writing a commit when the
+      working tree equals the base node's tree. The watcher uses this so an
+      automated write (or a duplicate file event) cannot create an empty node.
   """
-  def commit(queue, message \\ :auto) do
-    GenServer.call(queue, {:commit, message})
+  @spec commit(GenServer.server(), String.t() | :auto, keyword()) ::
+          {:ok, Node.t()} | {:error, term()}
+  def commit(queue, message \\ :auto, opts \\ []) do
+    GenServer.call(queue, {:commit, message, opts})
   end
 
   @doc """
@@ -75,8 +96,8 @@ defmodule Cadence.Daemon.CommitQueue do
   end
 
   @impl true
-  def handle_call({:commit, message}, _from, state) do
-    {:ok, node} = do_commit(state, message)
+  def handle_call({:commit, message, opts}, _from, state) do
+    {:ok, node} = do_commit(state, message, opts)
     {:reply, {:ok, node}, %{state | head: node}}
   end
 
@@ -92,18 +113,34 @@ defmodule Cadence.Daemon.CommitQueue do
     end
   end
 
-  defp do_commit(state, message) do
+  defp do_commit(state, message, opts) do
     tree = GitStore.build_tree(state.git, state.work_dir, ignore: Env.ignore_names())
 
-    {git_parents, node_parents} =
-      case base_node(state) do
-        nil -> {[], []}
-        %{git_commit_sha: sha, id: id} -> {[sha], [id]}
+    base = base_node(state)
+
+    {git_parents, node_parents, old_tree} =
+      case base do
+        nil ->
+          {[], [], nil}
+
+        %{git_commit_sha: sha, id: id} ->
+          {[sha], [id], read_tree(state.git, sha)}
       end
 
+    if Keyword.get(opts, :skip_unchanged, false) and old_tree == tree do
+      {:ok, base}
+    else
+      do_write_commit(state, message, tree, git_parents, node_parents, old_tree)
+    end
+  end
+
+  defp do_write_commit(state, message, tree, git_parents, node_parents, old_tree) do
     {message, flags, metadata} = message_attrs(message)
 
     sha = GitStore.write_commit(state.git, tree, git_parents, state.author, message)
+    changes = diff_changes(state.git, old_tree, tree)
+    {docs_state, docs_metadata, docs_queued?} = docs_plan(state, changes, sha)
+    metadata = Map.merge(metadata, docs_metadata)
 
     attrs = %{
       project_id: state.project_id,
@@ -114,13 +151,14 @@ defmodule Cadence.Daemon.CommitQueue do
       session_metadata: metadata,
       created_by: Env.local_user_id(),
       created_at: DateTime.utc_now(),
-      docs_state: :pending
+      docs_state: docs_state
     }
 
     {:ok, node} =
       Repo.transaction(fn ->
         {:ok, node} = attrs |> Node.changeset() |> Repo.insert()
         {:ok, _membership} = Session.commit_after(state.project_id, node)
+        insert_sync_pending!(node)
         node
       end)
 
@@ -128,7 +166,16 @@ defmodule Cadence.Daemon.CommitQueue do
       MessageQueue.enqueue(node.project_id, node.id)
     end
 
+    # Every node gets a sync row immediately; while a doc job is outstanding
+    # the ledger holds it out of selection but keeps its children behind it
+    # (spec §9.5, parents-first). `DocQueue` re-enqueues on terminal so the
+    # worker wakes even if the initial pass already ran.
     SyncLedger.enqueue(state.project_id, node.id)
+
+    if docs_queued? do
+      DocQueue.enqueue(node.project_id, node.id)
+    end
+
     {:ok, node}
   end
 
@@ -152,6 +199,7 @@ defmodule Cadence.Daemon.CommitQueue do
       Repo.transaction(fn ->
         {:ok, node} = attrs |> Node.changeset() |> Repo.insert()
         {:ok, _membership} = Session.spawn_after(state.project_id, current, node)
+        insert_sync_pending!(node)
         node
       end)
 
@@ -168,6 +216,81 @@ defmodule Cadence.Daemon.CommitQueue do
   # watcher non-blocking (spec §5.3, §5.5).
   defp message_attrs(:auto) do
     {@default_message, [:"in-progress"], %{"message_pending" => true}}
+  end
+
+  # Persist the sync row with the node so a lost notification cast (ledger
+  # restarting) can never leave a parent without a row — which would let a child
+  # be pushed first (spec §9.5, parents-first).
+  defp insert_sync_pending!(node) do
+    now = DateTime.utc_now()
+
+    %SyncPending{
+      node_id: node.id,
+      project_id: node.project_id,
+      enqueued_at: now,
+      attempts: 0,
+      next_attempt_at: now
+    }
+    |> Repo.insert(on_conflict: :nothing)
+
+    :ok
+  end
+
+  # Evaluates doc automation for a commit (spec §9.2). The schema file is the
+  # source of truth; the cached `Project.docs_schema` is refreshed only when the
+  # file itself changed this commit.
+  defp docs_plan(state, changes, sha) do
+    if Env.docs_enabled?() do
+      case load_schema(state, changes) do
+        {:ok, schema} ->
+          case Trigger.reasons(schema, changes) do
+            {:run, reasons} ->
+              docs = %{
+                "state" => "pending",
+                "code_commit_sha" => sha,
+                "reasons" => Enum.map(reasons, &Atom.to_string/1)
+              }
+
+              {:pending, %{"code_commit_sha" => sha, "docs" => docs}, true}
+
+            :skip ->
+              {:skipped, %{}, false}
+          end
+
+        :no_schema ->
+          {:skipped, %{}, false}
+
+        {:error, reason} ->
+          {:skipped, %{"docs" => %{"state" => "skipped", "error" => Atom.to_string(reason)}},
+           false}
+      end
+    else
+      {:skipped, %{}, false}
+    end
+  end
+
+  defp load_schema(state, changes) do
+    if Enum.any?(changes, &(&1.path == Schema.schema_file())) do
+      SchemaSource.refresh(state.project_id, state.work_dir)
+    else
+      SchemaSource.load(state.work_dir)
+    end
+  end
+
+  defp read_tree(git, sha) do
+    case GitStore.read_commit(git, sha) do
+      nil -> nil
+      commit -> commit.tree
+    end
+  end
+
+  # A commit must succeed even if the base commit's tree object is missing
+  # (corrupt local store). Degrade to "no visible changes" so docs are skipped
+  # instead of crashing the commit queue.
+  defp diff_changes(git, old_tree, tree) do
+    GitStore.diff_trees(git, old_tree, tree)
+  rescue
+    ArgumentError -> []
   end
 
   # The parent for a normal commit is the node the local user is currently

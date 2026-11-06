@@ -10,7 +10,9 @@ defmodule Cadence.Daemon.Application do
         Cadence.Daemon.Repo,
         Cadence.Daemon.LLMRateLimit,
         Cadence.Daemon.AgentWorker,
+        Cadence.Daemon.DocAgentWorker,
         Cadence.Daemon.MessageQueue,
+        Cadence.Daemon.DocQueue,
         Cadence.Daemon.SyncLedger,
         {Task.Supervisor, name: Cadence.Daemon.SyncTasks},
         {Registry, keys: :unique, name: Cadence.Daemon.Queues},
@@ -24,6 +26,7 @@ defmodule Cadence.Daemon.Application do
 
     Cadence.Daemon.Projects.rehydrate()
     Cadence.Daemon.MessageQueue.rehydrate()
+    Cadence.Daemon.DocQueue.rehydrate()
     maybe_start_sync()
 
     {:ok, pid}

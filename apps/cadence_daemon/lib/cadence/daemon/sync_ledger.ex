@@ -3,9 +3,11 @@ defmodule Cadence.Daemon.SyncLedger do
   Persistent daemon sync state: nodes waiting to upload, per-project pull
   cursors, and small global sync metadata (server user ID, backfill marker).
 
-  The ledger owns all writes so callers never race on SQLite. Commits enqueue
-  asynchronously; the network worker (added in a later slice) reads
-  `due_pending/2` and reports success/failure back here.
+  The ledger owns queue reads and most writes so callers never race on SQLite.
+  `CommitQueue` persists the initial row in the same transaction as the node
+  (a lost notification cast must never leave a parent without a row), and the
+  network worker reads `due_pending/2`/`pushable/3` and reports success/failure
+  back here.
   """
 
   use GenServer
@@ -259,6 +261,7 @@ defmodule Cadence.Daemon.SyncLedger do
     ids = node_ids |> Enum.map(&cast_uuid/1) |> Enum.reject(&is_nil/1)
 
     if ids != [] do
+      mark_docs_pushed(ids)
       Repo.delete_all(from(p in SyncPending, where: p.node_id in ^ids))
     end
 
@@ -433,7 +436,7 @@ defmodule Cadence.Daemon.SyncLedger do
   defp pushable_nodes(project_id, now, limit) do
     with {:ok, project_id} <- UUID.cast(project_id),
          true <- is_integer(limit) and limit > 0 do
-      rows =
+      all_rows =
         from(n in Node,
           join: p in SyncPending,
           on: p.node_id == n.id,
@@ -443,7 +446,10 @@ defmodule Cadence.Daemon.SyncLedger do
         )
         |> Repo.all()
 
-      pending_ids = MapSet.new(rows, fn {node, _next_attempt_at} -> node.id end)
+      # Held parents stay in `pending_ids` so their children are not selected
+      # before them; only selection is gated (spec §9.5).
+      pending_ids = MapSet.new(all_rows, fn {node, _next_attempt_at} -> node.id end)
+      rows = Enum.reject(all_rows, fn {node, _next_attempt_at} -> docs_pending?(node) end)
 
       {selected, _selected_ids} =
         Enum.reduce(rows, {[], MapSet.new()}, fn {node, next_attempt_at},
@@ -591,6 +597,38 @@ defmodule Cadence.Daemon.SyncLedger do
       :error -> nil
     end
   end
+
+  # Once a node is on the server its SHA is immutable. Remember the pushed SHA
+  # at the top level (not inside `docs`) so the ledger never rewrites the docs
+  # state machine, and so skipped nodes (which have no `docs` map) are protected
+  # too. P4-T2 replaces this with a follow-up docs child node.
+  defp mark_docs_pushed(ids) do
+    Enum.each(ids, fn node_id ->
+      case Repo.get(Node, node_id) do
+        %Node{} = node ->
+          if node.session_metadata["docs_pushed_sha"] == node.git_commit_sha do
+            :ok
+          else
+            metadata = Map.put(node.session_metadata, "docs_pushed_sha", node.git_commit_sha)
+
+            case node |> Node.changeset(%{session_metadata: metadata}) |> Repo.update() do
+              {:ok, _node} -> :ok
+              {:error, _changeset} -> :ok
+            end
+          end
+
+        nil ->
+          :ok
+      end
+    end)
+  end
+
+  # A node whose doc job is still outstanding is held back so the server
+  # normally receives one node pointing at the follow-up docs commit (D5,
+  # spec §9.5). Legacy nodes (docs_state `:pending` without this marker) are
+  # unaffected.
+  defp docs_pending?(%Node{session_metadata: %{"docs" => %{"state" => "pending"}}}), do: true
+  defp docs_pending?(_node), do: false
 
   defp format_error(reason) do
     reason

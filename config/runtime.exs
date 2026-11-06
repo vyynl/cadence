@@ -57,6 +57,19 @@ if config_env() != :test do
     sync_max_attempts: String.to_integer(System.get_env("CAD_SYNC_MAX_ATTEMPTS", "10")),
     sync_push_limit: String.to_integer(System.get_env("CAD_SYNC_PUSH_LIMIT", "100"))
 
+  config :cadence_daemon,
+    docs_enabled: System.get_env("CAD_DOCS_ENABLED", "true") == "true",
+    docs_timeout_ms: String.to_integer(System.get_env("CAD_DOCS_TIMEOUT_MS", "30000")),
+    docs_rate_limit: String.to_integer(System.get_env("CAD_DOCS_RATE_LIMIT", "5")),
+    docs_rate_scale: String.to_integer(System.get_env("CAD_DOCS_RATE_SCALE", "60000")),
+    docs_retry_attempts: String.to_integer(System.get_env("CAD_DOCS_RETRY_ATTEMPTS", "3")),
+    docs_retry_backoff_ms: String.to_integer(System.get_env("CAD_DOCS_RETRY_BACKOFF_MS", "5000")),
+    docs_max_ops: String.to_integer(System.get_env("CAD_DOCS_MAX_OPS", "20")),
+    docs_max_files: String.to_integer(System.get_env("CAD_DOCS_MAX_FILES", "200")),
+    docs_max_file_bytes: String.to_integer(System.get_env("CAD_DOCS_MAX_FILE_BYTES", "262144")),
+    docs_context_bytes: String.to_integer(System.get_env("CAD_DOCS_CONTEXT_BYTES", "65536")),
+    docs_diff_max_bytes: String.to_integer(System.get_env("CAD_DOCS_DIFF_MAX_BYTES", "32768"))
+
   # -- Server ---------------------------------------------------------------
 
   listen_port = String.to_integer(System.get_env("CAD_HTTP_PORT", "4000"))

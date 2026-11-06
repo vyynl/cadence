@@ -25,6 +25,17 @@ defmodule Cadence.Shared.LLM do
   end
 
   @doc """
+  Whether an API key is configured.
+
+  Callers use this to report unavailability (for example an HTTP `503` or a
+  deferred doc job) without making a network call.
+  """
+  @spec configured?() :: boolean()
+  def configured? do
+    api_key() not in [nil, ""]
+  end
+
+  @doc """
   The configured provider name as a string (`"deepseek"`, `"openai"`,
   `"anthropic"`), recorded alongside the model in AI result metadata.
   """

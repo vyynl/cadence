@@ -937,6 +937,7 @@ Doc automation is **not** run on every commit. Gate on:
 
 - Files matching a `generated_from` pattern changed, OR
 - Commit touches a public API surface (exported functions, module attributes), OR
+- The documentation schema (`.caddocs.yaml`) itself changed, OR
 - Manual `:CadDocSync`.
 
 ### 9.3 Pipeline
@@ -993,10 +994,13 @@ generation leaves the node pointing at `C1` with `docs_state: :pending`.
   `session_metadata` (§4.1). The code change is never hidden or reverted.
 - `:CadDocDiff` shows it in Neovim.
 - A read-only `docs_state` badge (`:pending`, `:current`, `:skipped`) is shown
-  in the web UI. `:current` means docs were generated and committed as `C2`;
-  `:pending` means a job is queued, deferred offline, or failed and is
-  retrying; `:skipped` means no schema or no trigger matched, so the commit is
-  code-only.
+  in the web UI. `:current` means the generation completed and its docs were
+  committed as `C2`; an empty generation writes no `C2`, so
+  `session_metadata["docs"]["docs_commit_sha"]` is absent and `"empty": true`
+  is recorded. `:pending` means a job is queued, deferred offline, or failed
+  and is retrying; `:skipped` means no schema matched, the schema was invalid
+  or unreadable, doc automation was disabled, or no trigger matched, so the
+  commit is code-only.
 - Web approve/reject for pending docs is deferred: nodes are immutable, so
   "reject" needs a review object that does not exist yet. Recorded in §16.
 - Reverting docs does not revert code — they're separate commits under one
@@ -1005,13 +1009,16 @@ generation leaves the node pointing at `C1` with `docs_state: :pending`.
 ### 9.5 Offline
 
 If offline, commit with `docs_state: :pending`. On reconnect, run the agent,
-amend docs into a follow-up commit, then sync both as one node.
+amend docs into a follow-up commit, then sync both as one node. If the job
+defers, the code-only node syncs and the docs are retried later.
 
-A node with a queued or deferred doc job is held out of the push queue until
-the job reaches a terminal state, so its `git_commit_sha` can move from `C1` to
-`C2` before the server ever sees it. If a node with a doc job was already
+A node with a **queued** doc job is held out of the push queue until the job
+resolves to `:current` (docs committed as `C2`) or is deferred, so its
+`git_commit_sha` can move from `C1` to `C2` before the server ever sees it. A
+**deferred** job is pushed at `C1` code-only — docs never block sync — and is
+retried on reconnect or `:CadDocSync`. If a node with a doc job was already
 pushed, its SHA is never rewritten; the agent instead creates a follow-up docs
-child node linked by `session_metadata["docs"]["docs_for"]`.
+child node linked by `session_metadata["docs"]["docs_for"]` (Phase 5c/P4).
 
 ### 9.6 Worker design
 
@@ -1477,6 +1484,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_DOCS_RETRY_ATTEMPTS` | no | `3` | Retries before a deferred doc job drops to `:pending` |
 | `CAD_DOCS_RETRY_BACKOFF_MS` | no | `5000` | Linear retry backoff unit for doc jobs |
 | `CAD_DOCS_MAX_OPS` | no | `20` | Max file operations accepted from the doc agent |
+| `CAD_DOCS_MAX_FILES` | no | `200` | Max files under `docs_dir` read for one doc job |
 | `CAD_DOCS_MAX_FILE_BYTES` | no | `262144` | Max bytes per agent-written doc file |
 | `CAD_DOCS_CONTEXT_BYTES` | no | `65536` | Max rendered schema/docs context in the doc prompt |
 | `CAD_DOCS_DIFF_MAX_BYTES` | no | `32768` | Max diff text sent to the doc agent |

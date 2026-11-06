@@ -197,6 +197,101 @@ defmodule Cadence.Daemon.SyncLedgerTest do
     assert project.id |> SyncLedger.pending() |> Enum.map(& &1.id) == [node.id]
   end
 
+  test "holds back a node whose doc job is pending until it resolves", %{project: project} do
+    node = insert_node(project.id, ~U[2026-10-23 12:00:00.000000Z])
+
+    node =
+      node
+      |> Node.changeset(%{
+        session_metadata: %{
+          "code_commit_sha" => node.git_commit_sha,
+          "docs" => %{"state" => "pending", "code_commit_sha" => node.git_commit_sha}
+        }
+      })
+      |> Repo.update!()
+
+    # The row exists immediately (parents-first ordering), but the node is not
+    # selectable until the doc job resolves.
+    SyncLedger.enqueue(project.id, node.id)
+    assert node_ids(SyncLedger.pending(project.id)) == [node.id]
+    assert SyncLedger.pushable(project.id, nil, 10) == []
+
+    node =
+      node
+      |> Node.changeset(%{
+        docs_state: :current,
+        session_metadata: %{"docs" => %{"state" => "current"}}
+      })
+      |> Repo.update!()
+
+    assert node_ids(SyncLedger.pushable(project.id, nil, 10)) == [node.id]
+  end
+
+  test "a doc-held parent keeps its child behind it", %{project: project} do
+    parent = insert_node(project.id, ~U[2026-10-23 12:00:00.000000Z])
+    child = insert_node(project.id, ~U[2026-10-23 12:01:00.000000Z], [parent.id])
+
+    parent =
+      parent
+      |> Node.changeset(%{
+        session_metadata: %{
+          "docs" => %{"state" => "pending", "code_commit_sha" => parent.git_commit_sha}
+        }
+      })
+      |> Repo.update!()
+
+    SyncLedger.enqueue(project.id, parent.id)
+    SyncLedger.enqueue(project.id, child.id)
+
+    # Neither is selected: the parent is gated and the child must not overtake.
+    assert SyncLedger.pushable(project.id, nil, 10) == []
+
+    parent
+    |> Node.changeset(%{
+      docs_state: :current,
+      session_metadata: %{"docs" => %{"state" => "current"}}
+    })
+    |> Repo.update!()
+
+    assert node_ids(SyncLedger.pushable(project.id, nil, 10)) == [parent.id, child.id]
+  end
+
+  test "mark_pushed records the pushed sha for doc nodes", %{project: project} do
+    node = insert_node(project.id, ~U[2026-10-23 12:00:00.000000Z])
+
+    node =
+      node
+      |> Node.changeset(%{
+        session_metadata: %{
+          "docs" => %{"state" => "deferred", "code_commit_sha" => node.git_commit_sha}
+        }
+      })
+      |> Repo.update!()
+
+    SyncLedger.enqueue(project.id, node.id)
+    assert :ok = SyncLedger.mark_pushed([node.id])
+
+    loaded = Repo.get!(Node, node.id)
+    assert loaded.session_metadata["docs_pushed_sha"] == node.git_commit_sha
+    assert SyncLedger.pending(project.id) == []
+  end
+
+  test "rehydrate keeps a doc-pending node queued for ordering", %{project: project} do
+    node = insert_node(project.id, ~U[2026-10-23 12:00:00.000000Z])
+
+    node
+    |> Node.changeset(%{
+      session_metadata: %{
+        "docs" => %{"state" => "pending", "code_commit_sha" => node.git_commit_sha}
+      }
+    })
+    |> Repo.update!()
+
+    assert :ok = SyncLedger.rehydrate(force: true)
+    assert Enum.any?(SyncLedger.pending(project.id), &(&1.id == node.id))
+    assert SyncLedger.pushable(project.id, nil, 10) == []
+  end
+
   test "mark_failed returns not_found for an unknown pending node" do
     assert {:error, :not_found} =
              SyncLedger.mark_failed(Ecto.UUID.generate(), :boom, DateTime.utc_now())

@@ -46,6 +46,87 @@ defmodule Cadence.Daemon.WatcherTest do
            end)
   end
 
+  test "suspension drops events and resume re-arms commits",
+       %{work_dir: work_dir, git_dir: git_dir, project: project} do
+    queue =
+      start_supervised!(
+        {CommitQueue, [project_id: project.id, work_dir: work_dir, git_dir: git_dir]}
+      )
+
+    name = {:via, Registry, {Cadence.Daemon.Queues, {:watcher, project.id}}}
+
+    start_supervised!(
+      {Watcher,
+       [
+         dir: work_dir,
+         commit_queue: queue,
+         backend: :fs_poll,
+         interval: 50,
+         debounce_ms: 50,
+         name: name
+       ]}
+    )
+
+    Process.sleep(300)
+
+    assert :ok = Watcher.suspend(project.id)
+    assert Watcher.suspended?(project.id)
+
+    send(
+      GenServer.whereis(name),
+      {:file_event, self(), {Path.join(work_dir, "a.txt"), [:created]}}
+    )
+
+    Process.sleep(200)
+
+    assert count_nodes(project) == 0
+
+    assert :ok = Watcher.resume(project.id)
+    refute Watcher.suspended?(project.id)
+
+    File.write!(Path.join(work_dir, "a.txt"), "hi\n")
+    assert eventually(fn -> count_nodes(project) == 1 end)
+  end
+
+  test "resume re-arms a commit that was pending before suspension",
+       %{work_dir: work_dir, git_dir: git_dir, project: project} do
+    queue =
+      start_supervised!(
+        {CommitQueue, [project_id: project.id, work_dir: work_dir, git_dir: git_dir]}
+      )
+
+    name = {:via, Registry, {Cadence.Daemon.Queues, {:watcher, project.id}}}
+
+    start_supervised!(
+      {Watcher,
+       [
+         dir: work_dir,
+         commit_queue: queue,
+         backend: :fs_poll,
+         interval: 50,
+         debounce_ms: 400,
+         name: name
+       ]}
+    )
+
+    Process.sleep(300)
+    File.write!(Path.join(work_dir, "a.txt"), "hi\n")
+
+    # The poller sees the write and arms the debounce; suspend before it fires.
+    Process.sleep(150)
+    assert :ok = Watcher.suspend(project.id)
+
+    Process.sleep(500)
+    assert count_nodes(project) == 0
+
+    assert :ok = Watcher.resume(project.id)
+    assert eventually(fn -> count_nodes(project) == 1 end)
+  end
+
+  defp count_nodes(project) do
+    Repo.aggregate(where(Node, [n], n.project_id == ^project.id), :count)
+  end
+
   defp eventually(fun, timeout \\ 3000) do
     deadline = System.monotonic_time(:millisecond) + timeout
     try_until(fun, deadline)

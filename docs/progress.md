@@ -3,8 +3,9 @@
 ## Current Phase
 Phase 4 — unions, proposals & review is **complete**, as is the UI styling &
 freshness pass (4e). **Phase 5 — documentation automation** is in progress:
-**5a (shared primitives) is complete and committed**; the next slice is **5b**
-(the daemon doc worker and follow-up docs commit).
+**5a (shared primitives) and 5b (daemon doc worker + commit integration) are
+complete and committed**; the next slice is **5c** (daemon API + Neovim
+commands, plan P3).
 
 ## Done (summary)
 
@@ -249,6 +250,37 @@ freshness pass (4e). **Phase 5 — documentation automation** is in progress:
   WARNINGS; all 5 findings fixed (read-only doc writes, binary diff guard, NUL
   paths, path-directed merge, `apply_ops` validation). 248 shared + 125 daemon
   tests green; server suite not rerun.
+- **Phase 5b (daemon doc worker + commit integration)** — `SchemaSource` reads
+  `.caddocs.yaml` from the working tree and best-effort caches it on
+  `Project.docs_schema` (registration and schema-file commits). `CommitQueue`
+  evaluates `Docs.Trigger`, sets `docs_state` (`:skipped` / `:pending`), records
+  `session_metadata["code_commit_sha"]` only for queued jobs, and hands the sync
+  enqueue to `DocQueue` instead of the ledger. `DocQueue` runs the job through
+  `DocAgentWorker` (Task.Supervisor, Hammer `:docs`, injectable `:docs_llm`,
+  bounded timeout), writes `C2` as a git child of `C1` with
+  `GitStore.merge_files/3`, updates the node to `:current` (or defers with a
+  shape-only error after `CAD_DOCS_RETRY_ATTEMPTS`), and is the only sync
+  enqueue point for doc nodes. Working-tree writes are schema-scoped,
+  watcher-suspended, and skipped when the user diverged from `C1`
+  (`workdir_skipped`). `Watcher` gained registry-scoped `suspend/resume`
+  (resume re-arms a pending debounce, and watcher commits now pass
+  `skip_unchanged: true`, so a late poll/inotify event cannot create an empty
+  node). `SyncLedger` holds doc-pending nodes out of
+  `enqueue`/`backfill`/`pushable`; `DocDiff.build/2` exposes the schema-filtered
+  `C1→C2` diff with a first-parent fallback. Reconnect/manual
+  `DocQueue.retry_pending/0` re-gates deferred nodes and retries; boot
+  `rehydrate/0` resumes them before the first sync pass. 36 new daemon tests
+  (766 green: 251 shared + 161 daemon + 354 server at the time of writing).
+  Review verdict REQUIRES CHANGES (B1 parents-first push); all 15 findings were
+  fixed via `reviews/phase-5-docs-5b-triage.md`: every commit now carries a
+  sync row (written in the node transaction) and only *selection* is gated
+  (children cannot overtake a held parent), `mark_pushed/1` stamps a top-level
+  `docs_pushed_sha` so a pushed node (including `:skipped` nodes) is never
+  regenerated, a raising job is rescued, an empty generation writes no `C2`
+  and a forced no-op keeps an existing one, `CAD_DOCS_MAX_FILES` is in §12.6,
+  `retry_pending/1` is project-scoped, `:force` sync works on code-only nodes,
+  worktree writes reject symlinks, `docs_enabled?` releases queued nodes, and
+  the tests use a barrier/queue drain/`:fs_poll` instead of timing races.
 - **4e gate:** 640 tests green (161 shared + 125 daemon + 354 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
@@ -262,28 +294,28 @@ freshness pass (4e). **Phase 5 — documentation automation** is in progress:
 
 ## Next
 
-**Immediate step:** start **5b (P2) — daemon doc worker**. Plan:
-`.claude/plans/phase-5-docs/plan.md` (P2-T1..T11), with the decisions in
-`scratchpad.md` and the fixed review findings in
-`reviews/phase-5-docs-triage.md`.
+**Immediate step:** start **5c (P3) — daemon API + Neovim doc commands**. Plan:
+`.claude/plans/phase-5-docs/plan.md` (P3-T1..T5). P2 is complete; the daemon
+already exposes `DocQueue.enqueue/3` (`force: true` bypasses the trigger
+re-check) and `DocDiff.build/2`.
 
-1. P2-T1 — `CAD_DOCS_*` config + `Cadence.Daemon.Env` accessors.
-2. P2-T2 — `Docs.SchemaSource` and the local `Project.docs_schema` cache.
-3. P2-T3 — `DocAgentWorker` (`Task.Supervisor` + Hammer `:docs`, injectable
-   `:docs_llm`).
-4. P2-T4 — `DocQueue` (enqueue/rehydrate/retry, `C1`→`C2` docs commit,
-   `docs_state` transitions).
-5. P2-T5 — `CommitQueue` integration (trigger evaluation, `code_commit_sha`,
-   no sync enqueue while a doc job is queued).
-6. P2-T6/P2-T7 — `Watcher.suspend/resume` and the working-tree write guard.
-7. P2-T8/P2-T9 — `SyncLedger` gating and `DocDiff`.
-8. P2-T10/P2-T11 — tests and `Application` children/reconnect retry hook.
+1. P3-T1 — `POST /docs/sync` (`{project_id, node_id?}`): 202 queued, 200
+   skipped with a reason, 503 when the doc LLM is unconfigured
+   (`DocAgentWorker.configured?/0`), 404, 422.
+2. P3-T2 — `GET /docs/diff` → `DocDiff.build/2`; 409 for `:no_docs_commit`.
+3. P3-T3/P3-T4 — `:CadDocSync` (async) and `:CadDocDiff` (scratch buffer,
+   reuse `diff.lua`).
+4. P3-T5 — API router tests + `luac -p`.
 
 **Integration contract:** `LLM.Docs.build_prompt/4` returns
-`{:ok, prompt, %{writable_paths, read_only_paths}}`. Pass
-`read_only_paths:` to `parse/3`; only `writable_paths` may be overwritten,
-while new files under `docs_dir` are allowed. Binary diffs are already
-omitted; `apply_ops/2` enforces CREATE/MODIFY.
+`{:ok, prompt, %{writable_paths, read_only_paths}}`; `DocQueue` passes
+`read_only_paths` to `parse/3`. A node's docs commit is
+`session_metadata["docs"]["docs_commit_sha"]` (absent with `"empty": true` for
+a no-op generation); the code commit is
+`session_metadata["docs"]["code_commit_sha"]`. `enqueue(force: true)` works on a
+`:skipped`/legacy node by falling back to `node.git_commit_sha`, but a node
+with `metadata["docs"]["pushed_sha"]` is dropped (P4-T2 fallback): `/docs/sync`
+should report that as skipped/already-synced rather than queued.
 
 Carry-over (small, not blocking Phase 5):
 
@@ -313,20 +345,46 @@ Carry-over (small, not blocking Phase 5):
 
 ## Spec Deltas / Open Items
 
+- **Phase 5b implementation notes (2026-11-06)** — every commit gets a
+  `SyncPending` row written in the same transaction as the node (and spawn);
+  `pushable/3` keeps a doc-held parent in the parent set and gates only
+  *selection*, so children cannot overtake it and the server still receives one
+  node at `C2`. Sync gating keys on the explicit
+  `session_metadata["docs"]["state"] == "pending"` marker; plain
+  `docs_state: :pending` legacy nodes (4c meld approvals) stay pushable.
+  `retry_pending/0` is project-scoped, moves a deferred node back to `pending`
+  before retrying, and the reconnect hook fires only on a per-project
+  offline→online transition, so a failing job is not retried every pass.
+  Terminal errors are `:not_configured`, `:missing_code_commit`, `:no_location`,
+  `:too_many_docs`, and `:context_too_large`; everything else retries with
+  linear backoff. Docs reads are capped by `CAD_DOCS_MAX_FILES` (200) and twice
+  the prompt budget; unlisted/over-budget docs are read-only to the agent.
+- **Watcher commits skip unchanged trees (5b)** — `CommitQueue.commit/3` accepts
+  `skip_unchanged: true` and the watcher passes it. This is the second guard
+  against the doc feedback loop: suspension alone cannot cover an inotify event
+  that arrives just after `resume`, or a polling backend's post-write tick.
+  Explicit/API commits still create an empty commit when asked.
+- **Doc commit SHA gating/fallback (5b → P4)** — selection gating is
+  implemented and tested, and `mark_pushed/1` stamps a top-level
+  `session_metadata["docs_pushed_sha"]` (covering `:skipped` nodes) so
+  `rehydrate/0`, `retry_pending/0`, and the job runner never rewrite an
+  already-pushed SHA. A forced no-op run keeps the previous `C2`. P4-T2's
+  follow-up docs child node is still open: `:CadDocSync` cannot generate docs
+  for a node that was already pushed (the queue drops it).
+- **`:force` sync bypasses `CAD_DOCS_ENABLED` (5b)** — the manual path runs even
+  with the master switch off. Decide in P3 whether `/docs/sync` should map that
+  to `200 skipped, reason: "disabled"` or document the explicit override.
 - **Phase 5a implementation notes (2026-11-06)** — `docs_state` semantics are
   now explicit in spec §9.4 (`:current` generated/committed, `:pending`
   queued/deferred/retrying, `:skipped` no schema/trigger). `build_prompt/4`
-  returns `writable_paths`/`read_only_paths`; P2 must pass
-  `read_only_paths` to `parse/3`.
+  returns `writable_paths`/`read_only_paths`; P2 passes `read_only_paths` to
+  `parse/3`.
 - **`Project.docs_schema` server propagation is deferred** — `.caddocs.yaml`
   remains the source of truth; P2 caches the parsed map locally on the project
   row. Syncing it to the server is future work.
 - **Web docs review remains deferred** (spec §16) — Phase 5 ships
   `:CadDocSync`/`:CadDocDiff` plus a read-only `docs_state` badge; rejecting
   generated docs needs a review object that does not exist yet.
-- **Doc commit SHA gating/fallback is specified but unverified** — spec §9.5
-  records holding a doc-pending node out of the push queue and the
-  already-pushed child-node fallback; P2 must test both paths.
 - **Doc `max_words` is advisory** — the schema parses and records it, but the
   required-heading check does not enforce a word count. Revisit if docs grow
   unbounded.
@@ -630,4 +688,53 @@ rejection, path-directed merge, `apply_ops` CREATE/MODIFY validation).
 Verification: `mix format --check-formatted` and
 `mix compile --warnings-as-errors` clean; 248 shared + 125 daemon tests green
 (server suite not rerun — no Postgres). Next: 5b (P2-T1) daemon doc worker.
+
+2026-11-06 — **Phase 5b (daemon doc worker + commit integration)** shipped
+`.claude/plans/phase-5-docs/plan.md` P2-T1..T11. `SchemaSource` reads
+`.caddocs.yaml` and caches `Project.docs_schema`; `CommitQueue` evaluates the
+trigger, sets `docs_state`, records `code_commit_sha` only for queued jobs, and
+leaves the sync enqueue to `DocQueue`; `DocQueue` runs `DocAgentWorker`
+(Task.Supervisor + Hammer `:docs`, injectable `:docs_llm`, bounded timeout),
+writes `C2` with `merge_files/3`, updates the node, and defers with a
+shape-only error after `CAD_DOCS_RETRY_ATTEMPTS`. Working-tree writes are
+schema-scoped, watcher-suspended, and skipped when the user diverged
+(`workdir_skipped`); watcher commits now pass `skip_unchanged: true` so a late
+event cannot create an empty node. `SyncLedger` holds doc-pending nodes out of
+enqueue/backfill/pushable; `DocDiff.build/2` returns the schema-filtered
+`C1→C2` diff; `retry_pending/0` re-gates deferred nodes on a reconnect
+transition and `rehydrate/0` resumes them at boot. Verification:
+`mix format --check-formatted` and `mix compile --warnings-as-errors` clean;
+756 tests green (251 shared + 151 daemon + 354 server). Review pending. Known
+risk recorded in Spec Deltas: deferred-retry-after-push awaits the P4-T2
+child-node fallback. Next: 5c (P3) — daemon `/docs/sync` + `/docs/diff` and
+`:CadDocSync`/`:CadDocDiff`.
+
+2026-11-06 — **Phase 5b review → triage fixes.** `/phx-review` verdict
+REQUIRES CHANGES: B1 (a child could be pushed before its doc-held parent →
+server `unknown_parent` 422 with a 24 h backoff), W1 (boot rehydrate rewrote an
+already-pushed deferred SHA → 409), W2 (a raising job stranded the node
+forever), W3 (spec §9.5 contradicted D6), W4 (empty generation claimed a `C2`),
+W5 (test timing/isolation), plus S1–S9. All findings fixed per
+`.claude/plans/phase-5-docs/reviews/phase-5-docs-5b-triage.md`: every commit
+gets a sync row and `pushable/3` gates selection only, `mark_pushed/1` stamps
+`pushed_sha`, a rescue + non-raising writes defer a crashed job,
+empty generations record `"empty": true` (no `C2`), `CAD_DOCS_MAX_FILES` was
+added to §12.6, `retry_pending/1` is project-scoped, `:force` sync falls back to
+`node.git_commit_sha`, worktree writes reject symlinks, `docs_enabled?`
+releases queued nodes as `:skipped`, and the tests use a barrier/queue
+drain/`:fs_poll` instead of races. Spec §9.2/§9.4/§9.5/§12.6 updated.
+Verification: format + dev/prod compile clean; 764 tests green
+(251 shared + 159 daemon + 354 server). Next: 5c (P3).
+
+2026-11-06 — **Phase 5b second review.** The post-triage re-review found three
+remaining warnings and all were fixed: (1) the pushed-SHA stamp moved to a
+top-level `session_metadata["docs_pushed_sha"]` so `:skipped` nodes are
+protected too and the ledger never rewrites the `docs` state machine;
+(2) `SyncPending` is now inserted inside the node transaction (commit and
+spawn), so a dropped notification cast cannot leave a parent rowless and let a
+child be pushed first; (3) a forced no-op run keeps the previous
+`docs_commit_sha` instead of rewinding a node from `C2` to `C1`. Tests added:
+skipped-node force guard (no model call), atomic sync row, repeated-force `C2`
+preservation. Verification: format + dev/prod compile clean; 766 tests green
+(251 shared + 161 daemon + 354 server). Next: 5c (P3).
 

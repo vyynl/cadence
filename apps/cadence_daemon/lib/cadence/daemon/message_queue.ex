@@ -101,7 +101,7 @@ defmodule Cadence.Daemon.MessageQueue do
       node ->
         with {:ok, diff_text} <- build_diff_text(node),
              {:ok, result} <- AgentWorker.generate_commit_message(diff_text),
-             {:ok, _} <- apply_message(node, result) do
+             {:ok, _} <- apply_message(node_id, result) do
           :ok
         else
           _ -> maybe_reschedule(entry)
@@ -133,29 +133,41 @@ defmodule Cadence.Daemon.MessageQueue do
   end
 
   defp build_diff_text(node) do
+    # A doc job may already have moved the node to the follow-up docs commit;
+    # the commit message describes code only (spec §9.4).
+    code_sha = node.session_metadata["code_commit_sha"] || node.git_commit_sha
+
     with {:ok, git} <- NodeStore.open(node.project_id),
-         {:ok, commit} <- NodeStore.read_commit(git, node.git_commit_sha),
+         {:ok, commit} <- NodeStore.read_commit(git, code_sha),
          {:ok, old_tree} <- NodeStore.parent_tree(git, node.parents) do
       changes = GitStore.diff_trees(git, old_tree, commit.tree)
       {:ok, CommitMessage.diff_to_text(changes, diff_max_bytes())}
     end
   end
 
-  defp apply_message(node, %{summary: summary, details: details, flag: flag, model: model}) do
+  # Re-read before writing: the doc worker may have changed `session_metadata`
+  # while the LLM call was in flight, and a stale map would drop its update.
+  defp apply_message(node_id, %{summary: summary, details: details, flag: flag, model: model}) do
     message = CommitMessage.render(%{summary: summary, details: details})
 
-    metadata =
-      node.session_metadata
-      |> Map.put("model", model)
-      |> Map.delete("message_pending")
+    case Repo.get(Node, node_id) do
+      nil ->
+        {:error, :not_found}
 
-    node
-    |> Node.changeset(%{
-      message: message,
-      flags: [CommitMessage.clamp_flag(flag)],
-      session_metadata: metadata
-    })
-    |> Repo.update()
+      node ->
+        metadata =
+          node.session_metadata
+          |> Map.put("model", model)
+          |> Map.delete("message_pending")
+
+        node
+        |> Node.changeset(%{
+          message: message,
+          flags: [CommitMessage.clamp_flag(flag)],
+          session_metadata: metadata
+        })
+        |> Repo.update()
+    end
   end
 
   defp clear_pending(node_id) do

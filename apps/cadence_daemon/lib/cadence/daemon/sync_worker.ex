@@ -11,7 +11,7 @@ defmodule Cadence.Daemon.SyncWorker do
 
   require Logger
 
-  alias Cadence.Daemon.{Env, Projects, Sync, SyncClient}
+  alias Cadence.Daemon.{DocQueue, Env, Projects, Sync, SyncClient}
 
   @tasks Cadence.Daemon.SyncTasks
 
@@ -32,7 +32,7 @@ defmodule Cadence.Daemon.SyncWorker do
   @impl true
   def init(_opts) do
     schedule_tick()
-    {:ok, %{in_flight: %{}}}
+    {:ok, %{in_flight: %{}, last_status: %{}}}
   end
 
   @impl true
@@ -95,9 +95,23 @@ defmodule Cadence.Daemon.SyncWorker do
 
       {%{project_id: project_id}, in_flight} ->
         log_result(project_id, result)
-        %{state | in_flight: in_flight}
+        retry_deferred_docs(project_id, result, state.last_status)
+        last_status = Map.put(state.last_status, project_id, status(result))
+        %{state | in_flight: in_flight, last_status: last_status}
     end
   end
+
+  # Connectivity returned for this project: give deferred doc jobs another
+  # chance (spec §9.5). A per-project transition guard keeps a permanently
+  # failing job from being retried on every pass.
+  defp retry_deferred_docs(project_id, :ok = _result, last_status) do
+    if Map.get(last_status, project_id) != :ok, do: DocQueue.retry_pending(project_id)
+  end
+
+  defp retry_deferred_docs(_project_id, _result, _last_status), do: :ok
+
+  defp status(:ok), do: :ok
+  defp status(_result), do: :error
 
   defp project_in_flight?(state, project_id) do
     Enum.any?(state.in_flight, fn {_ref, entry} -> entry.project_id == project_id end)
