@@ -168,6 +168,84 @@ defmodule Cadence.Shared.GitStore do
 
   def put_files(_repo, _files), do: {:error, :invalid_content}
 
+  @doc """
+  Overlay `files` onto an existing tree and return the new tree SHA.
+
+  `files` is a `%{path => content}` map using the same path rules as
+  `put_files/2`: every path is relative and traversal-free, `.git` segments are
+  rejected, and conflicting file/directory entries return
+  `{:error, :path_conflict}`. Untouched entries keep their original tree refs;
+  only the directories named by `files` are read and rewritten.
+
+  Returns `{:error, :missing_object}` when `tree_sha` is not a tree in the
+  store.
+  """
+  @spec merge_files(t(), sha(), %{String.t() => binary()}) ::
+          {:ok, sha()}
+          | {:error, :unsafe_path | :invalid_content | :path_conflict | :missing_object}
+  def merge_files(repo, tree_sha, files) when is_binary(tree_sha) and is_map(files) do
+    with {:ok, incoming} <- nest_files(files),
+         {:ok, merged} <- merge_tree(repo, tree_sha, incoming) do
+      {:ok, merged}
+    end
+  end
+
+  def merge_files(_repo, _tree_sha, _files), do: {:error, :invalid_content}
+
+  # Recurse only into the subtrees named by `incoming`; untouched entries keep
+  # their original refs (and the whole tree keeps its content-addressed SHA when
+  # nothing changed).
+  defp merge_tree(repo, tree_sha, incoming) do
+    case read_tree(repo, tree_sha) do
+      nil ->
+        {:error, :missing_object}
+
+      entries ->
+        incoming
+        |> Enum.reduce_while({:ok, entries}, fn {name, value}, {:ok, acc} ->
+          existing = Enum.find(acc, &(&1.name == name))
+
+          case merge_entry(repo, name, existing, value) do
+            {:ok, entry} -> {:cont, {:ok, put_entry(acc, name, entry)}}
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
+        end)
+        |> case do
+          {:ok, entries} -> {:ok, write_tree(repo, entries)}
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
+
+  defp merge_entry(repo, name, nil, {:file, content}) do
+    {:ok, %{name: name, mode: @file_mode, type: :blob, ref: write_blob(repo, content)}}
+  end
+
+  defp merge_entry(repo, name, nil, subtree) when is_map(subtree) do
+    {:ok, %{name: name, mode: @dir_mode, type: :tree, ref: write_nested_tree(repo, subtree)}}
+  end
+
+  defp merge_entry(repo, _name, %{type: :blob} = existing, {:file, content}) do
+    {:ok, %{existing | ref: write_blob(repo, content)}}
+  end
+
+  defp merge_entry(repo, _name, %{type: :tree} = existing, subtree) when is_map(subtree) do
+    case merge_tree(repo, existing.ref, subtree) do
+      {:ok, ref} -> {:ok, %{existing | ref: ref}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp merge_entry(_repo, _name, _existing, _value), do: {:error, :path_conflict}
+
+  defp put_entry(entries, name, entry) do
+    if Enum.any?(entries, &(&1.name == name)) do
+      Enum.map(entries, fn existing -> if existing.name == name, do: entry, else: existing end)
+    else
+      [entry | entries]
+    end
+  end
+
   defp nest_files(files) do
     Enum.reduce_while(files, {:ok, %{}}, fn {path, content}, {:ok, acc} ->
       with {:ok, segments} <- split_path(path),

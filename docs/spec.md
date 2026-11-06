@@ -926,6 +926,11 @@ sections:
     auto_append: true
 ```
 
+The file is the source of truth. It is parsed with `yaml_elixir` (§11) into the
+`Project.docs_schema` map for local/server caching; an unreadable or invalid
+schema never blocks a commit (the node records `docs_state: :skipped` plus a
+shape-only error).
+
 ### 9.2 Trigger conditions
 
 Doc automation is **not** run on every commit. Gate on:
@@ -973,11 +978,24 @@ Diff:
 <diff>
 ```
 
+**Commit model (Phase 5).** The code change is committed first as `C1`. When
+the agent succeeds, its docs are added to the working tree and written as a
+follow-up commit `C2` whose Git parent is `C1`. The node's logical `parents`
+(§4.1) do not change; its `git_commit_sha` points at `C2`, so one node contains
+both code and docs while the two remain separate commits. A failed or deferred
+generation leaves the node pointing at `C1` with `docs_state: :pending`.
+
 ### 9.4 Reviewability
 
-- Doc diff stored as node metadata.
+- The doc diff is derived on demand from the node's docs commit (`C2`) against
+  its recorded `code_commit_sha` (`C1`), filtered to the schema's `index_file`
+  and `docs_dir`. Both are Git objects; no diff is inlined in
+  `session_metadata` (§4.1). The code change is never hidden or reverted.
 - `:CadDocDiff` shows it in Neovim.
-- Web UI shows it with approve/reject buttons when `docs_state: :pending`.
+- A read-only `docs_state` badge (`:pending`, `:current`, `:skipped`) is shown
+  in the web UI.
+- Web approve/reject for pending docs is deferred: nodes are immutable, so
+  "reject" needs a review object that does not exist yet. Recorded in §16.
 - Reverting docs does not revert code — they're separate commits under one
   logical node.
 
@@ -985,6 +1003,12 @@ Diff:
 
 If offline, commit with `docs_state: :pending`. On reconnect, run the agent,
 amend docs into a follow-up commit, then sync both as one node.
+
+A node with a queued or deferred doc job is held out of the push queue until
+the job reaches a terminal state, so its `git_commit_sha` can move from `C1` to
+`C2` before the server ever sees it. If a node with a doc job was already
+pushed, its SHA is never rewritten; the agent instead creates a follow-up docs
+child node linked by `session_metadata["docs"]["docs_for"]`.
 
 ### 9.6 Worker design
 
@@ -1162,6 +1186,7 @@ inserts); the daemon can mark only that node failed and retry the rest.
 | Notification channel (daemon → server) | Phoenix Channels + `slipstream` |
 | ORM / schemas | Ecto (`ecto`, `ecto_sql`) |
 | JSON codec | `Jason` |
+| Docs schema parsing (`.caddocs.yaml`, §9.1) | `yaml_elixir` (declared in `cadence_shared`; `yamerl` is its parser) |
 | HTTP server | `Bandit` |
 | HTTP abstraction | `Plug` |
 | Local persistent store | SQLite via `ecto_sqlite3` |
@@ -1442,6 +1467,16 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_DIFF_MAX_FILES` | no | `20` | Max files in a node diff (hover preview) |
 | `CAD_DIFF_MAX_LINES_PER_FILE` | no | `400` | Max diff lines per file |
 | `CAD_DIFF_MAX_BYTES` | no | `262144` | Max combined file size diffed for a hover preview; larger files are marked truncated without running Myers |
+| `CAD_DOCS_ENABLED` | no | `true` | Master switch for documentation automation (§9) |
+| `CAD_DOCS_TIMEOUT_MS` | no | `30000` | Max LLM call time per doc job |
+| `CAD_DOCS_RATE_LIMIT` | no | `5` | Doc agent calls per daemon rate window |
+| `CAD_DOCS_RATE_SCALE` | no | `60000` | Doc rate window in milliseconds |
+| `CAD_DOCS_RETRY_ATTEMPTS` | no | `3` | Retries before a deferred doc job drops to `:pending` |
+| `CAD_DOCS_RETRY_BACKOFF_MS` | no | `5000` | Linear retry backoff unit for doc jobs |
+| `CAD_DOCS_MAX_OPS` | no | `20` | Max file operations accepted from the doc agent |
+| `CAD_DOCS_MAX_FILE_BYTES` | no | `262144` | Max bytes per agent-written doc file |
+| `CAD_DOCS_CONTEXT_BYTES` | no | `65536` | Max rendered schema/docs context in the doc prompt |
+| `CAD_DOCS_DIFF_MAX_BYTES` | no | `32768` | Max diff text sent to the doc agent |
 
 ### 12.7 First-boot sequence (server)
 
@@ -1687,8 +1722,14 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       `nodes_pushed` remains deferred: `DAGLayout.layout/2` recomputes intro
       timing, so a live refresh would replay the animation and disturb the
       selected pane.
-- [ ] **Doc agent model:** which LLM(s) to support, and whether to allow
-      per-project overrides.
+- [x] **Doc agent model:** resolved for Phase 5 — the doc agent uses the
+      configured `CAD_LLM_*` client through `Cadence.Shared.LLM`; per-project
+      model overrides remain deferred.
+- [ ] **Web docs review (approve/reject):** deferred from Phase 5. Nodes are
+      immutable, so rejecting generated docs needs a review object (like a
+      proposal) rather than mutating the node. Until then the web UI shows a
+      read-only `docs_state` badge, and review happens in Neovim via
+      `:CadDocDiff` (§9.4).
 - [ ] **Local store:** SQLite via `ecto_sqlite3` is the obvious pick; confirm
       it fits the daemon's needs.
 - [ ] **Neovim plugin distribution:** plain Lua files, or a proper plugin with

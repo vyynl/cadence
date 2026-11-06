@@ -590,6 +590,61 @@ defmodule Cadence.Shared.GitStoreTest do
     end
   end
 
+  describe "merge_files/3" do
+    test "overlays files onto an existing tree and preserves siblings", %{repo: repo} do
+      {:ok, tree} = GitStore.put_files(repo, %{"README.md" => "old", "docs/a.md" => "a"})
+
+      {:ok, merged} =
+        GitStore.merge_files(repo, tree, %{"README.md" => "new", "docs/b.md" => "b"})
+
+      commit = GitStore.write_commit(repo, merged, [], %{name: "t", email: "t@e"}, "docs")
+
+      assert {:ok, "new"} = GitStore.read_path(repo, commit, "README.md")
+      assert {:ok, "a"} = GitStore.read_path(repo, commit, "docs/a.md")
+      assert {:ok, "b"} = GitStore.read_path(repo, commit, "docs/b.md")
+    end
+
+    test "creates nested directories for new paths", %{repo: repo} do
+      {:ok, tree} = GitStore.put_files(repo, %{"README.md" => "old"})
+
+      {:ok, merged} =
+        GitStore.merge_files(repo, tree, %{"docs/guides/api.md" => "# API"})
+
+      commit = GitStore.write_commit(repo, merged, [], %{name: "t", email: "t@e"}, "docs")
+
+      assert {:ok, "# API"} = GitStore.read_path(repo, commit, "docs/guides/api.md")
+    end
+
+    test "rejects unsafe paths and .git segments", %{repo: repo} do
+      {:ok, tree} = GitStore.put_files(repo, %{"README.md" => "old"})
+
+      assert GitStore.merge_files(repo, tree, %{"../escape.md" => "x"}) ==
+               {:error, :unsafe_path}
+
+      assert GitStore.merge_files(repo, tree, %{".git/config" => "x"}) ==
+               {:error, :unsafe_path}
+    end
+
+    test "rejects file/directory conflicts", %{repo: repo} do
+      {:ok, tree} = GitStore.put_files(repo, %{"a" => "file"})
+
+      assert GitStore.merge_files(repo, tree, %{"a/b" => "x"}) == {:error, :path_conflict}
+
+      {:ok, tree} = GitStore.put_files(repo, %{"a/b" => "x"})
+      assert GitStore.merge_files(repo, tree, %{"a" => "file"}) == {:error, :path_conflict}
+    end
+
+    test "returns missing_object for an unknown tree", %{repo: repo} do
+      assert GitStore.merge_files(repo, String.duplicate("0", 40), %{"a" => "x"}) ==
+               {:error, :missing_object}
+    end
+
+    test "rejects non-map file input", %{repo: repo} do
+      {:ok, tree} = GitStore.put_files(repo, %{"README.md" => "old"})
+      assert GitStore.merge_files(repo, tree, nil) == {:error, :invalid_content}
+    end
+  end
+
   defp build_file_tree(repo, dir, files) do
     Enum.each(files, fn {path, content} ->
       full = Path.join(dir, path)

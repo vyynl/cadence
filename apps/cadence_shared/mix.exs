@@ -23,7 +23,8 @@ defmodule Cadence.Shared.MixProject do
       {:jason, "~> 1.4"},
       {:libgraph, "~> 0.16.0"},
       {:axiom_ai, "~> 0.1.14"},
-      {:hammer, "~> 7.5"}
+      {:hammer, "~> 7.5"},
+      {:yaml_elixir, "~> 2.12"}
     ]
   end
 end

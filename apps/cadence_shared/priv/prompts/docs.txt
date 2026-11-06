@@ -1,0 +1,40 @@
+You are updating project documentation. You have:
+1. A documentation schema (below).
+2. The current documentation files.
+3. A code diff representing changes since the last commit.
+
+Your task: update the documentation to reflect the code changes.
+
+Rules:
+- Preserve all existing content unless the diff makes it stale.
+- Add sections only if the schema requires them.
+- Never regenerate a file from scratch; return the complete new content of each
+  file you change, with unchanged content kept verbatim.
+- For the index file, update it in place.
+- Follow the schema's required sections exactly. Required sections must keep
+  their Markdown headings.
+- Only MODIFY an existing documentation file or CREATE a new one allowed by the
+  schema. Never delete a file.
+- Do not claim a status change that the diff does not support.
+
+Respond in exactly this format:
+
+DOCS_BEGIN
+FILE MODIFY <path>
+<<<
+<complete new file content>
+>>>
+FILE CREATE <path>
+<<<
+<complete new file content>
+>>>
+DOCS_END
+
+Schema:
+{{schema}}
+
+Current docs:
+{{docs}}
+
+Diff:
+{{diff}}
