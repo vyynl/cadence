@@ -28,8 +28,7 @@ defmodule Cadence.Daemon.CommitQueue do
     Nodes,
     Repo,
     Session,
-    SyncLedger,
-    SyncPending
+    SyncLedger
   }
 
   alias Cadence.Shared.{GitStore, Node}
@@ -158,7 +157,9 @@ defmodule Cadence.Daemon.CommitQueue do
       Repo.transaction(fn ->
         {:ok, node} = attrs |> Node.changeset() |> Repo.insert()
         {:ok, _membership} = Session.commit_after(state.project_id, node)
-        insert_sync_pending!(node)
+        # Persist the sync row with the node: a lost notification cast must
+        # never leave a parent without a row (spec §9.5, parents-first).
+        SyncLedger.insert_pending!(node)
         node
       end)
 
@@ -199,7 +200,7 @@ defmodule Cadence.Daemon.CommitQueue do
       Repo.transaction(fn ->
         {:ok, node} = attrs |> Node.changeset() |> Repo.insert()
         {:ok, _membership} = Session.spawn_after(state.project_id, current, node)
-        insert_sync_pending!(node)
+        SyncLedger.insert_pending!(node)
         node
       end)
 
@@ -216,24 +217,6 @@ defmodule Cadence.Daemon.CommitQueue do
   # watcher non-blocking (spec §5.3, §5.5).
   defp message_attrs(:auto) do
     {@default_message, [:"in-progress"], %{"message_pending" => true}}
-  end
-
-  # Persist the sync row with the node so a lost notification cast (ledger
-  # restarting) can never leave a parent without a row — which would let a child
-  # be pushed first (spec §9.5, parents-first).
-  defp insert_sync_pending!(node) do
-    now = DateTime.utc_now()
-
-    %SyncPending{
-      node_id: node.id,
-      project_id: node.project_id,
-      enqueued_at: now,
-      attempts: 0,
-      next_attempt_at: now
-    }
-    |> Repo.insert(on_conflict: :nothing)
-
-    :ok
   end
 
   # Evaluates doc automation for a commit (spec §9.2). The schema file is the

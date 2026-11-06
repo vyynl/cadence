@@ -4,12 +4,10 @@
 Phase 4 — unions, proposals & review is **complete**, as is the UI styling &
 freshness pass (4e). **Phase 5 — documentation automation**: 5a (shared
 primitives), 5b (daemon doc worker + commit integration), 5c (daemon API +
-Neovim commands), and **P4-T1 (reconnect docs retry) are complete**. Both review
-passes are fixed (legacy pushed-SHA guard, held-node release, already-current
-skip, doc-diff wrap, plus the manual-sync hold, `mark_current` pushed guard,
-conditional release, pushed-SHA stamp, and `mark_pending` current no-op). The
-next slice is **P4-T2** (already-pushed docs child node), followed by P4-T3..T5
-(read-only badge, spec/docs closeout).
+Neovim commands), **P4-T1 (reconnect docs retry), and P4-T2 (already-pushed
+docs child node) are complete**. Both 5c review passes and all P4-T1/P4-T2
+review findings are fixed. The next slice is **P4-T3** (read-only `docs_state`
+badge), followed by P4-T4/T5 (spec/docs closeout).
 
 ## Done (summary)
 
@@ -313,6 +311,29 @@ next slice is **P4-T2** (already-pushed docs child node), followed by P4-T3..T5
   run. New `apps/cadence_daemon/test/doc_reconnect_test.exs` proves one pushed
   node at `C2` (never `C1`, `parent == [C1]`) and the failed-retry code-only
   fallback. Spec §9.5 updated; 182 daemon tests green (180 + 2).
+- **Phase 5 P4-T2 (already-pushed docs child node)** — a node whose SHA is on
+  the server is never rewritten; its docs attach as a follow-up child node.
+  `docs_mode/1` replaces the old pushed guards with `:child` (any
+  `docs_pushed_sha` stamp), `:local` (`SyncPending` row, no stamp) and `:legacy`
+  (neither: pulled/pre-5b, refused), so `already_synced` is gone from
+  `POST /docs/sync` and a pushed node queues normally. The child is
+  `git_commit_sha: C2` (git parent `C1`), `parents: [code_node.id]`,
+  `docs_state: :current`, `flags: [:"in-progress"]`, `pinned: false`,
+  `metadata["docs"]["docs_for"]`, with its own `SyncPending` row
+  (`SyncLedger.insert_pending!/1`, shared with `CommitQueue`) and session-pointer
+  move in the same transaction; the parent keeps its SHA and records
+  `docs_state: :current`, `docs_commit_sha: C2`, `docs_child_id`, so
+  `:CadDocDiff` works on both nodes. An empty generation creates no child,
+  `existing_child/1` makes repeats idempotent, `resumable_nodes/1` resumes
+  stamped deferred nodes, and pushed nodes are never re-held or re-queued for
+  sync. Review found one BLOCKER (the in-place SHA write was a check-then-write
+  against the sync worker's stamp) and three warnings; all fixed: the write is
+  now a compare-and-swap on `json_extract(session_metadata,
+  '$.docs_pushed_sha')` with one re-read, `Session.docs_after/3` is a single
+  conditional update, a pushed node with docs disabled keeps its deferred state,
+  and the watcher stays suspended across the node write. Spec §9.2/§9.5
+  updated. 6 new daemon cases (3 rewritten); 793 tests green (251 shared + 188
+  daemon + 354 server).
 - **4e gate:** 640 tests green (161 shared + 125 daemon + 354 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
@@ -326,62 +347,22 @@ next slice is **P4-T2** (already-pushed docs child node), followed by P4-T3..T5
 
 ## Next
 
-**Immediate step:** start **P4-T2 (already-pushed docs child node)** from
-`.claude/plans/phase-5-docs/plan.md`. P4-T1 shipped: the reconnect retry runs
-before the push, so a deferred job that succeeds on reconnect reaches the server
-as one node at `C2` (see
-`.claude/plans/phase-5-docs/reviews/phase-5-docs-5c-triage.md` for the earlier
-guards).
+**Immediate step:** start **P4-T3 (read-only `docs_state` badge)** from
+`.claude/plans/phase-5-docs/plan.md`. P4-T2 shipped: an already-pushed node's
+docs become a child node (`docs_for`) while the parent keeps its SHA, so the
+badge must read both (see the P4-T3 prep note below).
 
-- P4-T2 — already-pushed fallback: create a docs child node
-  (`parents: [code_node.id]`, `docs_state: :current`,
-  `metadata["docs"]["docs_for"] = code_node.id`) instead of rewriting the pushed
-  SHA; `:CadDocSync` still reports `already_synced` for a pushed node until
-  then.
 - P4-T3 — read-only `docs_state` badge in `ProjectLive`'s inspector
   (`Presentation` helper + LiveView tests; server tests need Postgres).
 - P4-T4/P4-T5 — spec §9.3/§9.4/§9.5/§9.6 and §13 closeout; `docs/README.md`
   status.
 
-**P4-T2 prep (noted during P4-T1).** Four guards currently refuse a pushed node
-and must all learn the child-node path, not just `DocQueue.sync/2`:
-
-1. `DocQueue.run/2` — `pushed?(node) -> :drop` (a forced job never runs).
-2. `DocQueue.sync/2` — `check_pushed/1` returns `{:skip, :already_synced}`.
-3. `DocQueue.resumable_nodes/1` — `not pushed?(node)`, so `rehydrate/0` and
-   `retry_pending/1` ignore it.
-4. `DocQueue.mark_current/5` — returns `{:error, :pushed}` (terminal) when a
-   push lands mid-job; that is the mid-run variant of the same fallback.
-
-Shape to implement: run the job against the pushed SHA as `C1`, write `C2` with
-git parent `C1`, then **insert a new node** (`git_commit_sha: C2`,
-`parents: [code_node.id]`, `docs_state: :current`,
-`metadata["docs"] = %{code_commit_sha: C1, docs_commit_sha: C2, docs_for:
-code_node.id, ...}`), with its own `SyncPending` row written in the node
-transaction (mirror `CommitQueue.insert_sync_pending!/1`, currently private).
-Notes/decisions to settle first:
-
-- **Session pointer.** Advance it to the child (`Session.commit_after/2`-style):
-  the working tree now holds docs, so leaving the anchor on `C1` makes a late
-  watcher event compare the `C1` tree to the docs tree and create a duplicate
-  node (`skip_unchanged` only matches when the anchor's tree equals disk).
-- **Idempotency.** Look up an existing child by `metadata["docs"]["docs_for"]`
-  before creating one; a repeated `:CadDocSync` must not fan out duplicates.
-- **Manual sync must not re-hold the pushed parent.** `DocQueue.sync/2` calls
-  `mark_pending/1` + `SyncLedger.enqueue/2` before the cast; for a pushed node
-  that re-creates a `SyncPending` row and re-pushes the same SHA. The child (not
-  the parent) should be marked pending/queued.
-- **Response shape.** `{:queued, node_id}` is answered before the model runs, so
-  the child id does not exist yet. Decide: return the code node id and let the
-  Neovim notification say "docs queued", or add a `kind`/`docs_for` field.
-  `cadence.nvim/lua/cadence/doc.lua` maps `already_synced` today and needs the
-  new case if the skip goes away.
-- **Flag.** The child is a real commit created by the daemon, not a user
-  session; `[:"in-progress"]` (like a meld approval) vs `:functioning` (the
-  code it documents may not be) needs a call. `pinned` should stay false.
-- **`DocDiff.build/2`** already works for the child when its docs metadata
-  carries `code_commit_sha` (it diffs `C2.tree` against `C1.tree`); the
-  first-parent fallback would also resolve, but set it explicitly.
+**P4-T3 prep (noted during P4-T2).** The server only sees the snapshot that was
+pushed: a node pushed while its docs were still `:pending` keeps `:pending` on
+the server forever, and the docs child carries `:current` with
+`metadata["docs"]["docs_for"] = code_node.id`. Decide whether the badge renders
+"docs pending" on the parent, follows `docs_for` to the child, or shows both
+(the local daemon view already points the parent's metadata at `C2`).
 
 **Integration contract:** `LLM.Docs.build_prompt/4` returns
 `{:ok, prompt, %{writable_paths, read_only_paths}}`; `DocQueue` passes
@@ -391,12 +372,13 @@ a no-op generation); the code commit is
 `session_metadata["docs"]["code_commit_sha"]`. `DocQueue.enqueue(force: true)`
 still supports a direct forced run on a `:skipped`/legacy node by falling back
 to `node.git_commit_sha`; `POST /docs/sync` gates that behind a `SyncPending`
-row (the local proof the node is unpushed) and reports `already_synced` for a
-stamped pushed node, `already_current` for generated docs, and `legacy`
-otherwise (P4-T2 owns the child-node fallback). Reconnect ordering:
-`Sync.sync/2` `retry_docs: true` → `DocQueue.retry_pending/1` (re-arms the hold
-synchronously) → `push_pending/1`; `SyncWorker` asks for it only on the first
-pass after boot or a failed pass.
+row or a pushed-SHA stamp (the local proof of provenance) and reports
+`already_current` for generated docs and `legacy` otherwise. A pushed node
+queues a child job (P4-T2) and answers `202 %{status: "queued", node_id}`.
+Reconnect ordering: `Sync.sync/2` `retry_docs: true` →
+`DocQueue.retry_pending/1` (re-arms the hold synchronously) →
+`push_pending/1`; `SyncWorker` asks for it only on the first pass after boot or
+a failed pass.
 
 Carry-over (small, not blocking Phase 5):
 
@@ -417,12 +399,14 @@ Carry-over (small, not blocking Phase 5):
    `/proposals/<token>` at wide and narrow widths in light and dark. There are
    no browser tests; 4e verified server-rendered markup and CSS only.
 
-**Spin-up:** `@phx-work .claude/plans/phase-5-docs/plan.md --from P4-T1`.
+**Spin-up:** `@phx-work .claude/plans/phase-5-docs/plan.md --from P4-T3`.
 
 ## Blocked
 
-- (none) The 5c review passes are complete; the Phase 4 gating decisions are
-  resolved in spec §6.6/§6.7/§16 and `docs/phase-4-prep.md` §5.
+- (none). P4-T2's review findings are fixed and verified. The one known residual
+  (a push that completes *after* the local `C2` write, leaving the server on
+  `C1`) is recorded in Spec Deltas; it is recoverable and does not block P4-T3 —
+  closing it fully needs a push-in-flight marker.
 
 ## Spec Deltas / Open Items
 
@@ -445,18 +429,29 @@ Carry-over (small, not blocking Phase 5):
   against the doc feedback loop: suspension alone cannot cover an inotify event
   that arrives just after `resume`, or a polling backend's post-write tick.
   Explicit/API commits still create an empty commit when asked.
-- **Doc commit SHA gating/fallback (5b → P4)** — selection gating is
-  implemented and tested, and `mark_pushed/1` stamps a top-level
+- **Doc commit SHA gating/fallback (5b → P4, closed by P4-T2)** — selection
+  gating is implemented and tested, and `mark_pushed/1` stamps a top-level
   `session_metadata["docs_pushed_sha"]` (covering `:skipped` nodes) so
   `rehydrate/0`, `retry_pending/0`, and the job runner never rewrite an
   already-pushed SHA. A forced no-op run keeps the previous `C2`. P4-T1 closed
-  the reconnect hole by running the retry *before* the pass pushes, so a
-  deferred job on an unpushed node still gets its `C2` onto the server as one
-  node. P4-T2's follow-up docs child node remains open for a node that was
-  genuinely pushed before its docs resolved (mid-job push, or a manual sync
-  after a code-only push): `:CadDocSync` / `POST /docs/sync` reports
-  `skipped: "already_synced"` and cannot generate docs for it (the queue drops
-  it).
+  the reconnect hole by running the retry *before* the pass pushes. P4-T2
+  closed the remaining hole: a node pushed before its docs resolved (mid-job
+  push, manual sync after a code-only push, or a retry of a pushed deferred
+  node) keeps its SHA and attaches the docs as a child node; `already_synced`
+  no longer exists. **Residual:** a push that *completes* after the local `C2`
+  write is invisible to the compare-and-swap (the stamp has not landed yet), so
+  the server can hold `C1` while the local row says `C2`. The stamp then routes
+  the next retry to a child, so it is recoverable, but a push-in-flight marker
+  would be needed to close it fully.
+- **P4-T2 write/retry notes (2026-11-06)** — the in-place docs write is a
+  compare-and-swap on `json_extract(session_metadata, '$.docs_pushed_sha')`
+  (SQLite-only, matching the daemon Repo boundary) with one re-read on a miss;
+  `Session.docs_after/3` is a single conditional `update_all` so a user switch
+  wins; a pushed node with `CAD_DOCS_ENABLED=false` keeps its deferred state
+  instead of terminalizing to `:skipped`; and the watcher stays suspended across
+  the node write, closing a duplicate-node window. A pushed parent keeps its
+  server-side `docs_state: :pending` forever (its snapshot is immutable) — the
+  docs child carries `:current`; P4-T3's badge must decide how to render both.
 - **Reconnect doc retries while the server is still down (P4-T1)** — the
   trigger is `last_status != :ok`, so a project that keeps failing every pass
   re-asks `DocQueue.retry_pending/1` on each pass (30 s at defaults). That is
@@ -467,11 +462,12 @@ Carry-over (small, not blocking Phase 5):
   retries and the node syncs code-only.
 - **Phase 5c implementation notes (2026-11-06)** — `POST /docs/sync` resolves
   `node_id` to `Session.anchor_node/1` when omitted and returns `202` with the
-  resolved `node_id`; the skip reasons are `already_synced`, `disabled`,
-  `no_schema`, and `invalid_schema`. Manual sync respects `CAD_DOCS_ENABLED`
-  (spec §9.2) instead of overriding it. `GET /docs/diff` also defaults
-  `node_id` to the anchor, returns `400` without `project_id`, `404` for an
-  unknown node/commit, and `409` for no docs commit or no schema.
+  resolved `node_id`; the skip reasons are `already_current`, `legacy`,
+  `disabled`, `no_schema`, and `invalid_schema` (P4-T2 removed
+  `already_synced`: a pushed node queues a child job). Manual sync respects
+  `CAD_DOCS_ENABLED` (spec §9.2) instead of overriding it. `GET /docs/diff` also
+  defaults `node_id` to the anchor, returns `400` without `project_id`, `404`
+  for an unknown node/commit, and `409` for no docs commit or no schema.
   `DocDiff.build/2` accepts `nil`. The Neovim commands accept an optional node
   id; `:CadDocSync` uses `post_async`, and `:CadDocDiff` renders through
   `cadence.doc.format/1` (which wraps `diff.lua`).
@@ -937,3 +933,41 @@ plan/scratchpad execution notes updated. Verification: `mix format
 --check-formatted` and `mix compile --warnings-as-errors` clean; 787 tests green
 (251 shared + 182 daemon + 354 server); server suite ran against the test
 Postgres on `localhost:55432`. Next: P4-T2 (already-pushed docs child node).
+
+2026-11-06 — **Phase 5 P4-T2 (already-pushed docs child node)** shipped from
+`.claude/plans/phase-5-docs/plan.md` (`@phx-full … --from P4-T2`). A node whose
+SHA is on the server is never rewritten; its docs attach as a follow-up child
+node. `DocQueue.docs_mode/1` replaces the old pushed guards with `:child` (any
+`docs_pushed_sha` stamp — the SHA is immutable, so the docs must go to a child),
+`:local` (`SyncPending` row, no stamp) and `:legacy` (neither: pulled or pre-5b,
+refused); `already_synced` is gone and `POST /docs/sync` answers
+`202 %{status: "queued", node_id}` for a pushed node. The child is a real node
+(`git_commit_sha: C2` with git parent `C1`, `parents: [code_node.id]`,
+`docs_state: :current`, `flags: [:"in-progress"]`, `pinned: false`,
+`metadata["docs"]["docs_for"]`) with its own `SyncPending` row
+(`SyncLedger.insert_pending!/1`, now shared with `CommitQueue`) and the session
+pointer advanced to it in the same transaction; the parent keeps its SHA and
+records `docs_state: :current`, `docs_commit_sha: C2`, `docs_child_id`, so
+`:CadDocDiff` works on the code node and the child. Empty generations create no
+child; a forced re-run reuses the recorded child. Independent review verdict
+REQUIRES CHANGES (one BLOCKER: the in-place SHA write was a check-then-write
+against the sync worker's stamp, which could move a pushed SHA and erase the
+stamp) plus three WARNINGs; all fixed — the write is a compare-and-swap on
+`json_extract(session_metadata, '$.docs_pushed_sha')` with one re-read,
+`Session.docs_after/3` is a single conditional update, a pushed node with docs
+disabled keeps its deferred state, the watcher stays suspended across the node
+write, and `create_docs_child/5` rolls back instead of raising. Lesson captured
+in
+`.claude/solutions/data-integrity/doc-sha-write-vs-pushed-stamp-20261106.md`.
+Spec §9.2/§9.5 updated; plan/scratchpad/run ledger updated. Verification:
+`mix format --check-formatted`, dev + prod `mix compile --warnings-as-errors`,
+793 tests green (251 shared + 188 daemon + 354 server). Next: P4-T3 (read-only
+`docs_state` badge).
+
+Session prepared for handoff 2026-11-06 — P4-T2 is implemented, reviewed and
+verified but **not committed**: 10 tracked files are modified (`git status`)
+plus the git-ignored plan/scratchpad/ledger/solution artifacts. Suggested
+commit before starting cold:
+`git add -A && git commit -m "feat: Phase 5 P4-T2 — docs child node for already-pushed nodes"`.
+Server tests need the test Postgres on `localhost:55432` (container
+`cadence-test-pg` is running).

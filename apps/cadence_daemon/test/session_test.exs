@@ -71,6 +71,31 @@ defmodule Cadence.Daemon.SessionTest do
     assert membership.preferences_updated_at
   end
 
+  test "docs_after follows the docs child when the pointer is on the parent",
+       %{project: project} do
+    Session.ensure_membership!(project.id)
+    parent = node_fixture(project.id)
+    {:ok, _} = Session.switch(project.id, parent.id)
+
+    child = node_fixture(project.id, [parent.id])
+    {:ok, membership} = Session.docs_after(project.id, parent, child)
+
+    assert membership.session_pointer == child.id
+    refute parent.id in membership.active_heads
+  end
+
+  test "docs_after leaves a pointer the user already moved", %{project: project} do
+    Session.ensure_membership!(project.id)
+    parent = node_fixture(project.id)
+    other = node_fixture(project.id)
+    {:ok, _} = Session.switch(project.id, other.id)
+
+    child = node_fixture(project.id, [parent.id])
+    {:ok, membership} = Session.docs_after(project.id, parent, child)
+
+    assert membership.session_pointer == other.id
+  end
+
   test "preference versions advance across mutations", %{project: project} do
     Session.ensure_membership!(project.id)
     first = node_fixture(project.id)

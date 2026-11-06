@@ -4,9 +4,11 @@ defmodule Cadence.Daemon.DocDiff do
 
   A node with a queued doc job points at the follow-up docs commit (`C2`); the
   docs diff is `diff(C1.tree, C2.tree)` filtered to the paths the project
-  schema allows. Nodes that predate doc automation fall back to their first
-  logical parent's tree. `node_id` may be omitted, in which case the session
-  anchor is used (`Cadence.Daemon.Session.anchor_node/1`).
+  schema allows. A pushed node whose docs were generated afterwards keeps its
+  SHA and records the child's `C2` in its metadata, so this works for both the
+  code node and its docs child. Nodes that predate doc automation fall back to
+  their first logical parent's tree. `node_id` may be omitted, in which case the
+  session anchor is used (`Cadence.Daemon.Session.anchor_node/1`).
 
   Both commits are read from the local Git store, so this only works on the
   machine that generated the docs; the web UI shows the combined node diff

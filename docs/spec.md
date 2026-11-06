@@ -942,17 +942,21 @@ Doc automation is **not** run on every commit. Gate on:
 
 A manual `:CadDocSync` bypasses the automatic trigger re-check but still
 respects `CAD_DOCS_ENABLED`; when disabled the daemon reports `skipped` with
-`reason: "disabled"`. A node whose commit was already pushed is reported as
-`skipped: "already_synced"` rather than queueing a rewrite (§9.5). A node
+`reason: "disabled"`. A node whose commit was already pushed is not rewritten:
+any pushed-SHA stamp means the docs are attached as a follow-up child node
+(§9.5), and the response is `202 queued` with the requested node's id. A node
 whose docs are already generated (`docs_state: :current`) is reported as
-`skipped: "already_current"`. A node with no `SyncPending` row (and not already
-current or locally pushed) is reported as `skipped: "legacy"`: it may have been
-pulled from the server or may predate the pushed-SHA stamp, so forcing docs
-could rewrite an already-synced SHA. A manual job arms the same `metadata["docs"]["state"] == "pending"` hold as an
-automatic job before it is queued, so the node cannot be pushed while the model
-runs. When a manual skip or failure targets a docs-held node, the daemon
-releases it with the same terminal transition the job would use (`skipped` or
-`deferred`) so it cannot stay out of the sync queue.
+`skipped: "already_current"`. A node with neither a `SyncPending` row nor a
+pushed-SHA stamp is reported as `skipped: "legacy"`: it may have been pulled
+from the server or may predate the stamp, so forcing docs could rewrite an
+already-synced SHA. A manual job arms the same
+`metadata["docs"]["state"] == "pending"` hold as an automatic job before it is
+queued, so a local node cannot be pushed while the model runs; a pushed node has
+no row to hold. When a manual skip or failure targets a docs-held **local**
+node, the daemon releases it with the same terminal transition the job would
+use (`skipped` or `deferred`) so it cannot stay out of the sync queue. A pushed
+node keeps its deferred docs state, so a later retry can still attach the
+child.
 
 ### 9.3 Pipeline
 
@@ -1038,14 +1042,45 @@ sync — and is retried on reconnect or `:CadDocSync`. The reconnect retry runs
 successful retry therefore still reaches the server as one node at `C2`, while a
 retry that fails again releases its hold and the node is pushed at `C1` on the
 next pass. The retry is not repeated on every pass, so a permanently failing
-job cannot hold a node out of sync. Boot/reconnect retries only
-resume local nodes with a `SyncPending` row; a pulled node (already owned by the
-server) is never regenerated locally. If a node with a doc job was already
-pushed, its SHA is never rewritten; the agent instead creates a follow-up docs
-child node linked by `session_metadata["docs"]["docs_for"]` (Phase 5c/P4). A job
-that discovers a push mid-run leaves the node at the pushed SHA and records a
-deferred docs state. Until that fallback ships, a manual `:CadDocSync` on a
-pushed node reports `skipped: "already_synced"` instead of queueing a rewrite.
+job cannot hold a node out of sync. Boot/reconnect retries resume local nodes
+with a `SyncPending` row and pushed nodes whose docs are still deferred (their
+docs become a child node); a pulled node with neither is never regenerated
+locally. A *successful* pass does not request the retry, so deferred docs on an
+already-pushed node are picked up at the next boot, the next failed-pass
+recovery, or `:CadDocSync`.
+
+**Already-pushed fallback (child node).** A node whose current SHA is on the
+server is immutable and is never rewritten. If its docs resolve afterwards — a
+push lands while the model runs, a manual `:CadDocSync` targets a code-only
+pushed node, or a reconnect retry resumes a stamped pushed node whose docs were
+deferred — the job writes `C2` (git parent `C1`) and inserts it as a **docs
+child node** instead:
+
+- `git_commit_sha: C2`, `parents: [code_node.id]`, `docs_state: :current`,
+  `flags: [:"in-progress"]`, `pinned: false`
+- `session_metadata["docs"]["docs_for"] = code_node.id`, plus
+  `code_commit_sha`, `docs_commit_sha`, `model`, `provider`,
+  `prompt_version`, `paths`, `generated_at`
+- the child gets its own `SyncPending` row in the insert transaction and is
+  queued for sync, so the server receives it as a descendant of the code commit
+  it already has; the pushed parent is neither re-held nor re-queued
+- the parent records the result locally (`docs_state: :current`,
+  `docs_commit_sha: C2`, `docs_child_id`) without changing its SHA, so
+  `:CadDocDiff` and `DocDiff.build/2` work for both nodes
+- the session pointer advances to the child **only if** it still points at the
+  code node, so a background job never yanks the user off another node; the
+  child's tree matches the docs written into the working tree, so the watcher's
+  unchanged-tree guard absorbs a late event
+
+A repeat job for the same code node reuses the recorded `docs_child_id` instead
+of creating a second child, and an empty generation (no operations) creates no
+child at all: the parent is recorded `:current` with `"empty": true` and its SHA
+is untouched.
+
+A pushed node keeps the `docs_state` it was pushed with on the server (its
+snapshot is immutable); the docs child carries the `:current` state for the
+generation that happened after the push.
+
 
 ### 9.6 Worker design
 

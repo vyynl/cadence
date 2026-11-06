@@ -42,6 +42,31 @@ defmodule Cadence.Daemon.SyncLedger do
     GenServer.cast(__MODULE__, {:enqueue, project_id, node_id, sync_ready?()})
   end
 
+  @doc """
+  Inserts a node's sync row synchronously. Idempotent for a given node ID.
+
+  Call this inside the transaction that inserts the node (see `CommitQueue`
+  and the docs child in `Cadence.Daemon.DocQueue`): a lost notification cast
+  must never leave a parent without a row, which would let a child be pushed
+  first (spec §9.5, parents-first).
+  """
+  @spec insert_pending!(Node.t()) :: :ok
+  def insert_pending!(%Node{} = node) do
+    now = DateTime.utc_now()
+
+    case %SyncPending{
+           node_id: node.id,
+           project_id: node.project_id,
+           enqueued_at: now,
+           attempts: 0,
+           next_attempt_at: now
+         }
+         |> Repo.insert(on_conflict: :nothing) do
+      {:ok, _pending} -> :ok
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
   @doc "All pending nodes for a project, ordered parents-first."
   @spec pending(Ecto.UUID.t()) :: [Node.t()]
   def pending(project_id) do
@@ -624,7 +649,8 @@ defmodule Cadence.Daemon.SyncLedger do
   # Once a node is on the server its SHA is immutable. Remember the pushed SHA
   # at the top level (not inside `docs`) so the ledger never rewrites the docs
   # state machine, and so skipped nodes (which have no `docs` map) are protected
-  # too. P4-T2 replaces this with a follow-up docs child node.
+  # too. A node that gets docs after a push attaches them as a child node
+  # (`Cadence.Daemon.DocQueue`, spec §9.5).
   defp mark_docs_pushed(entries) do
     Enum.each(entries, fn {node_id, pushed_sha} ->
       case Repo.get(Node, node_id) do

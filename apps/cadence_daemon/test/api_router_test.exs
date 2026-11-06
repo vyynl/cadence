@@ -397,22 +397,40 @@ defmodule Cadence.Daemon.API.RouterTest do
     assert Jason.decode!(conn.resp_body) == %{"status" => "skipped", "reason" => "invalid_schema"}
   end
 
-  test "POST /docs/sync skips a node whose SHA was already pushed" do
-    project = insert_local_project()
+  test "POST /docs/sync queues a child job for a node whose SHA was already pushed" do
+    fixture = insert_docs_fixture()
+    configure_docs!()
+    write_docs_schema(fixture.work_dir)
+
+    sha = String.duplicate("d", 40)
 
     node =
-      insert_node_with(project.id, %{
+      insert_node_with(fixture.project.id, %{
+        session_metadata: %{"docs_pushed_sha" => sha}
+      })
+
+    conn = post_json("/docs/sync", %{"project_id" => fixture.project.id, "node_id" => node.id})
+
+    assert conn.status == 202
+    assert Jason.decode!(conn.resp_body)["node_id"] == node.id
+  end
+
+  test "POST /docs/sync queues a child for a pushed stamp that predates the node SHA" do
+    fixture = insert_docs_fixture()
+    configure_docs!()
+    write_docs_schema(fixture.work_dir)
+
+    node =
+      insert_node_with(fixture.project.id, %{
         session_metadata: %{"docs_pushed_sha" => String.duplicate("a", 40)}
       })
 
-    conn = post_json("/docs/sync", %{"project_id" => project.id, "node_id" => node.id})
+    conn = post_json("/docs/sync", %{"project_id" => fixture.project.id, "node_id" => node.id})
 
-    assert conn.status == 200
-
-    assert Jason.decode!(conn.resp_body) == %{
-             "status" => "skipped",
-             "reason" => "already_synced"
-           }
+    # Any pushed stamp means the SHA is immutable, so the docs must go to a
+    # child node; never a dead end and never a rewrite.
+    assert conn.status == 202
+    assert Jason.decode!(conn.resp_body)["node_id"] == node.id
   end
 
   test "POST /docs/sync returns 503 when the doc agent is not configured" do

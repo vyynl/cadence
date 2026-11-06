@@ -7,6 +7,8 @@ defmodule Cadence.Daemon.Session do
   `active_heads` are the nodes this user considers live (see spec §4.3).
   """
 
+  import Ecto.Query
+
   alias Cadence.Daemon.{Env, Nodes, Repo, SyncLedger}
   alias Cadence.Shared.{Membership, Node, UUID}
 
@@ -170,6 +172,44 @@ defmodule Cadence.Daemon.Session do
 
     SyncLedger.preferences_changed(project_id)
     {:ok, membership}
+  end
+
+  @doc """
+  Advances the session pointer to a follow-up docs child node, but only when it
+  still points at `parent_node`.
+
+  A doc job for an already-pushed node attaches its docs as a child node
+  (`DocQueue`); if the user switched elsewhere while the model ran, the
+  background job must not pull them off their current node. The write is
+  conditional on the pointer so a switch that lands at the same moment wins.
+  """
+  @spec docs_after(Ecto.UUID.t(), Node.t(), Node.t()) :: {:ok, Membership.t()}
+  def docs_after(project_id, parent_node, new_node) do
+    membership = ensure_membership!(project_id)
+    active_heads = (membership.active_heads || []) -- new_node.parents
+    version = next_preferences_version(membership)
+
+    {count, _} =
+      Repo.update_all(
+        from(m in Membership,
+          where:
+            m.user_id == ^membership.user_id and m.project_id == ^project_id and
+              m.session_pointer == ^parent_node.id
+        ),
+        set: [
+          session_pointer: new_node.id,
+          active_heads: active_heads,
+          preferences_updated_at: version
+        ]
+      )
+
+    if count == 1 do
+      SyncLedger.preferences_changed(project_id)
+
+      {:ok, Repo.get_by!(Membership, user_id: membership.user_id, project_id: project_id)}
+    else
+      {:ok, membership}
+    end
   end
 
   defp next_preferences_version(membership) do
