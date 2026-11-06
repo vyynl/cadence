@@ -200,15 +200,26 @@ UI styling/freshness pass, then Phase 5 (doc automation).
 
 ## Next
 
-1. UI styling/freshness pass: incident panel, review pages, portfolio/project
-   surfaces (`docs/ui-notes.md`), the still-open PubSub freshness item (an
-   incident/proposal opened elsewhere does not reach an open socket), and the
-   cached quarantine assign in `ProjectLive`.
-2. Then Phase 5 — documentation automation (spec §9, §13): doc schema parsing,
-   the doc agent with its own limiter, deferred docs when offline, and
-   `:CadDocDiff`/`:CadDocSync` (both still stubs).
-3. Optional polish: a `:CadProposals`/notification surface for the returned
-   proposal token (not in spec; discuss before adding).
+**Immediate step:** UI styling/freshness pass. Start with a plan (`@phx-plan`
+or the full lifecycle) — it touches several web modules. Surface notes live in
+`docs/ui-notes.md`.
+
+1. **Styling** — incident panel and review pages together with the
+   portfolio/project surfaces: severity colors, panel placement, details
+   density, resolve/acknowledge copy.
+2. **Freshness (Iron Law 5)** — subscribe `ReviewLive.Index`/`Show` to the
+   project topic after `connected?/1` and recompute `isolated?`/`can_decide?`;
+   there is no incident broadcast yet, so add one if the panel needs live
+   updates. Also drop the per-node `quarantined` assign short-circuit in
+   `ProjectLive.handle_params/3` (cache keyed on all inputs) or invalidate it
+   on incident changes.
+3. **Smoke** — drive `:CadUnion` against the demo stack once
+   (`docker compose up`, `docs/demo.md`) and record the result in the session
+   handoff; the Neovim submit is the one 4d-3 surface without a live run.
+4. **After that** — Phase 5, documentation automation (spec §9, §13), then the
+   optional `:CadProposals` surface for the returned token.
+
+**Spin-up:** `@phx-full UI styling and freshness pass — start from docs/progress.md Next`
 
 ## Blocked
 
@@ -436,3 +447,13 @@ mapping, ordered parents, push-before-union, timeout formula, passthrough
 tests), plus the Lows. Verification: format + dev/prod compile clean, `luac -p`
 clean, 596 tests green (161 + 125 + 310). Remaining: UI styling/freshness pass
 and Phase 5 docs automation.
+
+Session closed 2026-11-06 — Phase 4 is complete at `f4161a8`; working tree
+clean. Next session starts the UI styling/freshness pass (see **Next** above;
+spin-up command included there). Server tests need Postgres on `localhost:55432`:
+
+```bash
+docker run --rm -d --name cadence-test-pg \
+  -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=cadence_test \
+  -p 55432:5432 postgres:16-alpine
+```
