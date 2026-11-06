@@ -11,7 +11,7 @@ defmodule Cadence.Daemon.SyncWorker do
 
   require Logger
 
-  alias Cadence.Daemon.{DocQueue, Env, Projects, Sync, SyncClient}
+  alias Cadence.Daemon.{Env, Projects, Sync, SyncClient}
 
   @tasks Cadence.Daemon.SyncTasks
 
@@ -82,7 +82,17 @@ defmodule Cadence.Daemon.SyncWorker do
         state
 
       true ->
-        task = Task.Supervisor.async_nolink(@tasks, fn -> Sync.sync(project_id) end)
+        # The first pass after an outage (or boot) is the reconnect: deferred
+        # docs get another chance before the push, so the server receives one
+        # node pointing at C2 (spec §9.5). `last_status` keeps a permanently
+        # failing job from being retried on every pass.
+        retry_docs? = Map.get(state.last_status, project_id) != :ok
+
+        task =
+          Task.Supervisor.async_nolink(@tasks, fn ->
+            Sync.sync(project_id, retry_docs: retry_docs?)
+          end)
+
         in_flight = Map.put(state.in_flight, task.ref, %{project_id: project_id})
         %{state | in_flight: in_flight}
     end
@@ -95,20 +105,10 @@ defmodule Cadence.Daemon.SyncWorker do
 
       {%{project_id: project_id}, in_flight} ->
         log_result(project_id, result)
-        retry_deferred_docs(project_id, result, state.last_status)
         last_status = Map.put(state.last_status, project_id, status(result))
         %{state | in_flight: in_flight, last_status: last_status}
     end
   end
-
-  # Connectivity returned for this project: give deferred doc jobs another
-  # chance (spec §9.5). A per-project transition guard keeps a permanently
-  # failing job from being retried on every pass.
-  defp retry_deferred_docs(project_id, :ok = _result, last_status) do
-    if Map.get(last_status, project_id) != :ok, do: DocQueue.retry_pending(project_id)
-  end
-
-  defp retry_deferred_docs(_project_id, _result, _last_status), do: :ok
 
   defp status(:ok), do: :ok
   defp status(_result), do: :error

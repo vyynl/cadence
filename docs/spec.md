@@ -1033,7 +1033,12 @@ A node with a **queued** doc job — automatic or manual — is held out of the
 push queue until the job resolves to `:current` (docs committed as `C2`) or is
 deferred, so its `git_commit_sha` can move from `C1` to `C2` before the server
 ever sees it. A **deferred** job is pushed at `C1` code-only — docs never block
-sync — and is retried on reconnect or `:CadDocSync`. Boot/reconnect retries only
+sync — and is retried on reconnect or `:CadDocSync`. The reconnect retry runs
+*before* the pass pushes, on the first pass after an outage (or at boot): a
+successful retry therefore still reaches the server as one node at `C2`, while a
+retry that fails again releases its hold and the node is pushed at `C1` on the
+next pass. The retry is not repeated on every pass, so a permanently failing
+job cannot hold a node out of sync. Boot/reconnect retries only
 resume local nodes with a `SyncPending` row; a pulled node (already owned by the
 server) is never regenerated locally. If a node with a doc job was already
 pushed, its SHA is never rewritten; the agent instead creates a follow-up docs

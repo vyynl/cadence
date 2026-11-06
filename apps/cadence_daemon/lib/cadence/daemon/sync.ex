@@ -12,6 +12,7 @@ defmodule Cadence.Daemon.Sync do
   require Logger
 
   alias Cadence.Daemon.{
+    DocQueue,
     Env,
     Nodes,
     NodeStore,
@@ -36,12 +37,23 @@ defmodule Cadence.Daemon.Sync do
 
   Returns `:ok` when all due work pushed and the pull cursor is caught up, or
   `{:error, reason}`. Pending nodes remain queued on failure.
+
+  Options:
+
+    * `:retry_docs` — before pushing, give deferred documentation jobs one more
+      chance via `Cadence.Daemon.DocQueue.retry_pending/1`. A queued job holds
+      its node out of selection (`SyncLedger` gating), so the server receives one
+      node pointing at the follow-up docs commit (`C2`) instead of the code-only
+      commit (`C1`) (spec §9.5). `Cadence.Daemon.SyncWorker` sets this on the
+      first pass after an outage; a job that fails again is then pushed
+      code-only.
   """
-  @spec sync(Ecto.UUID.t()) :: :ok | {:error, term()}
-  def sync(project_id) do
+  @spec sync(Ecto.UUID.t(), keyword()) :: :ok | {:error, term()}
+  def sync(project_id, opts \\ []) do
     with {:ok, project_id} <- UUID.cast(project_id),
          :ok <- ensure_server_user(),
          :ok <- ensure_project(project_id),
+         :ok <- retry_deferred_docs(project_id, opts),
          :ok <- push_pending(project_id) do
       preference_result = push_preferences(project_id)
 
@@ -53,6 +65,15 @@ defmodule Cadence.Daemon.Sync do
       :error -> {:error, :invalid_uuid}
       {:error, _reason} = error -> error
     end
+  end
+
+  # The retry must run before the push: a deferred node is pushable, so a
+  # reconnect pass would otherwise send `C1` and `mark_pushed/1` would make the
+  # SHA immutable. `DocQueue.retry_pending/1` re-arms the sync hold
+  # synchronously, so the pass that follows cannot select the node.
+  defp retry_deferred_docs(project_id, opts) do
+    if Keyword.get(opts, :retry_docs, false), do: DocQueue.retry_pending(project_id)
+    :ok
   end
 
   @doc """
