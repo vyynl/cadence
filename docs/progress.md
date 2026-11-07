@@ -1227,9 +1227,8 @@ raw-view quarantine re-check, catch-all handlers, docs, test determinism).
 Lesson:
 `.claude/solutions/phoenix-issues/assign-async-key-and-controller-wildcard-list-20261107.md`.
 
-**Handoff note:** 6c is implemented, reviewed, and verified but **not
-committed** — the working tree holds the 6c slice. Suggested before the next
-session: `git add -A && git commit -m "feat: Phase 6c — web run experience"`.
-Server tests need Postgres on `localhost:55432` (container `cadence-test-pg`).
-Next: Phase 7 (storage engineering) planning; carry-overs are listed in
-**Next**.
+**Handoff note:** 6c is committed at `aa28530`
+(`feat: Phase 6c — web run experience`), with this handoff note as the follow-up
+docs commit. Server tests need Postgres on `localhost:55432` (container
+`cadence-test-pg`). Next: Phase 7 (storage engineering) planning; carry-overs
+are listed in **Next**.
