@@ -150,6 +150,21 @@ if config_env() != :test do
     actions_max_manifest_bytes:
       String.to_integer(System.get_env("CAD_ACTIONS_MAX_MANIFEST_BYTES", "32768")),
     actions_max_actions: String.to_integer(System.get_env("CAD_ACTIONS_MAX_ACTIONS", "20")),
+    actions_volume: System.get_env("CAD_ACTIONS_VOLUME", "cadence_actions"),
+    actions_volume_path: System.get_env("CAD_ACTIONS_VOLUME_PATH", "/data/actions"),
+    actions_timeout_ms: String.to_integer(System.get_env("CAD_ACTIONS_TIMEOUT_MS", "120000")),
+    actions_build_timeout_ms:
+      String.to_integer(System.get_env("CAD_ACTIONS_BUILD_TIMEOUT_MS", "300000")),
+    actions_max_cpus: String.to_integer(System.get_env("CAD_ACTIONS_MAX_CPUS", "1")),
+    actions_memory_mb: String.to_integer(System.get_env("CAD_ACTIONS_MEMORY_MB", "512")),
+    actions_pids_limit: String.to_integer(System.get_env("CAD_ACTIONS_PIDS_LIMIT", "256")),
+    actions_network: System.get_env("CAD_ACTIONS_NETWORK", "none"),
+    actions_build_network: System.get_env("CAD_ACTIONS_BUILD_NETWORK", "none"),
+    docker_api_version: System.get_env("CAD_DOCKER_API_VERSION", "v1.45"),
+    actions_max_log_bytes:
+      String.to_integer(System.get_env("CAD_ACTIONS_MAX_LOG_BYTES", "1048576")),
+    actions_max_artifact_bytes:
+      String.to_integer(System.get_env("CAD_ACTIONS_MAX_ARTIFACT_BYTES", "33554432")),
     oauth: [
       github: [
         client_id: System.get_env("CAD_OAUTH_GITHUB_CLIENT_ID"),

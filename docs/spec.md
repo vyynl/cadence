@@ -887,6 +887,17 @@ requires the owner/trusted role (Phase 6b). A missing, malformed, or oversized
 manifest hides the panel or renders a shape-only notice — it never fails the
 project page.
 
+Running an action re-checks the role at the run boundary (owner/trusted). The
+command is executed as `/bin/sh -c <command>` with the snapshot mounted
+read-only at `/workspace` and a writable `/out`, and with
+`CADENCE_RUN_ID`/`CADENCE_NODE_ID`/`CADENCE_PROJECT_ID` in the environment.
+The image is `project.docker_image` when set; otherwise the root `Dockerfile`
+from the same snapshot is built and cached as
+`cadence-action-<project-slug>-<sha12>`. With neither, the run fails as
+`no_image`; a create the daemon rejects (missing prebuilt image, an Engine
+without `volume-subpath`, a name conflict) fails as `create_failed`. A prebuilt
+image must be able to run against `/workspace` and write to `/out`.
+
 Language-agnostic by design: the container is the abstraction. Cadence's
 backend never parses Go/Python/Elixir source. It only:
 
@@ -900,19 +911,77 @@ Rust, etc. These live in `cadence_server/priv/templates/`.
 
 ### 8.3 Isolation
 
-- Containers run with no network by default unless the action opts in.
-- CPU/memory limits via Docker cgroup flags.
-- Read-only mount of project code; a separate writable volume for outputs.
-- Action output is stored as an artifact attached to the node that triggered
-  it, under `/data/artifacts`.
+- Containers run with no network by default unless the deployment opts in
+  (`CAD_ACTIONS_NETWORK`, default `none`). There is no per-action network flag
+  in the manifest yet.
+- CPU/memory/PID limits come from `CAD_ACTIONS_MAX_CPUS`,
+  `CAD_ACTIONS_MEMORY_MB`, and `CAD_ACTIONS_PIDS_LIMIT`; the root filesystem is
+  read-only (with a small noexec `/tmp`), the swap budget equals the memory
+  limit, all capabilities are dropped, and `no-new-privileges` is set. The image
+  may declare a non-root `USER`; the per-run `/out` directory is world-writable
+  so it can still produce artifacts.
+- A `Dockerfile` build runs its `RUN` steps with `CAD_ACTIONS_BUILD_NETWORK`
+  (default `none`), the same memory cap, and a CPU quota. The base-image pull is
+  performed by the **daemon**, not the build container, so a Dockerfile can
+  direct the daemon at any registry host it can reach (a blind SSRF into the
+  host's network). Deployments that treat project Dockerfiles as untrusted must
+  restrict the daemon's registry access or use a dedicated builder.
+- The selected snapshot is staged into a shared named volume
+  (`CAD_ACTIONS_VOLUME`, mounted in the server at `CAD_ACTIONS_VOLUME_PATH`)
+  under `<run_id>/code`; action output goes to `<run_id>/out`. The action
+  container mounts those subpaths only (Docker Engine ≥ 26 `volume-subpath`):
+  `code` read-only at `/workspace`, `out` writable at `/out`. Sibling runs and
+  the server's Git store are never mounted. `CAD_DOCKER_API_VERSION` defaults to
+  `v1.45` (the version that introduced subpaths, supported by Docker 26–29);
+  there is no negotiation, so an older daemon rejects the request as
+  `create_failed`.
+- The action container is bounded by `CAD_ACTIONS_TIMEOUT_MS` (staging, image
+  resolution/build, log capture, and artifact collection add wall time; the run
+  row is heartbeated so a legitimate long run is not mistaken for a crash). A
+  timeout stops and removes the container and records `timed_out`. Image builds
+  get the separate, longer `CAD_ACTIONS_BUILD_TIMEOUT_MS`.
+- Logs are captured from the container with TTY mode (stderr merges into
+  stdout). The container's log driver is capped at 1 MiB / one file so the
+  daemon never buffers an unbounded log; the runner keeps the tail under
+  `CAD_ACTIONS_MAX_LOG_BYTES` and writes it to
+  `<CAD_ARTIFACT_PATH>/<run_id>/output.log`. Artifacts are copied from
+  `<run_id>/out` into `<CAD_ARTIFACT_PATH>/<run_id>/artifacts/`: regular files
+  only (symlinks and special files are skipped, and the source inode is
+  re-checked after the read), capped at 1,000 files and
+  `CAD_ACTIONS_MAX_ARTIFACT_BYTES`. A collection failure is recorded on the run
+  but does not change the exit-derived status. **Deployment prerequisite:**
+  `/out` is not quota'd while the container runs, so
+  `CAD_ACTIONS_VOLUME_PATH` must live on a filesystem with a size/space limit;
+  Cadence enforces only the post-exit collection caps.
+- The staging directory is removed after collection; the container is always
+  removed, including on timeout and start failure. A container orphaned by a
+  server restart is removed by stale-run recovery.
+- Each run is a durable `action_runs` row (`queued → running →
+  succeeded|failed|timed_out|interrupted`) with the action command snapshot,
+  image, exit code, log/artifact paths, and a shape-only error reason. Rows left
+  `running` by a restart are marked `interrupted` once they are older than the
+  build + run budgets, so a dead run never looks live forever; the transition
+  is broadcast like any other.
 
 ### 8.4 Security
 
 - Docker socket access is the highest-risk surface. **Use a socket proxy**
-  (`tecnativa/docker-socket-proxy` or equivalent) that allowlists only the API
-  endpoints the action runner needs (`containers/*`, `images/*`, `exec/*`).
+  (`tecnativa/docker-socket-proxy` or equivalent) that restricts the HTTP
+  methods and resource families the action runner needs
+  (`POST`, `containers/*`, `images/*`, `build`).
 - Raw `/var/run/docker.sock` is acceptable only if the socket proxy is
   infeasible; even then, mount it read-only.
+- That proxy model is **not** an endpoint-level allowlist: `POST` plus
+  `containers/*` also reaches `containers/{id}/exec` and `containers/create`
+  with an arbitrary `HostConfig`. Treat the proxy as root-equivalent. The action
+  runner is its only client, and action containers must never join the proxy's
+  network: with `CAD_ACTIONS_NETWORK=none` (the default) they cannot reach it,
+  and a deployment that sets a custom network must keep the proxy off that
+  network. `CAD_DOCKER_SOCKET` is an HTTP proxy endpoint, never a `unix://`
+  path.
+- Building an image needs the proxy's `BUILD` endpoint. Without it, a project
+  that relies on a `Dockerfile` fails as `build_failed`; a
+  `project.docker_image` project still runs.
 - `CAD_ACTIONS_ENABLED=false` disables the action layer entirely for
   deployments that don't need it.
 
@@ -1291,7 +1360,7 @@ inserts); the daemon can mark only that node failed and retry the rest.
 | Phoenix auth routes | `ash_authentication_phoenix` |
 | Ash DSL formatting / codegen | `sourceror` (dev/test only) |
 | LiveView test DOM | `lazy_html` (test only; required by `Phoenix.LiveViewTest`) |
-| Docker API | `ex_docker_api` |
+| Docker API | `ex_docker_api` `~> 1.55` (Tesla + the built-in httpc adapter; requires Elixir 1.20) |
 | Rate limiting | `Hammer` (declared in `cadence_shared`; used by the daemon's `LLMRateLimit` and the server's `LLMRateLimit` / `MeldWorker`) |
 | Graph model | `libgraph` |
 | TUI (optional, daemon-side) | `ExRatatui` |
@@ -1310,6 +1379,10 @@ inserts); the daemon can mark only that node failed and retry the rest.
 
 **Dependency discipline:** do not add dependencies beyond this list without
 justification. If a new dependency is needed, add it to this table first.
+
+**Elixir floor:** the umbrella and every app require `~> 1.20`, because
+`ex_docker_api` 1.55 targets the built-in `JSON` module and declares 1.20 in its
+own mix.exs. The demo image already builds on Elixir 1.20.
 
 **Browser assets:** the web UI serves the prebuilt `phoenix` and
 `phoenix_live_view` browser bundles from the dependency priv directories plus a
@@ -1398,6 +1471,8 @@ services:
       CAD_DATABASE_URL: "ecto://${CAD_DB_USER}:${CAD_DB_PASS}@postgres/cadence"
       CAD_GIT_STORE_PATH: "/data/git"
       CAD_ARTIFACT_PATH: "/data/artifacts"
+      CAD_ACTIONS_VOLUME: "cadence_actions"
+      CAD_ACTIONS_VOLUME_PATH: "/data/actions"
       CAD_OAUTH_GITHUB_CLIENT_ID: "${CAD_OAUTH_GITHUB_CLIENT_ID}"
       CAD_OAUTH_GITHUB_CLIENT_SECRET: "${CAD_OAUTH_GITHUB_CLIENT_SECRET}"
       CAD_OAUTH_GOOGLE_CLIENT_ID: "${CAD_OAUTH_GOOGLE_CLIENT_ID}"
@@ -1410,6 +1485,8 @@ services:
       CAD_PUBLIC_URL: "https://${CAD_PHX_HOST}"
     volumes:
       - cadence_data:/data
+      - cadence_actions:/data/actions
+      - cadence_artifacts:/data/artifacts
     depends_on:
       postgres:
         condition: service_healthy
@@ -1436,14 +1513,17 @@ services:
     environment:
       CONTAINERS: 1
       IMAGES: 1
-      EXEC: 1
-      POST: 1
       BUILD: 1
+      POST: 1
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
 
 volumes:
   cadence_data:
+  cadence_actions:
+    name: cadence_actions
+  cadence_artifacts:
+    name: cadence_artifacts
   postgres_data:
 ```
 
@@ -1493,7 +1573,12 @@ if config_env() == :prod do
   config :cadence_server,
     actions_enabled: System.get_env("CAD_ACTIONS_ENABLED", "true") == "true",
     docker_socket: System.get_env("CAD_DOCKER_SOCKET", "http://localhost:2375"),
-    artifact_path: System.get_env("CAD_ARTIFACT_PATH", "/data/artifacts")
+    artifact_path: System.get_env("CAD_ARTIFACT_PATH", "/data/artifacts"),
+    actions_volume: System.get_env("CAD_ACTIONS_VOLUME", "cadence_actions"),
+    actions_volume_path: System.get_env("CAD_ACTIONS_VOLUME_PATH", "/data/actions"),
+    actions_network: System.get_env("CAD_ACTIONS_NETWORK", "none"),
+    actions_build_network: System.get_env("CAD_ACTIONS_BUILD_NETWORK", "none"),
+    docker_api_version: System.get_env("CAD_DOCKER_API_VERSION", "v1.45")
 end
 ```
 
@@ -1529,9 +1614,21 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_MELD_CONTEXT_BYTES` | no | `65536` | Max rendered parent/conflict context in the meld prompt |
 | `CAD_MELD_RETRY_ATTEMPTS` | no | `1` | Retries after a transient meld provider error |
 | `CAD_MELD_RETRY_BACKOFF_MS` | no | `500` | Delay between meld retries |
-| `CAD_ARTIFACT_PATH` | no | `/data/artifacts` | Action outputs |
+| `CAD_ARTIFACT_PATH` | no | `/data/artifacts` | Action logs and artifact outputs |
 | `CAD_ACTIONS_MAX_MANIFEST_BYTES` | no | `32768` | Max `actions/manifest.json` bytes read from a node snapshot |
 | `CAD_ACTIONS_MAX_ACTIONS` | no | `20` | Max actions accepted from one manifest |
+| `CAD_ACTIONS_VOLUME` | no | `cadence_actions` | **Docker volume name** shared by the server and action containers (compose prefixes its volume keys unless `name:` is pinned) |
+| `CAD_ACTIONS_VOLUME_PATH` | no | `/data/actions` | Where the server mounts `CAD_ACTIONS_VOLUME` |
+| `CAD_ACTIONS_TIMEOUT_MS` | no | `120000` | Max wall time for one action container |
+| `CAD_ACTIONS_BUILD_TIMEOUT_MS` | no | `300000` | Max wall time for one image build |
+| `CAD_ACTIONS_MAX_CPUS` | no | `1` | CPU limit (whole cores, converted to Docker `NanoCpus`) |
+| `CAD_ACTIONS_MEMORY_MB` | no | `512` | Memory limit in MiB |
+| `CAD_ACTIONS_PIDS_LIMIT` | no | `256` | Max processes in an action container |
+| `CAD_ACTIONS_NETWORK` | no | `none` | Container network mode (`none` \| `bridge` \| a Docker network) |
+| `CAD_ACTIONS_BUILD_NETWORK` | no | `none` | Network mode for `Dockerfile` `RUN` steps (`FROM` pulls still use the daemon) |
+| `CAD_DOCKER_API_VERSION` | no | `v1.45` | Docker Engine API version (`v1.45` is the floor for `volume-subpath`) |
+| `CAD_ACTIONS_MAX_LOG_BYTES` | no | `1048576` | Max captured container log size |
+| `CAD_ACTIONS_MAX_ARTIFACT_BYTES` | no | `33554432` | Max total bytes collected from `/out` |
 | `CAD_OAUTH_GITHUB_CLIENT_ID` | no | — | GitHub OAuth |
 | `CAD_OAUTH_GITHUB_CLIENT_SECRET` | no | — | GitHub OAuth |
 | `CAD_OAUTH_GOOGLE_CLIENT_ID` | no | — | Google OAuth |
@@ -1630,6 +1727,12 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - All sync traffic over HTTPS only.
 - Actions are opt-in per project and disabled server-wide with
   `CAD_ACTIONS_ENABLED=false` if the deployment doesn't need them.
+- The action volume (`CAD_ACTIONS_VOLUME_PATH`) must be on a size-limited
+  filesystem: action code can fill it during a run, and Cadence caps only the
+  post-exit artifact copy (§8.3).
+- The Docker socket proxy is root-equivalent (§8.4); keep action containers off
+  its network and treat project `Dockerfile` `FROM` references as able to reach
+  any registry the daemon can reach.
 
 ---
 
@@ -1770,10 +1873,12 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - 6a — manifest foundation: strict parse/validation of `actions/manifest.json`
   from a node snapshot, caps, `CAD_ACTIONS_ENABLED`, members see / managers run,
   and a read-only action list on the project page (§8, §12.6).
-- 6b — runner: `ex_docker_api` integration (spec §11 version row), snapshot
-  staging into a shared volume, image reuse/build cache, container
-  create/start with no network by default plus CPU/memory limits, log capture,
-  artifacts, and the sandboxed-compose socket proxy (§8.3, §8.4, §12.4).
+- 6b — runner (shipped): `ex_docker_api` 1.55 client, snapshot staging into a
+  shared volume with per-run subpath mounts, `project.docker_image` reuse or a
+  `Dockerfile` build cache, `/bin/sh -c` execution with no network by default
+  and CPU/memory/PID/read-only-rootfs limits, capped logs and artifacts,
+  durable `action_runs` rows, and the demo socket proxy/volumes
+  (§8.2–§8.4, §11, §12.4).
 - 6c — web run experience: run buttons, streamed output over PubSub/LiveView,
   artifact links, and the `expose` visibility decision (§16 if still open).
 
@@ -1890,6 +1995,49 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       members-only. Until then members see all actions and anonymous visitors
       see none. The manifest file itself is ordinary repository content
       (browsable per §7.5) and is not confidential.
+- [x] **Action run durability:** resolved in 6b — a server-only `action_runs`
+      row is written before any container exists; a run interrupted by a
+      restart stays `running` until `recover_stale/1` marks it `:interrupted`
+      after the build + run budgets. Runs are not resumed.
+- [ ] **Action artifact retention:** 6b writes
+      `<CAD_ARTIFACT_PATH>/<run_id>/…` without pruning. Add age/size retention
+      (or a per-project quota) before artifact growth matters.
+- [ ] **Action run concurrency:** 6b does not cap concurrent runs per project.
+      Each run is a separate container, so a burst of manager clicks can consume
+      host resources up to the per-container limits. Add a per-project queue (or
+      a `max_concurrent_runs` setting) if that shows up.
+- [ ] **Docker Engine floor / API version:** action staging relies on
+      `volume-subpath` (API 1.45, Docker 26+). `CAD_DOCKER_API_VERSION` defaults
+      to `v1.45` because that is the compatible floor for Docker 26–29; there is
+      no negotiation, so pointing it at a version the daemon does not support
+      fails creates as `create_failed`. Add `GET /version` negotiation if a
+      mixed fleet appears.
+- [ ] **Action image retention:** each snapshot with a `Dockerfile` builds
+      `cadence-action-<slug>-<sha12>` and nothing prunes those images or the
+      build cache. Add an image retention policy alongside artifact retention
+      before host disk growth matters.
+- [ ] **Action staging/output quota (deployment prerequisite):** `/out` is a
+      per-run subpath on the shared volume with no quota while the action runs,
+      so a hostile action can fill the host volume during its timeout. Before
+      enabling actions, `CAD_ACTIONS_VOLUME_PATH` must be placed on a filesystem
+      with a size/space limit (or monitored with a kill); the demo stack is a
+      dev aid and does not provision one. The collection caps bound only the
+      copy after exit.
+- [ ] **Action container user namespace:** action containers run with the
+      image's `USER` and the host's default user namespace (no `UsernsMode` or
+      forced uid). `/out` is world-writable so non-root images work, but a
+      root-owned image still runs uid 0 inside the container. Consider
+      `userns-remap` or a forced non-root uid for stronger isolation.
+- [ ] **`Project.docker_image` has no writer:** the runner honors the column,
+      but only tests set it today. 6c or an admin surface must provide a way to
+      set/clear it (and to validate that the image can run against
+      `/workspace`).
+- [ ] **Action log capture is post-exit:** 6b reads logs after the container
+      exits (TTY mode, stderr merged into stdout). Live streaming to the web UI
+      is 6c; the `action_runs` row plus the post-commit
+      `{:action_run_updated, project_id, run_id, status}` PubSub event are the
+      contract. Logs contain terminal/ANSI escapes and must be escaped when
+      rendered.
 - [ ] **`Project.actions_manifest` is unused:** the data model still has the
       column (§4.2), but 6a reads the manifest from the selected node snapshot.
       Repurpose it as a cache or remove it in a schema slice so the model and

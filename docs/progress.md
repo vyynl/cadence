@@ -1,12 +1,11 @@
 # Cadence — Progress
 
 ## Current Phase
-**Phase 6 — Docker actions** is in progress. **6a (manifest foundation)** is
-complete: strict `actions/manifest.json` validation, snapshot-addressed reads,
-`CAD_ACTIONS_*` config, and a members-only read-only action panel. The same
-session fixed a high-severity `GitStore.walk_blobs/3` truncation bug that made
-secret scans skip files after the first directory. Next: **6b (runner)**, then
-6c (web run experience). The Phase 5 P5 smoke gate remains optional.
+**Phase 6 — Docker actions** is in progress. **6a (manifest foundation)** and
+**6b (runner)** are complete: strict manifest parsing, a members-only read-only
+panel, and a durable Docker action runner (staging, image reuse/build,
+isolation limits, log/artifact capture, recovery). Next: **6c (web run
+experience)**. The Phase 5 P5 smoke gate remains optional.
 
 ## Done (summary)
 
@@ -372,6 +371,36 @@ secret scans skip files after the first directory. Next: **6b (runner)**, then
   (project-scoped membership, live panel refresh, fail-closed reads,
   whitespace/bidi validation, a11y/overflow, spec corrections). 40 new tests;
   844 total.
+- **Phase 6b (Docker action runner)** — durable `action_runs` schema/migration
+  and `Actions.Runs` (`prepare`/`start`/`execute`/`list`/`get`/`log`/`artifacts`/
+  `recover_stale`/`recover_all`). Run boundary re-checks `can_manage?`,
+  project/node membership, and an open critical node incident; staging walks the
+  snapshot once (`Portfolio.scan_limits/0`), scans it for secrets **before**
+  writing, then materializes `<run_id>/code`. Image policy:
+  `Project.docker_image` wins, else root `Dockerfile` → cached
+  `cadence-action-<slug>-<sha12>`, else `no_image`. Container: `Entrypoint
+  ["/bin/sh","-c"]`, no network by default, memory/swap/CPU/PID limits,
+  read-only rootfs + noexec `/tmp`, `CapDrop=ALL`, `no-new-privileges`, cgroup
+  log cap (`1m`/1 file), code mounted read-only from a volume subpath and `/out`
+  writable (0777, so non-root images work). Logs are tail-capped and written to
+  `<artifact_path>/<run_id>/output.log`; artifacts go to
+  `<run_id>/artifacts/` (regular files only, inode-bound bounded reads, 1,000
+  files / `CAD_ACTIONS_MAX_ARTIFACT_BYTES`). Terminal writes precede container
+  removal; confirmed removals clear `container_id`, failed ones are retried by
+  the terminal-status orphan sweep. Heartbeats keep long builds from being
+  recovered; `recover_stale` CASes per row (reads never touch Docker) and
+  broadcasts only real transitions. `Actions.Docker` behaviour +
+  `DockerEngine` (`ex_docker_api` 1.55, API default `v1.45`) with pure
+  request/response helpers and unit tests; tests inject `FakeDocker`. Demo
+  compose gained the socket proxy (method/resource allowlist) plus pinned
+  `cadence-demo-actions`/`-artifacts` volumes. Config: `CAD_ACTIONS_*`
+  (volume/path, timeouts, CPU/memory/PID, network + build network, log/artifact
+  caps), `CAD_DOCKER_API_VERSION`; Elixir floor bumped to `~> 1.20`. Spec
+  §8.2–§8.4/§11/§12.4/§12.6/§12.9/§13/§16 and `.env.example` updated. 53 new
+  tests; 898 total (252 shared + 188 daemon + 458 server). Two review cycles:
+  REQUIRES CHANGES (2 blockers: `start` mapped `%ErrorResponse{}` to `:ok`, and
+  the image `ENTRYPOINT` was not overridden) → PASS. Lesson:
+  `.claude/solutions/docker/ex_docker_api-false-success-20261106.md`.
 - **High-severity `GitStore.walk_blobs/3` truncation fix** — `walk_tree_blobs/8`
   returned a 2-tuple from recursive subtree calls while the parent reduce
   expected `{:ok, acc, count, bytes}`; the catch-all halted the walk, so every
@@ -396,33 +425,32 @@ secret scans skip files after the first directory. Next: **6b (runner)**, then
 
 ## Next
 
-**Immediate step:** **6b (Docker action runner)** from `docs/phase-6-prep.md`:
+**Immediate step:** **6c (web run experience)** from `docs/phase-6-prep.md`:
 
-- add `{:ex_docker_api, "~> 1.55"}` to `cadence_server` and a spec §11 version
-  row;
-- stage the selected node's snapshot into the shared action volume (D5) — the
-  server's own bind paths are not visible to the host daemon;
-- reuse `Project.docker_image` when set, else build/cache
-  `cadence-action-<project>-<sha12>` from the snapshot's `Dockerfile`;
-- create/start with no network by default, CPU/memory limits, read-only code,
-  and a writable output dir; capture logs; write artifacts under
-  `CAD_ARTIFACT_PATH`;
-- re-check `can_manage?` **and** snapshot quarantine at the run boundary;
-- add the demo compose socket proxy + shared action volume;
-- tests use a fake Docker client (no real daemon).
+- add Run controls to the member Actions panel, shown only for
+  `Authorization.can_manage?/1`; re-read the membership in `handle_event` and
+  call `Actions.Runs.start/4` (it re-authorizes and re-checks quarantine).
+- subscribe after `connected?/1` to `project:<id>` and handle
+  `{:action_run_updated, project_id, run_id, status}`; render the run list with
+  `Runs.list/3` and a detail page with `Runs.get/3`, `Runs.log/1`, and
+  `Runs.artifacts/1` (the last two must only receive a run from `get/3`).
+- escape ANSI/terminal output in a `<pre>` (never `raw/1`); link artifacts from
+  the node that triggered the run.
+- decide `expose` semantics (§16) and close out §13/docs.
+- tests use the fake Docker client; no real daemon.
 
-Then 6c: run buttons, streamed output over PubSub/LiveView, artifact links, the
-`expose` decision (§16), and closeout.
-
-**Integration contract (6a):** `Actions.Manifest.parse/2` returns
-`{:ok, %Manifest{actions: [%Action{}]}}` or a shape-only atom;
-`Actions.list(project, node, membership)` returns the same or
-`:forbidden | :disabled | :not_found | :too_large | :invalid_*`, reads
-`actions/manifest.json` from the node's Git tree, and requires the membership
-to belong to the project. The LiveView hides the panel for
-`:not_found | :disabled | :forbidden`, shows a notice for other errors, and
-never renders a quarantined snapshot. `Project.docker_image` is unused by 6a;
-6b must define how a prebuilt image relates to the snapshot tree.
+**Integration contract (6b):** `Actions.Runs.prepare/4` returns
+`{:ok, %ActionRun{}}` or
+`{:error, :disabled | :forbidden | :not_found | :quarantined | :unknown_action |
+Ecto.Changeset.t()}`; `start/4` adds the async task and returns the queued row;
+`execute/1` is the synchronous body tests use. Statuses are
+`queued → running → succeeded | failed | timed_out | interrupted`; infra
+failures carry a closed `error_reason` (`quarantined`, `staging_failed`,
+`no_image`, `build_failed`, `create_failed`, `docker_unavailable`,
+`run_failed`). `log_path`/`artifact_path` are relative to `CAD_ARTIFACT_PATH`;
+`artifact_path` is `"<run_id>/artifacts"` only when files were collected. A
+collection skip is `artifact_error: "collect_skipped"`, not a status change. The
+Docker client is injected via `:actions_docker` (`FakeDocker` in tests).
 
 Carry-over (small, not blocking Phase 6):
 
@@ -445,14 +473,15 @@ Carry-over (small, not blocking Phase 6):
    no browser tests; 4e verified server-rendered markup and CSS only (the P4-T3
    docs badge and 6a action panel are also only test-verified).
 
-**Spin-up:** `@phx-work docs/phase-6-prep.md` at 6b; the runner design may need
-a fresh gate before code (socket proxy, shared volume, artifact durability).
+**Spin-up:** `@phx-full` (or `@phx-plan` → `@phx-work`) at 6c; the run UI is a
+LiveView + PubSub slice, so no new dependency gate is expected.
 
 ## Blocked
 
-- (none). 6a review findings are fixed and verified. Two known residual items
-  do not block 6b: the P4-T2 push-in-flight gap (recorded below) and the
-  `ProjectLive` quarantine-cache suggestion carried over from 4e.
+- (none). 6a/6b review findings are fixed and verified (6b closed at PASS).
+  Open deltas (artifact/image retention, the `/out` quota prerequisite, the
+  Engine API floor, `Project.docker_image` having no writer, userns) are
+  recorded below and in spec §16; none block 6c.
 
 ## Spec Deltas / Open Items
 
@@ -470,8 +499,24 @@ a fresh gate before code (socket proxy, shared volume, artifact durability).
   quarantine (the LiveView hides the panel, 6b must re-check at the run
   boundary); the manifest file itself remains publicly browsable repository
   content; `Project.actions_manifest` is still unused; `expose` is parsed but
-  not honored (§16). 6b still needs decisions for artifact retention and run
-  durability.
+  not honored (§16). 6b resolved run durability with a durable row; artifact
+  and image retention remain open (§16).
+- **Actions 6b notes (2026-11-06)** — `execute/1` is synchronous and `start/4`
+  wraps it in `Actions.TaskSupervisor`; `recover_stale/2` CASes per row, and
+  `list/get` call it with `remove_containers: false` so reads never touch
+  Docker. `container_id` is recorded after create and cleared only after a
+  confirmed removal; terminal rows with a retained id are swept by
+  `recover_all/0` and the manager-triggered `start/4`. `Actions.Docker` is the
+  injection point (`:actions_docker`); `DockerEngine` defaults to API `v1.45`
+  (`CAD_DOCKER_API_VERSION`) with no negotiation, because that is the
+  `volume-subpath` floor for Docker 26–29. Logs are TTY output (stderr merged),
+  tail-capped and stored at `<run_id>/output.log`; artifacts at
+  `<run_id>/artifacts/`. `/out` is world-writable (0777) so non-root images
+  work. Deployment prerequisites: a size-limited `CAD_ACTIONS_VOLUME_PATH`
+  filesystem, a socket proxy treated as root-equivalent (and never on an action
+  network), and awareness that `Dockerfile` `FROM` pulls are daemon-side. Still
+  open: artifact/image retention, per-project run concurrency,
+  `Project.docker_image` has no writer, userns (§16).
 - **Phase 5b implementation notes (2026-11-06)** — every commit gets a
   `SyncPending` row written in the same transaction as the node (and spawn);
   `pushable/3` keeps a doc-held parent in the parent set and gates only
@@ -1097,3 +1142,17 @@ validation, `aria-label` + command wrapping, spec contradictions, test gaps).
 Verification: `mix format --check-formatted`, dev +
 `MIX_ENV=prod mix compile --warnings-as-errors`, 844 tests green (252 shared +
 188 daemon + 404 server; +40). Next: 6b (runner).
+
+2026-11-06 — 6b (Docker action runner) shipped from
+`.claude/plans/phase-6b-runner/plan.md`: `action_runs` schema/migration,
+`Actions.Runs` lifecycle + recovery, `Actions.Docker`/`DockerEngine`
+(`ex_docker_api` 1.55, API `v1.45`), staging (`walk` → scan → write), bounded
+artifact collection, `Actions.TaskSupervisor`, demo socket proxy + pinned
+volumes, `CAD_ACTIONS_*`/`CAD_DOCKER_API_VERSION` config, Elixir `~> 1.20`, and
+spec §8/§11/§12/§13/§16 updates. Two review cycles: REQUIRES CHANGES (2
+blockers — `start` mapping `%ErrorResponse{}` to success and the image
+`ENTRYPOINT` not being overridden — plus build-network, proxy, volume-name, API
+version, and recovery findings), then PASS. Verification: `mix format
+--check-formatted`, dev + `MIX_ENV=prod mix compile --warnings-as-errors`, 898
+tests green (252 shared + 188 daemon + 458 server; +54). Next: 6c (web run
+experience).

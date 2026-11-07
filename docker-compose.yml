@@ -3,7 +3,9 @@
 #   docker compose up --build
 #
 # Not production: the image is MIX_ENV=dev and the password strategy is a
-# build-time demo gate (spec §7.4, §12.4).
+# build-time demo gate (spec §7.4, §12.4). The socket proxy allowlists only the
+# endpoints the action runner uses (spec §8.4); CAD_ACTIONS_ENABLED and the
+# limits still gate every run.
 services:
   db:
     image: postgres:16-alpine
@@ -29,11 +31,17 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      docker-proxy:
+        condition: service_started
     environment:
       CAD_DATABASE_URL: "ecto://postgres:postgres@db:5432/cadence_demo"
       CAD_SECRET_KEY_BASE: "cadence-demo-secret-key-base-do-not-use-in-production-0123456789abcdef"
       CAD_PUBLIC_URL: "http://localhost:4000"
       CAD_GIT_STORE_PATH: "/data/git"
+      CAD_ARTIFACT_PATH: "/data/artifacts"
+      CAD_DOCKER_SOCKET: "http://docker-proxy:2375"
+      CAD_ACTIONS_VOLUME: "cadence-demo-actions"
+      CAD_ACTIONS_VOLUME_PATH: "/data/actions"
       CAD_DEMO_AUTH: "true"
       CAD_HTTP_PORT: "4000"
     ports:
@@ -42,7 +50,30 @@ services:
       # Style iteration: edit CSS on the host and refresh the browser.
       - ./apps/cadence_server/priv/static/css:/app/apps/cadence_server/priv/static/css
       - cadence-demo-git:/data/git
+      # Actions: the server stages snapshots here and the host daemon mounts
+      # the same named volume into each action container by subpath (§8.3).
+      - cadence-demo-actions:/data/actions
+      - cadence-demo-artifacts:/data/artifacts
+
+  # Allowlisted Docker API proxy (spec §8.4). The runner only needs container
+  # lifecycle, image inspect/build, and POST for wait/start.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      BUILD: 1
+      POST: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
 
 volumes:
   cadence-demo-pg:
   cadence-demo-git:
+  # Pinned so the Docker volume name matches CAD_ACTIONS_VOLUME; compose would
+  # otherwise prefix both with the project name.
+  cadence-demo-actions:
+    name: cadence-demo-actions
+  cadence-demo-artifacts:
+    name: cadence-demo-artifacts

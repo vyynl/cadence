@@ -2,7 +2,7 @@
 
 **Spec:** §8 (concept, language support, isolation, security), §12.4 (compose
 socket proxy), §12.6 (env contract), §12.9 (security notes), §13 Phase 6.
-**Status:** 6a in progress; 6b and 6c planned.
+**Status:** 6a and 6b complete; 6c next.
 
 ## Goal
 
@@ -55,7 +55,25 @@ artifact attached to that node.
   extra query). Snapshots are immutable, so a per-node cache is a possible
   optimization if navigation cost shows up.
 
-### 6b — runner
+### 6b — runner (shipped)
+
+Shipped as `Cadence.Server.Actions.Runs` (prepare/start/execute), `ActionRun`
+schema + migration, `Actions.Staging`, `Actions.Artifacts`, an
+`Actions.Docker` behaviour with `DockerEngine` (ex_docker_api) and a test fake,
+and the demo socket proxy/volumes. Decisions taken during 6b:
+
+- durable `action_runs` rows with lazy stale-run recovery (`:interrupted`);
+- shared named volume with per-run `volume-subpath` mounts (Docker ≥ 26), code
+  read-only at `/workspace`, output at `/out`;
+- `project.docker_image` wins, else root `Dockerfile` → tag
+  `cadence-action-<slug>-<sha12>`, else `no_image`;
+- `/bin/sh -c <command>`, no network by default (build `RUN` steps separately
+  default to `none`), memory/CPU/PID limits, read-only rootfs with a small
+  `noexec` `/tmp`, `CapDrop=ALL`, `no-new-privileges`, swap capped to memory;
+- TTY log capture (stderr merged) capped and written to
+  `<artifact_path>/<run_id>/output.log`; artifacts in `.../artifacts/` (regular
+  files only, capped);
+- no artifact retention and no per-project concurrency cap (spec §16 deltas).
 
 - Add `{:ex_docker_api, "~> 1.55"}` to `cadence_server`; record the version in
   spec §11.
@@ -85,7 +103,7 @@ artifact attached to that node.
 | Manifest parser | `actions_manifest_test.exs` | valid example; missing/invalid JSON; empty actions; caps (bytes, count); bad name/command/description/expose; duplicates; NUL/control chars; unknown keys ignored |
 | Actions context | `actions_test.exs` | disabled; missing manifest; too large; invalid manifest; non-member forbidden; viewer may list; manager may list; other project's node |
 | Project page | `project_live_test.exs` | member sees name/description/command; anonymous does not; quarantined snapshot hides; no manifest hides; disabled hides |
-| Runner (6b) | `actions_runner_test.exs` | image reuse/build; limits; no network; log capture; artifact path; failure mapping |
+| Runner (6b) | `actions_runs_test.exs`, `actions_docker_engine_test.exs`, `actions_staging_test.exs` | image reuse/build; limits; no network; log capture; artifact path; failure mapping; request mapping; staging caps |
 | UI (6c) | `project_live_test.exs` | run button only for managers; event authorization; streamed output; run failure |
 
 ## Acceptance for 6a
@@ -112,3 +130,6 @@ artifact attached to that node.
    delta if 6b does not implement pruning.
 5. **Run durability.** An in-memory run registry loses state on restart; a
    durable run table is a 6b decision.
+6. **Action volume quota.** `/out` is unbounded while a run executes; the
+   deployment must put `CAD_ACTIONS_VOLUME_PATH` on a size-limited filesystem
+   (§8.3, §12.9).

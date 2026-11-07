@@ -6,7 +6,7 @@ defmodule Cadence.MixProject do
       apps_path: "apps",
       version: "0.1.0",
       start_permanent: Mix.env() == :prod,
-      elixir: "~> 1.18",
+      elixir: "~> 1.20",
       deps: deps()
     ]
   end

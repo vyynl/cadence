@@ -13,9 +13,9 @@ styling pass is planned after 4c-3 (incident panel) unless a demo is imminent.
 
 ## Open
 
-- (none) The 4e styling pass closed the review-page observations below. Add new
-  notes here as they come up; `docker compose up` plus the routes listed there
-  is still the place to catch purely visual regressions.
+- **6c action logs:** captured logs are TTY output and may contain ANSI/terminal
+  escape sequences. Render them escaped in a `<pre>` (never `raw/1`) and add a
+  "download" or "copy" affordance only after the escape handling is in place.
 
 ## Done
 

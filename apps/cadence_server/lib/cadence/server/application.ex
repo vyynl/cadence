@@ -11,6 +11,7 @@ defmodule Cadence.Server.Application do
       {Phoenix.PubSub, name: Cadence.Server.PubSub},
       Cadence.Server.LLMRateLimit,
       Cadence.Server.MeldWorker,
+      Cadence.Server.Actions.TaskSupervisor,
       Cadence.ServerWeb.Endpoint
     ]
 

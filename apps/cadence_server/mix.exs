@@ -5,7 +5,7 @@ defmodule Cadence.Server.MixProject do
     [
       app: :cadence_server,
       version: "0.1.0",
-      elixir: "~> 1.18",
+      elixir: "~> 1.20",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps()
@@ -14,7 +14,9 @@ defmodule Cadence.Server.MixProject do
 
   def application do
     [
-      extra_applications: [:logger],
+      # :inets/:ssl back Tesla's httpc adapter, which the Docker API client uses
+      # when no other adapter is configured (spec §8, §11).
+      extra_applications: [:logger, :inets, :ssl],
       mod: {Cadence.Server.Application, []}
     ]
   end
@@ -37,6 +39,7 @@ defmodule Cadence.Server.MixProject do
       {:ash_authentication, "~> 4.15"},
       {:ash_authentication_phoenix, "~> 2.17"},
       {:bcrypt_elixir, "~> 3.0"},
+      {:ex_docker_api, "~> 1.55"},
       {:hammer, "~> 7.5"},
       {:sourceror, "~> 1.7", only: [:dev, :test]},
       {:lazy_html, ">= 0.1.0", only: :test},

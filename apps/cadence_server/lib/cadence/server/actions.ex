@@ -2,15 +2,15 @@ defmodule Cadence.Server.Actions do
   @moduledoc """
   Read-only access to a project's Docker actions (spec §8).
 
-  Phase 6a loads and validates a node's `actions/manifest.json`; execution in
-  per-project containers lands in 6b. Reading is snapshot-addressed: the
-  manifest comes from the selected node's Git tree, never a server working
-  copy.
+  Phase 6a loads and validates a node's `actions/manifest.json`; 6b executes an
+  action against the same snapshot through `Cadence.Server.Actions.Runs`.
+  Reading is snapshot-addressed: the manifest comes from the selected node's Git
+  tree, never a server working copy.
 
   Callers own snapshot quarantine: `ProjectLive` hides the panel for a
-  quarantined snapshot, and 6b must re-check before running anything. The
-  manifest file itself is still ordinary repository content and is not
-  confidential.
+  quarantined snapshot, and `Runs.prepare/4` re-checks the incident before
+  writing a run row (staging re-scans the content). The manifest file itself is
+  still ordinary repository content and is not confidential.
   """
 
   alias Cadence.Server.Actions.Manifest
@@ -26,6 +26,48 @@ defmodule Cadence.Server.Actions do
   @doc "Repository path of the action manifest."
   @spec manifest_path() :: String.t()
   def manifest_path, do: @manifest_path
+
+  @doc """
+  Container limits and network mode for one action run (spec §8.3).
+
+  Shared by the runner (container spec) and the Docker engine (build limits), so
+  both use the same numbers and a positive floor.
+  """
+  @spec limits() :: %{
+          network: String.t(),
+          memory_bytes: pos_integer(),
+          nano_cpus: pos_integer(),
+          pids_limit: pos_integer()
+        }
+  def limits do
+    cpus = max(config_int(:actions_max_cpus, 1), 1)
+
+    %{
+      network: config_str(:actions_network, "none"),
+      memory_bytes: max(config_int(:actions_memory_mb, 512), 1) * 1_048_576,
+      nano_cpus: cpus * 1_000_000_000,
+      pids_limit: max(config_int(:actions_pids_limit, 256), 1)
+    }
+  end
+
+  @doc """
+  Limits for an image build (`Dockerfile` `RUN` steps), separated from the
+  run-container limits because the build gets its own network mode
+  (`CAD_ACTIONS_BUILD_NETWORK`, default `none`) and a CPU quota instead of
+  `NanoCpus` (spec §8.3).
+  """
+  @spec build_limits() :: %{
+          network: String.t(),
+          memory_bytes: pos_integer(),
+          cpu_quota: pos_integer()
+        }
+  def build_limits do
+    %{
+      network: config_str(:actions_build_network, "none"),
+      memory_bytes: limits().memory_bytes,
+      cpu_quota: max(config_int(:actions_max_cpus, 1), 1) * 100_000
+    }
+  end
 
   @doc """
   Load and validate the action manifest for a node.
@@ -88,4 +130,11 @@ defmodule Cadence.Server.Actions do
   end
 
   defp config_int(key, default), do: Application.get_env(:cadence_server, key, default)
+
+  defp config_str(key, default) do
+    case Application.get_env(:cadence_server, key, default) do
+      value when is_binary(value) and value != "" -> value
+      _other -> default
+    end
+  end
 end

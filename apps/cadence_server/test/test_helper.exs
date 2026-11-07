@@ -24,3 +24,10 @@ git_store_path = Application.get_env(:cadence_server, :git_store_path)
 if git_store_path do
   System.at_exit(fn _ -> File.rm_rf!(git_store_path) end)
 end
+
+for key <- [:actions_volume_path, :artifact_path] do
+  case Application.get_env(:cadence_server, key) do
+    path when is_binary(path) -> System.at_exit(fn _ -> File.rm_rf!(path) end)
+    _other -> :ok
+  end
+end
