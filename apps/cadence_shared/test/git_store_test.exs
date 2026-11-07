@@ -2,6 +2,8 @@ defmodule Cadence.Shared.GitStoreTest do
   use ExUnit.Case, async: true
 
   alias Cadence.Shared.GitStore
+  alias Cadence.Shared.GitStore.Pack
+  alias Cadence.Shared.GitStore.Pack.Index
 
   setup do
     dir = Path.join(System.tmp_dir!(), "cadence_gitstore_#{System.unique_integer([:positive])}")
@@ -664,6 +666,208 @@ defmodule Cadence.Shared.GitStoreTest do
       {:ok, tree} = GitStore.put_files(repo, %{"README.md" => "old"})
       assert GitStore.merge_files(repo, tree, nil) == {:error, :invalid_content}
     end
+  end
+
+  describe "packs" do
+    test "pack_objects/3 writes a pack that serves every read path", %{dir: dir, repo: repo} do
+      tree =
+        build_file_tree(repo, Path.join(dir, "src"), %{
+          "README.md" => "# Cadence\n",
+          "lib/a.ex" => "defmodule A do\nend\n"
+        })
+
+      commit = GitStore.write_commit(repo, tree, [], %{name: "a", email: "a@b"}, "root")
+      assert {:ok, objects} = GitStore.objects_from(repo, commit)
+
+      assert {:ok, info} = GitStore.pack_objects(repo, objects)
+      assert File.exists?(info.pack_path)
+      assert File.exists?(info.idx_path)
+      assert info.objects == length(objects)
+      assert length(GitStore.packs(repo)) == 1
+      assert GitStore.has_object?(repo, commit)
+
+      Enum.each(objects, &remove_loose!(repo, &1.sha))
+      refute loose_file?(repo, commit)
+
+      assert %{tree: ^tree} = GitStore.read_commit(repo, commit)
+      assert GitStore.read_tree(repo, tree) != nil
+      assert {:ok, "# Cadence\n"} = GitStore.read_path(repo, commit, "README.md")
+      assert {:ok, entries, false} = GitStore.list_path(repo, commit, "")
+      assert Enum.map(entries, & &1.path) |> Enum.sort() == ["README.md", "lib"]
+
+      assert {:ok, blobs} = GitStore.walk_blobs(repo, commit)
+      assert Enum.map(blobs, & &1.path) == ["README.md", "lib/a.ex"]
+
+      assert {:ok, repacked} = GitStore.objects_from(repo, commit)
+
+      assert Enum.map(repacked, & &1.sha) |> Enum.sort() ==
+               Enum.map(objects, & &1.sha) |> Enum.sort()
+
+      changes = GitStore.diff_trees(repo, nil, tree)
+      assert Enum.any?(changes, &(&1.path == "README.md" and &1.new_content == "# Cadence\n"))
+
+      dest = Path.join(dir, "checkout")
+      assert :ok = GitStore.checkout(repo, commit, dest)
+      assert File.read!(Path.join(dest, "README.md")) == "# Cadence\n"
+      assert File.read!(Path.join(dest, "lib/a.ex")) == "defmodule A do\nend\n"
+    end
+
+    test "packing the same objects twice is idempotent", %{repo: repo} do
+      tree = GitStore.write_tree(repo, [])
+      commit = GitStore.write_commit(repo, tree, [], %{name: "a", email: "a@b"}, "root")
+      {:ok, objects} = GitStore.objects_from(repo, commit)
+
+      assert {:ok, first} = GitStore.pack_objects(repo, objects)
+      assert {:ok, second} = GitStore.pack_objects(repo, objects)
+      assert first.name == second.name
+      assert pack_files(repo) == [first.pack_path]
+    end
+
+    test "a loose object written after packing is still readable", %{repo: repo} do
+      packed = GitStore.write_blob(repo, "packed content")
+
+      tree =
+        GitStore.write_tree(repo, [%{name: "a.txt", mode: "100644", type: :blob, ref: packed}])
+
+      commit = GitStore.write_commit(repo, tree, [], %{name: "a", email: "a@b"}, "root")
+      {:ok, objects} = GitStore.objects_from(repo, commit)
+
+      {:ok, info} = GitStore.pack_objects(repo, objects)
+      Enum.each(objects, &remove_loose!(repo, &1.sha))
+
+      loose = GitStore.write_blob(repo, "written later")
+      assert GitStore.read_blob(repo, packed) == "packed content"
+      assert GitStore.read_blob(repo, loose) == "written later"
+      assert pack_files(repo) == [info.pack_path]
+    end
+
+    test "pack_objects/3 rejects an empty list and invalid objects", %{repo: repo} do
+      assert GitStore.pack_objects(repo, []) == {:error, :no_objects}
+
+      assert {:error, {:sha_mismatch, _}} =
+               GitStore.pack_objects(repo, [
+                 %{sha: String.duplicate("0", 40), type: :blob, data: "x"}
+               ])
+
+      assert pack_files(repo) == []
+    end
+
+    test "duplicate objects are packed once", %{repo: repo} do
+      sha = GitStore.write_blob(repo, "duplicate content")
+      object = %{sha: sha, type: :blob, data: "duplicate content"}
+
+      assert {:ok, info} = GitStore.pack_objects(repo, [object, object])
+      assert info.objects == 1
+      assert length(GitStore.packs(repo)) == 1
+
+      remove_loose!(repo, sha)
+      assert GitStore.read_blob(repo, sha) == "duplicate content"
+    end
+
+    test "read_raw/2 and present_shas/2 answer without a commit", %{repo: repo} do
+      first = GitStore.write_blob(repo, "first")
+      second = GitStore.write_blob(repo, "second")
+      {:ok, _info} = GitStore.pack_objects(repo, [%{sha: first, type: :blob, data: "first"}])
+      remove_loose!(repo, first)
+
+      missing = String.duplicate("0", 40)
+      assert {:ok, {:blob, "first"}} = GitStore.read_raw(repo, first)
+      assert {:error, :not_found} = GitStore.read_raw(repo, missing)
+
+      assert GitStore.present_shas(repo, [first, second, missing, "not-a-sha"]) ==
+               [first, second]
+    end
+
+    test "has_object?/2 rejects non-hex 40-byte input", %{repo: repo} do
+      refute GitStore.has_object?(repo, "../" <> String.duplicate("a", 37))
+    end
+
+    test "a pack written outside pack_objects/3 is found on a read miss", %{repo: repo} do
+      data = "written out of process"
+      sha = GitStore.write_blob(repo, data)
+
+      # Seed an empty cache so the new pack is invisible until the miss reloads.
+      assert GitStore.packs(repo) == []
+
+      {:ok, encoded} = Pack.encode([%{sha: sha, type: :blob, data: data}])
+      idx = Index.encode(encoded.entries, encoded.checksum)
+      name = "pack-" <> Base.encode16(encoded.checksum, case: :lower)
+      dir = Path.join([repo.home_dir, "objects", "pack"])
+      File.write!(Path.join(dir, name <> ".pack"), encoded.pack)
+      File.write!(Path.join(dir, name <> ".idx"), idx)
+
+      remove_loose!(repo, sha)
+
+      assert GitStore.read_blob(repo, sha) == data
+      assert GitStore.has_object?(repo, sha)
+    end
+
+    test "temporary pack files are not discovered", %{repo: repo} do
+      pack_dir = Path.join([repo.home_dir, "objects", "pack"])
+      File.write!(Path.join(pack_dir, "tmp-1-pack-abc.idx.tmp"), "junk")
+      GitStore.invalidate_cache(repo)
+
+      assert GitStore.packs(repo) == []
+      assert pack_files(repo) == []
+    end
+
+    test "loose_objects/1 lists loose objects without reading content", %{repo: repo} do
+      sha = GitStore.write_blob(repo, "hello\n")
+
+      assert [%{sha: ^sha, size: size, path: path}] = GitStore.loose_objects(repo)
+      assert size > 0
+      assert File.exists?(path)
+      refute loose_file?(repo, String.duplicate("0", 40))
+    end
+
+    test "a corrupt pack degrades to a missing object", %{repo: repo} do
+      data = "corrupt me\n"
+      sha = GitStore.write_blob(repo, data)
+      tree = GitStore.write_tree(repo, [%{name: "a.txt", mode: "100644", type: :blob, ref: sha}])
+      commit = GitStore.write_commit(repo, tree, [], %{name: "a", email: "a@b"}, "root")
+      {:ok, objects} = GitStore.objects_from(repo, commit)
+
+      {:ok, info} = GitStore.pack_objects(repo, objects)
+      Enum.each(objects, &remove_loose!(repo, &1.sha))
+      File.write!(info.pack_path, binary_part(File.read!(info.pack_path), 0, 15))
+      GitStore.invalidate_cache(repo)
+
+      assert GitStore.read_blob(repo, sha) == nil
+      assert GitStore.read_commit(repo, commit) == nil
+    end
+
+    test "invalidate_cache/1 forces a re-read of pack indexes", %{repo: repo} do
+      first = GitStore.write_blob(repo, "first")
+
+      tree =
+        GitStore.write_tree(repo, [%{name: "a.txt", mode: "100644", type: :blob, ref: first}])
+
+      commit = GitStore.write_commit(repo, tree, [], %{name: "a", email: "a@b"}, "root")
+
+      {:ok, objects} = GitStore.objects_from(repo, commit)
+      {:ok, _info} = GitStore.pack_objects(repo, objects)
+      assert GitStore.read_blob(repo, first) == "first"
+
+      assert :ok = GitStore.invalidate_cache(repo)
+      assert GitStore.read_blob(repo, first) == "first"
+    end
+  end
+
+  defp remove_loose!(repo, sha) do
+    <<dir::binary-size(2)>> <> rest = sha
+    File.rm(Path.join([repo.home_dir, "objects", dir, rest]))
+  end
+
+  defp loose_file?(repo, sha) do
+    <<dir::binary-size(2)>> <> rest = sha
+    File.exists?(Path.join([repo.home_dir, "objects", dir, rest]))
+  end
+
+  defp pack_files(repo) do
+    repo.home_dir
+    |> Path.join("objects/pack/*.pack")
+    |> Path.wildcard()
+    |> Enum.sort()
   end
 
   defp build_file_tree(repo, dir, files) do

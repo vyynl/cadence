@@ -3,16 +3,25 @@ defmodule Cadence.Shared.GitStore do
   A content-addressed Git object store (blob/tree/commit), specialized for
   Cadence's DAG-of-session-nodes model.
 
-  Cadence has no branches, refs, tags, or packfiles: every session is an
-  immutable commit addressed by its SHA, and parent links live in the `Node`
-  schema rather than in the object store. This module therefore implements only
-  the object layer, with a ref-less commit writer and no history/ref machinery.
+  Cadence has no branches, refs, or tags: every session is an immutable commit
+  addressed by its SHA, and parent links live in the `Node` schema rather than
+  in the object store. This module implements the object layer only, with a
+  ref-less commit writer and no history/ref machinery.
+
+  Objects are written loose (zlib-compressed files under `objects/<2>/<38>`),
+  as Git does. Reads also consult packfiles (`objects/pack/*.pack` plus their
+  `.idx` indexes) when the loose file is absent, so callers never need to know
+  which layout a store uses. Pack writes are explicit (`pack_objects/3`);
+  no background process belongs in this shared module (spec §13 Phase 7).
 
   The Git object format (blob/tree/commit byte layout, SHA-1 content
   addressing, zlib compression) is a public standard. The encoding approach is
   derived from the pure-Elixir implementation in `awetzel/gitex` (MIT), which
   served as a reference for serializing those objects.
   """
+
+  alias Cadence.Shared.GitStore.{Cache, Pack}
+  alias Cadence.Shared.GitStore.Pack.Index
 
   @type t :: %__MODULE__{home_dir: Path.t()}
   @type sha :: String.t()
@@ -610,14 +619,313 @@ defmodule Cadence.Shared.GitStore do
     write_object(repo, Atom.to_string(type), data)
   end
 
-  @doc "Return whether an object exists in the store."
+  @doc """
+  Return whether an object exists in the store.
+
+  Checks the loose object first, then every pack index. A SHA without a valid
+  40-hex shape is always `false`.
+  """
   @spec has_object?(t(), sha()) :: boolean()
   def has_object?(repo, sha) when is_binary(sha) and byte_size(sha) == 40 do
+    valid_sha?(sha) and (loose_object?(repo, sha) or packed_object?(repo, sha))
+  end
+
+  def has_object?(_repo, _sha), do: false
+
+  ## Packs
+
+  @doc """
+  Return the pack indexes for a store.
+
+  Each entry is `%{name, pack_path, idx_path, offsets, ends, pack_checksum}`,
+  where `offsets` maps object SHAs to byte offsets in the pack and `ends` maps
+  each offset to the end of its compressed slice. Corrupt, orphaned, or
+  checksum-mismatched pairs are skipped.
+  """
+  @spec packs(t()) :: [map()]
+  def packs(repo), do: Cache.packs(repo.home_dir)
+
+  @doc "Drop cached pack indexes for a store (call after writing a pack)."
+  @spec invalidate_cache(t()) :: :ok
+  def invalidate_cache(repo), do: Cache.invalidate(repo.home_dir)
+
+  @doc """
+  Read any object by SHA, returning its Git type and payload.
+
+  Reads loose first, then packs. Returns `{:error, :not_found}` for a missing
+  or malformed SHA. This is the raw primitive the Phase 7b repacker needs to
+  walk loose objects that no commit references.
+  """
+  @spec read_raw(t(), sha()) :: {:ok, {atom(), binary()}} | {:error, :not_found}
+  def read_raw(repo, sha) do
+    case read_object(repo, sha) do
+      nil -> {:error, :not_found}
+      {type, data} -> {:ok, {type, data}}
+    end
+  end
+
+  @doc """
+  Return the subset of `shas` that the store already holds.
+
+  Bulk form of `has_object?/2` for the Phase 7c existence handshake: it reads
+  the pack indexes once instead of once per SHA. Invalid SHAs are ignored.
+  """
+  @spec present_shas(t(), [sha()]) :: [sha()]
+  def present_shas(repo, shas) when is_list(shas) do
+    packs = packs(repo)
+
+    Enum.filter(shas, fn sha ->
+      valid_sha?(sha) and
+        (loose_object?(repo, sha) or Enum.any?(packs, &Map.has_key?(&1.offsets, sha)))
+    end)
+  end
+
+  @doc """
+  List loose objects present in the store.
+
+  Returns `%{sha, size, path}` maps sorted by SHA, where `size` is the on-disk
+  (zlib-compressed) size. Used by the server repack slice (Phase 7b) to decide
+  what is worth packing; it never reads object content.
+  """
+  @spec loose_objects(t()) :: [%{sha: sha(), size: non_neg_integer(), path: Path.t()}]
+  def loose_objects(repo) do
+    objects_dir = Path.join([repo.home_dir, "objects"])
+
+    case File.ls(objects_dir) do
+      {:ok, entries} ->
+        entries
+        |> Enum.filter(&Regex.match?(~r/^[0-9a-f]{2}$/, &1))
+        |> Enum.flat_map(&loose_in_dir(objects_dir, &1))
+        |> Enum.sort_by(& &1.sha)
+
+      {:error, _reason} ->
+        []
+    end
+  end
+
+  @doc """
+  Pack `objects` into a new packfile + index and return their names.
+
+  `objects` use the same shape as `objects_from/2` (`%{sha, type, data}`);
+  `type` may be an atom or its string name. Every object is validated, the pack
+  is written to a temporary file, verified by reading it back, and only then
+  renamed into `objects/pack/`. Loose objects are left untouched — deletion is
+  the repacker's decision (Phase 7b).
+
+  Duplicate SHAs are dropped. Writing the same ordered set with the same
+  options is idempotent: content addressing gives the same pack name, and the
+  rename replaces identical bytes. Returns `{:error, :no_objects}` for an
+  empty list.
+  """
+  @spec pack_objects(t(), [object()], keyword()) ::
+          {:ok,
+           %{
+             name: String.t(),
+             objects: non_neg_integer(),
+             bytes: non_neg_integer(),
+             pack_path: Path.t(),
+             idx_path: Path.t()
+           }}
+          | {:error, term()}
+  def pack_objects(repo, objects, opts \\ [])
+
+  def pack_objects(_repo, [], _opts), do: {:error, :no_objects}
+
+  def pack_objects(repo, objects, opts) when is_list(objects) do
+    with :ok <- validate_objects(objects),
+         {:ok, normalized} <- normalize_objects(objects) do
+      normalized = Enum.uniq_by(normalized, & &1.sha)
+
+      with {:ok, encoded} <- Pack.encode(normalized, opts) do
+        write_pack(repo, normalized, encoded)
+      end
+    end
+  end
+
+  def pack_objects(_repo, _objects, _opts), do: {:error, :invalid_objects}
+
+  defp write_pack(repo, objects, encoded) do
+    dir = Path.join([repo.home_dir, "objects", "pack"])
+    File.mkdir_p!(dir)
+
+    name = "pack-" <> Base.encode16(encoded.checksum, case: :lower)
+    pack_path = Path.join(dir, name <> ".pack")
+    idx_path = Path.join(dir, name <> ".idx")
+    idx_bin = Index.encode(encoded.entries, encoded.checksum)
+
+    # A `.tmp` suffix keeps an interrupted write invisible to the cache's
+    # `pack-*.idx` discovery; the pair is only renamed once verified.
+    tmp = "tmp-#{System.unique_integer([:positive])}-#{name}"
+    tmp_pack = Path.join(dir, tmp <> ".pack.tmp")
+    tmp_idx = Path.join(dir, tmp <> ".idx.tmp")
+
+    try do
+      write_synced!(tmp_pack, encoded.pack)
+      write_synced!(tmp_idx, idx_bin)
+
+      with {:ok, index} <- Index.decode(idx_bin),
+           :ok <- verify_pack_checksum(tmp_pack, encoded.checksum),
+           :ok <- verify_pack(tmp_pack, index.offsets, objects),
+           :ok <- rename_pack(tmp_pack, pack_path, tmp_idx, idx_path) do
+        Cache.invalidate(repo.home_dir)
+
+        {:ok,
+         %{
+           name: name,
+           objects: length(objects),
+           bytes: byte_size(encoded.pack),
+           pack_path: pack_path,
+           idx_path: idx_path
+         }}
+      end
+    rescue
+      error -> {:error, {:pack_write_failed, error}}
+    after
+      File.rm(tmp_pack)
+      File.rm(tmp_idx)
+    end
+  end
+
+  defp write_synced!(path, data) do
+    {:ok, io} = File.open(path, [:write, :binary])
+
+    try do
+      :ok = IO.binwrite(io, data)
+      :ok = :file.sync(io)
+    after
+      File.close(io)
+    end
+  end
+
+  defp rename_pack(tmp_pack, pack_path, tmp_idx, idx_path) do
+    # Pack first: readers discover packs through the idx, so an idx without its
+    # pack can never be observed.
+    with :ok <- File.rename(tmp_pack, pack_path),
+         :ok <- File.rename(tmp_idx, idx_path) do
+      :ok
+    end
+  end
+
+  defp verify_pack_checksum(path, expected) do
+    with {:ok, %File.Stat{size: size}} when size >= 20 <- File.stat(path),
+         {:ok, trailer} <- read_tail(path, size),
+         true <- trailer == expected,
+         {:ok, digest} <- sha1_file(path, size - 20) do
+      if digest == trailer, do: :ok, else: {:error, :pack_checksum_mismatch}
+    else
+      false -> {:error, :pack_checksum_mismatch}
+      {:ok, _other} -> {:error, :truncated_pack}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp read_tail(path, size) do
+    case :file.open(path, [:read, :binary, :raw]) do
+      {:ok, io} ->
+        result = :file.pread(io, size - 20, 20)
+        :file.close(io)
+
+        case result do
+          {:ok, trailer} when byte_size(trailer) == 20 -> {:ok, trailer}
+          _ -> {:error, :truncated_pack}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp sha1_file(path, length) do
+    case File.open(path, [:read, :binary, :raw]) do
+      {:ok, io} ->
+        result = hash_stream(io, length, :crypto.hash_init(:sha))
+        File.close(io)
+        result
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp hash_stream(_io, 0, context), do: {:ok, :crypto.hash_final(context)}
+
+  defp hash_stream(io, remaining, context) do
+    take = min(remaining, 1_048_576)
+
+    case :file.read(io, take) do
+      {:ok, data} when byte_size(data) == take ->
+        hash_stream(io, remaining - take, :crypto.hash_update(context, data))
+
+      _ ->
+        {:error, :truncated_pack}
+    end
+  end
+
+  defp verify_pack(tmp_pack, offsets, objects) do
+    {:ok, %File.Stat{size: size}} = File.stat(tmp_pack)
+    ends = Pack.entry_ends(offsets, size)
+
+    Enum.reduce_while(objects, :ok, fn %{sha: sha, type: type, data: data}, :ok ->
+      case Pack.read_object(tmp_pack, offsets, sha, ends: ends) do
+        {:ok, {^type, ^data}} ->
+          {:cont, :ok}
+
+        {:ok, _other} ->
+          {:halt, {:error, {:pack_verification_failed, sha}}}
+
+        {:error, reason} ->
+          {:halt, {:error, {:pack_verification_failed, sha, reason}}}
+      end
+    end)
+  end
+
+  defp normalize_objects(objects) do
+    objects
+    |> Enum.reduce_while({:ok, []}, fn %{type: type} = object, {:ok, acc} ->
+      case normalize_type(type) do
+        {:ok, normalized} -> {:cont, {:ok, [%{object | type: normalized} | acc]}}
+        :error -> {:halt, {:error, {:invalid_type, type}}}
+      end
+    end)
+    |> case do
+      {:ok, objects} -> {:ok, Enum.reverse(objects)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp loose_in_dir(objects_dir, dir) do
+    dir_path = Path.join(objects_dir, dir)
+
+    case File.ls(dir_path) do
+      {:ok, files} ->
+        files
+        |> Enum.filter(&Regex.match?(~r/^[0-9a-f]{38}$/, &1))
+        |> Enum.flat_map(fn file ->
+          path = Path.join(dir_path, file)
+
+          case File.stat(path) do
+            {:ok, %File.Stat{size: size}} -> [%{sha: dir <> file, size: size, path: path}]
+            {:error, _reason} -> []
+          end
+        end)
+
+      {:error, _reason} ->
+        []
+    end
+  end
+
+  defp valid_sha?(sha), do: is_binary(sha) and Regex.match?(~r/^[0-9a-f]{40}$/, sha)
+
+  defp loose_object?(repo, sha) do
     <<dir::binary-size(2)>> <> rest = sha
     File.exists?(Path.join([repo.home_dir, "objects", dir, rest]))
   end
 
-  def has_object?(_repo, _sha), do: false
+  defp packed_object?(repo, sha) do
+    packed_in?(packs(repo), sha) or packed_in?(Cache.reload(repo.home_dir), sha)
+  end
+
+  defp packed_in?(packs, sha), do: Enum.any?(packs, &Map.has_key?(&1.offsets, sha))
 
   @doc """
   Materialize the tree referenced by `sha` into `dest` (created if needed).
@@ -826,7 +1134,22 @@ defmodule Cadence.Shared.GitStore do
     sha
   end
 
-  defp read_object(repo, <<dir::binary-size(2)>> <> rest) do
+  # Loose first (the write path and the common read path), then packs. A
+  # malformed or absent loose file falls through so a packed copy can answer.
+  # The hex guard also keeps a non-SHA input from probing paths outside
+  # `objects/` (`".." <> 37 chars` passes a byte-size check alone).
+  defp read_object(repo, sha) when is_binary(sha) and byte_size(sha) == 40 do
+    if valid_sha?(sha) do
+      case read_loose_object(repo, sha) do
+        nil -> read_packed_object(repo, sha)
+        object -> object
+      end
+    end
+  end
+
+  defp read_object(_repo, _sha), do: nil
+
+  defp read_loose_object(repo, <<dir::binary-size(2)>> <> rest) do
     path = Path.join([repo.home_dir, "objects", dir, rest])
 
     case File.read(path) do
@@ -836,6 +1159,37 @@ defmodule Cadence.Shared.GitStore do
       {:error, _reason} ->
         nil
     end
+  end
+
+  defp read_loose_object(_repo, _sha), do: nil
+
+  defp read_packed_object(repo, sha) when is_binary(sha) and byte_size(sha) == 40 do
+    case find_packed(packs(repo), sha) do
+      nil ->
+        # A manual repack or another server node may have written a pack since
+        # this VM cached the store. Reload once before declaring a miss.
+        find_packed(Cache.reload(repo.home_dir), sha)
+
+      object ->
+        object
+    end
+  end
+
+  defp read_packed_object(_repo, _sha), do: nil
+
+  defp find_packed(packs, sha) do
+    Enum.find_value(packs, fn pack ->
+      case Map.fetch(pack.offsets, sha) do
+        {:ok, _offset} ->
+          case Pack.read_object(pack.pack_path, pack.offsets, sha, ends: pack.ends) do
+            {:ok, {type, data}} -> {type, data}
+            {:error, _reason} -> nil
+          end
+
+        :error ->
+          nil
+      end
+    end)
   end
 
   defp decode_object_file(compressed) do

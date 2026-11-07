@@ -1,12 +1,12 @@
 # Cadence — Progress
 
 ## Current Phase
-**Phase 6 — Docker actions is complete.** 6a (manifest foundation), 6b
-(runner), and 6c (web run experience) are shipped: members see a snapshot's
-actions, owners/trusted run one, status updates live, captured output is
-escaped, and artifacts download through the recorded allowlist. Next is
-**Phase 7 (storage engineering)**; the optional Phase 5 P5 smoke and the
-union/UI live checks remain carry-over.
+**Phase 7 — storage engineering is in progress.** 7a (shared pack layer) is
+complete: Git pack v2/idx v2 write+read with ofs/ref deltas, transparent
+loose-first `GitStore` reads, verified atomic `pack_objects/3`, and a shared
+index cache. Next is **7b (server repacker)**; 7c (sync existence handshake)
+follows, with the optional Phase 5 P5 smoke and the union/UI live checks as
+carry-over.
 
 ## Done (summary)
 
@@ -440,6 +440,24 @@ union/UI live checks remain carry-over.
   stricter; new pushes may open incidents for previously missed content, and
   over-cap parents now fail approval instead of silently passing truncated.
   Lesson: `.claude/solutions/data-integrity/walk-blobs-truncation-20261106.md`.
+- **Phase 7a (shared pack layer)** — `GitStore.Pack` writes and reads Git pack
+  v2 + idx v2 (SHA-1, zlib, ofs/ref deltas, 64-bit offsets, both checksums),
+  `GitStore.Pack.Delta` (bounded block-matcher build + bounded apply), and
+  `GitStore.Pack.Index`. `GitStore` reads loose-first then packs;
+  `has_object?/2` consults indexes; `pack_objects/3` validates/dedupes, writes
+  `.tmp` files, fsyncs, verifies every object by reading through the pack, then
+  renames; `read_raw/2` and `present_shas/2` prepare 7b/7c. `GitStore.Cache`
+  (with `Cadence.Shared.Application`) caches offsets and precomputed entry ends,
+  invalidates explicitly, reloads once on a packed read miss, and validates each
+  pack trailer against its index. Pack reads cap declared sizes and stream
+  inflate; delta chains are capped; non-hex SHAs never probe paths. 54 new
+  shared tests; 994 total (306 shared + 188 daemon + 500 server). Two review
+  cycles: O(N²) entry ends, missing fsync, unbounded cache, temp-idx discovery,
+  missing caps/hex guard/bulk+raw APIs, duplicate SHAs; then out-of-process
+  cache misses, inflate drain, and directory-fsync durability (deferred loose
+  deletion recorded for 7b). Spec §11/§13/§16, `docs/phase-7-prep.md`, and
+  `docs/README.md` updated. Lesson:
+  `.claude/solutions/data-integrity/pack-v2-byte-format-20261107.md`.
 - **4e gate:** 640 tests green (161 shared + 125 daemon + 354 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
@@ -453,11 +471,17 @@ union/UI live checks remain carry-over.
 
 ## Next
 
-**Immediate step:** start **Phase 7 (storage engineering)** (spec §13, §15):
-write the phase brief for server-side lossless repacking (loose objects →
-packfiles with delta compression, read transparently through `GitStore`,
-non-destructive) and for the sync existence handshake. Confirm the pack/repack
-trigger decision (§16, "Storage repack trigger") before implementation.
+**Immediate step:** start **Phase 7b (server repacker)** (spec §13, §16;
+`docs/phase-7-prep.md` §7b). Implement `Cadence.Server.Storage`/`Repacker`: one
+run per project (advisory lock), threshold after a successful push (1,000 loose
+objects or 64 MiB) plus a 6 h backstop and `mix cadence.repack`. The writing run
+must **not** delete loose copies; a later sweep re-verifies the pack (present,
+trailer, every covered SHA readable) and only then unlinks them. Use
+`GitStore.loose_objects/1`, `read_raw/2`, and `pack_objects/3`; subtract SHAs
+already present in pack indexes. Config: `CAD_REPACK_ENABLED`,
+`CAD_REPACK_MIN_OBJECTS`, `CAD_REPACK_MIN_BYTES`, `CAD_REPACK_INTERVAL_MS`,
+`CAD_REPACK_MAX_PACK_BYTES` (§12.6). Tests use temp stores and cover threshold,
+crash leaves, deferred deletion, and idempotency.
 
 **Integration contract (6c, for anything that touches runs):**
 `Actions.Runs.prepare/4` returns `{:ok, %ActionRun{}}` or
@@ -498,20 +522,32 @@ Carry-over (small, not blocking Phase 7):
    the first 100 artifacts (no paging); no per-project run concurrency cap; no
    artifact/image retention; action log streaming remains post-exit.
 
-**Spin-up:** `@phx-full` (or `@phx-plan` → `@phx-work`) at Phase 7; no new
-dependency is expected for repacking (existing `GitStore` + `libgraph`), but the
-spec §11 table must be updated if a pack library is proposed.
+**Spin-up:** `@phx-full` (or `@phx-plan` → `@phx-work`) at Phase 7b. No new
+dependency is expected; the pack layer is hand-written and the spec §11 table
+already records it.
 
 ## Blocked
 
-- (none). Phase 6 is complete and all review findings are fixed and verified.
-  Open deltas (artifact/image retention, run-history paging, per-project run
-  concurrency, the `/out` quota prerequisite, the Engine API floor,
-  `Project.docker_image` having no writer, userns) are recorded below and in
-  spec §16; none block Phase 7.
+- (none). Phase 7a is complete and both review cycles' findings are fixed and
+  verified. Open deltas (artifact/image retention, run-history paging,
+  per-project run concurrency, the `/out` quota prerequisite, the Engine API
+  floor, `Project.docker_image` having no writer, userns) are recorded below
+  and in spec §16; none block 7b.
 
 ## Spec Deltas / Open Items
 
+- **Pack layer 7a notes (2026-11-07)** — pack entry ends come from the idx
+  offsets (the compressed slice ends at the next offset/trailer), not from
+  zlib: `safeInflate/2` can return `:finished` on a partial stream. The cache
+  is explicit-invalidation plus reload-on-read-miss; an out-of-process writer
+  (manual repack in another VM, another node) cannot clear this VM's ETS table,
+  so reads reload once on a packed miss. The 7c handshake tolerates a stale
+  "absent" answer (the daemon resends; a server 422 triggers one full resend).
+  OTP cannot fsync a directory, so 7b deletes loose copies only in a later
+  verified sweep; the writing run never deletes. Pack reads cap declared sizes
+  at 512 MiB and stream inflate; delta chains cap at 50; duplicate SHAs are
+  dropped/rejected; `has_object?` rejects non-hex 40-byte input. See spec
+  §13/§16 and `.claude/solutions/data-integrity/pack-v2-byte-format-20261107.md`.
 - **`walk_blobs/3` truncation fix changes scan outcomes (2026-11-06)** — the
   shared walk previously dropped every sibling after a directory; it now scans
   the full tree. Consequences: a snapshot can newly quarantine (correct), new
@@ -1232,3 +1268,21 @@ Lesson:
 docs commit. Server tests need Postgres on `localhost:55432` (container
 `cadence-test-pg`). Next: Phase 7 (storage engineering) planning; carry-overs
 are listed in **Next**.
+
+2026-11-07 — **Phase 7a (shared pack layer)** shipped from
+`.claude/plans/phase-7a-packs/plan.md` (`@phx-full`). `GitStore.Pack`,
+`Pack.Index`, `Pack.Delta`, and `GitStore.Cache` add real Git pack v2 / idx v2
+write+read; `GitStore` reads loose-first then packs and exposes
+`pack_objects/3`, `packs/1`, `loose_objects/1`, `invalidate_cache/1`,
+`read_raw/2`, and `present_shas/2`. `Cadence.Shared.Application` owns the cache
+process. Two read-only review cycles fixed O(N²) entry-end lookups (precomputed
+`entry_ends`), missing fsyncs (files synced before rename, `.tmp` names),
+unbounded cache (dropped CRCs, 1,024-store bound, reload-on-miss), unbounded
+inflate (chunked caps), duplicate SHAs, hex path probing, and missing bulk/raw
+APIs; deferred loose deletion and directory-fsync limits are recorded for 7b.
+Spec §11/§13/§16, `docs/phase-7-prep.md`, and `docs/README.md` updated.
+Verification: `mix format --check-formatted`, dev + `MIX_ENV=prod mix compile
+--warnings-as-errors`, 994 tests green (306 shared + 188 daemon + 500 server;
++54 shared). Lesson:
+`.claude/solutions/data-integrity/pack-v2-byte-format-20261107.md`. Next: 7b
+(server repacker).

@@ -1374,7 +1374,7 @@ inserts); the daemon can mark only that node failed and retry the rest.
 |---|---|
 | Daemon & server language | Elixir (OTP) |
 | Web framework | Phoenix + LiveView |
-| Git object store | `Cadence.Shared.GitStore` (native; implements Git's public object format) |
+| Git object store | `Cadence.Shared.GitStore` (native; loose objects plus Git pack v2/idx v2 with ofs/ref deltas — no pack library, §13 Phase 7) |
 | File watching | `file_system` |
 | LLM client | `axiom_ai` (DeepSeek via OpenAI-compatible base URL) |
 | Markdown rendering | `MDEx` |
@@ -1910,11 +1910,20 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   resolution (members-only; the flag is reserved) (§7.2, §8.2, §8.3, §16).
 
 **Phase 7 — Storage engineering (week 18+)**
-- Server-side lossless repack: pack loose objects into packfiles with delta
-  compression (background job; read transparently through `GitStore`).
-  Non-destructive — history is never pruned (§15).
-- Sync object negotiation: existence handshake so clients don't re-push objects
-  the server already holds.
+- 7a — shared pack layer (shipped): `GitStore.Pack` writes and reads Git pack
+  v2 plus idx v2 (SHA-1, zlib, ofs/ref deltas, 64-bit offsets, both checksums);
+  `GitStore` reads loose-first then packs, `has_object?/2` consults indexes,
+  `pack_objects/3` verifies every object and renames atomically, and a shared
+  ETS cache avoids re-parsing an index per object. 7a never repacks
+  automatically and never deletes loose objects (§15).
+- 7b — server repacker: threshold after a successful push (default 1,000 loose
+  objects or 64 MiB per project), a 6 h backstop sweep, a manual
+  `mix cadence.repack`, one run per project, and deferred loose deletion — a
+  later sweep re-verifies the pack before unlinking (OTP cannot fsync a
+  directory, so the run that writes the pack never deletes).
+- 7c — sync object negotiation: `POST /sync/objects/exists` answers which SHAs
+  the server holds; the daemon omits them from `git_objects` and falls back to
+  a full push on any handshake failure (§10.2, §10.6).
 
 ---
 
@@ -2100,8 +2109,17 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - [ ] **Incident planning integrations:** Phase 4 ships alerts with
       `open | resolved` only. Assignee, comments/threads, and external issue
       tracker integrations are deferred (§6.7).
-- [ ] **Storage repack trigger:** when to run the Phase 7 lossless repack (size
-      threshold vs. scheduled job), and the array→edges migration threshold.
+- [x] **Storage repack trigger:** resolved 2026-11-07 (before 7b) — a
+      best-effort async check after a successful push, plus a periodic backstop
+      (6 h) and a manual `mix cadence.repack`. Defaults: 1,000 loose objects or
+      64 MiB per project, one repack per project at a time. A loose copy is
+      deleted only in a later sweep, after the pack containing it is verified
+      present and readable (the writing run never deletes, because OTP cannot
+      fsync a directory); unreachable objects and history are never pruned
+      (§15).
+- [ ] **Parents `uuid[]` → edges migration threshold:** when the materialized
+      parent array should become a separate edge table. Independent of the
+      storage repack trigger above.
 - [x] **Daemon token issuance (Phase 2b):** resolved in 2b-1 — an
       OAuth-session-guarded `POST /auth/tokens` endpoint mints an
       `AshAuthentication` API key. No `mix` task or seeded token.
