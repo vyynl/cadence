@@ -1,11 +1,12 @@
 # Cadence — Progress
 
 ## Current Phase
-**Phase 6 — Docker actions** is in progress. **6a (manifest foundation)** and
-**6b (runner)** are complete: strict manifest parsing, a members-only read-only
-panel, and a durable Docker action runner (staging, image reuse/build,
-isolation limits, log/artifact capture, recovery). Next: **6c (web run
-experience)**. The Phase 5 P5 smoke gate remains optional.
+**Phase 6 — Docker actions is complete.** 6a (manifest foundation), 6b
+(runner), and 6c (web run experience) are shipped: members see a snapshot's
+actions, owners/trusted run one, status updates live, captured output is
+escaped, and artifacts download through the recorded allowlist. Next is
+**Phase 7 (storage engineering)**; the optional Phase 5 P5 smoke and the
+union/UI live checks remain carry-over.
 
 ## Done (summary)
 
@@ -401,6 +402,33 @@ experience)**. The Phase 5 P5 smoke gate remains optional.
   REQUIRES CHANGES (2 blockers: `start` mapped `%ErrorResponse{}` to `:ok`, and
   the image `ENTRYPOINT` was not overridden) → PASS. Lesson:
   `.claude/solutions/docker/ex_docker_api-false-success-20261106.md`.
+- **Phase 6c (web run experience)** — manager-only Run controls on the node
+  action panel, member-only `RunLive.Index` (`/p/:slug/runs`) and `RunLive.Show`
+  (`/p/:slug/runs/:run_id`), and allowlisted artifact downloads
+  (`RunArtifactController`). `handle_event("run_action")` re-reads the
+  membership, reuses the rendered quarantine answer in normal view and
+  re-derives it in raw view, checks `CAD_ACTIONS_ENABLED`, then calls
+  `Runs.start/4` and navigates; stale recovery moved **inside** the spawned task
+  so a click never blocks on the Docker proxy. Both LiveViews authorize in
+  `handle_params`, load with `assign_async`, subscribe only after
+  `connected?/1`, and refresh on `{:action_run_updated, …}` (the detail page
+  only for its own run) with catch-all handlers. `Runs.list/get` are gated by
+  the enabled flag; disabled deployments hide the nav link and redirect run
+  pages. Output is rendered in an escaped `<pre>` after
+  `Presentation.terminal_text/1` strips ANSI/OSC, C0/C1 controls, and bidi
+  overrides and replaces invalid UTF-8 (never `raw/1`); logs are post-exit, so
+  the page follows status live and output at the end. `Runs.read_artifact/2`
+  accepts only an exact recorded path on a regular file; downloads are
+  `application/octet-stream`, `attachment`, `private, no-store`, and every
+  refusal is 404. New Presentation helpers (run status/error/duration);
+  `.run-*`/artifact CSS over existing tokens. `expose` resolved as
+  parsed-but-unhonored (members-only). Spec §7.2/§8.2/§8.3/§8.4/§13/§16,
+  `docs/phase-6-prep.md`, `docs/README.md`, `docs/ui-notes.md` updated. 32 new
+  tests; 940 total (252 shared + 188 daemon + 500 server). Independent review
+  PASS WITH WARNINGS; the one Medium regression (a second snapshot scan on
+  every Run click) was fixed by reusing the rendered answer outside raw view,
+  plus the Lows. Lesson:
+  `.claude/solutions/phoenix-issues/assign-async-key-and-controller-wildcard-list-20261107.md`.
 - **High-severity `GitStore.walk_blobs/3` truncation fix** — `walk_tree_blobs/8`
   returned a 2-tuple from recursive subtree calls while the parent reduce
   expected `{:ok, acc, count, bytes}`; the catch-all halted the walk, so every
@@ -425,22 +453,14 @@ experience)**. The Phase 5 P5 smoke gate remains optional.
 
 ## Next
 
-**Immediate step:** **6c (web run experience)** from `docs/phase-6-prep.md`:
+**Immediate step:** start **Phase 7 (storage engineering)** (spec §13, §15):
+write the phase brief for server-side lossless repacking (loose objects →
+packfiles with delta compression, read transparently through `GitStore`,
+non-destructive) and for the sync existence handshake. Confirm the pack/repack
+trigger decision (§16, "Storage repack trigger") before implementation.
 
-- add Run controls to the member Actions panel, shown only for
-  `Authorization.can_manage?/1`; re-read the membership in `handle_event` and
-  call `Actions.Runs.start/4` (it re-authorizes and re-checks quarantine).
-- subscribe after `connected?/1` to `project:<id>` and handle
-  `{:action_run_updated, project_id, run_id, status}`; render the run list with
-  `Runs.list/3` and a detail page with `Runs.get/3`, `Runs.log/1`, and
-  `Runs.artifacts/1` (the last two must only receive a run from `get/3`).
-- escape ANSI/terminal output in a `<pre>` (never `raw/1`); link artifacts from
-  the node that triggered the run.
-- decide `expose` semantics (§16) and close out §13/docs.
-- tests use the fake Docker client; no real daemon.
-
-**Integration contract (6b):** `Actions.Runs.prepare/4` returns
-`{:ok, %ActionRun{}}` or
+**Integration contract (6c, for anything that touches runs):**
+`Actions.Runs.prepare/4` returns `{:ok, %ActionRun{}}` or
 `{:error, :disabled | :forbidden | :not_found | :quarantined | :unknown_action |
 Ecto.Changeset.t()}`; `start/4` adds the async task and returns the queued row;
 `execute/1` is the synchronous body tests use. Statuses are
@@ -451,10 +471,12 @@ failures carry a closed `error_reason` (`quarantined`, `staging_failed`,
 `artifact_path` is `"<run_id>/artifacts"` only when files were collected. A
 collection skip is `artifact_error: "collect_skipped"`, not a status change. The
 Docker client is injected via `:actions_docker` (`FakeDocker` in tests).
+`Runs.list/get` now return `:disabled` when `CAD_ACTIONS_ENABLED=false`; run
+pages redirect, the nav link hides, and artifact downloads 404.
 
-Carry-over (small, not blocking Phase 6):
+Carry-over (small, not blocking Phase 7):
 
-1. **P5 docs live smoke** — optional, with a real `CAD_LLM_API_KEY`.
+1. **Phase 5 P5 docs live smoke** — optional, with a real `CAD_LLM_API_KEY`.
 2. **Union live smoke** — drive `:CadUnion` against the demo stack once
    (`docker compose up`, `docs/demo.md`) and record the result; the Neovim
    submit is the one 4d-3 surface without a live run.
@@ -468,20 +490,25 @@ Carry-over (small, not blocking Phase 6):
      failure-derived answer.
 4. **Optional `:CadProposals` surface** for the union token returned to Neovim.
 5. **Manual styling check** (optional): `docker compose up`, then `/`,
-   `/p/cadence-demo`, `/p/cadence-demo/reviews`, one pending proposal, and
-   `/proposals/<token>` at wide and narrow widths in light and dark. There are
-   no browser tests; 4e verified server-rendered markup and CSS only (the P4-T3
-   docs badge and 6a action panel are also only test-verified).
+   `/p/cadence-demo`, `/p/cadence-demo/reviews`, a run page, one pending
+   proposal, and `/proposals/<token>` at wide and narrow widths in light and
+   dark. There are no browser tests; 4e and 6c verified server-rendered markup
+   and CSS only.
+6. **6c residues** (spec §16): run history pages at 50 rows and the detail at
+   the first 100 artifacts (no paging); no per-project run concurrency cap; no
+   artifact/image retention; action log streaming remains post-exit.
 
-**Spin-up:** `@phx-full` (or `@phx-plan` → `@phx-work`) at 6c; the run UI is a
-LiveView + PubSub slice, so no new dependency gate is expected.
+**Spin-up:** `@phx-full` (or `@phx-plan` → `@phx-work`) at Phase 7; no new
+dependency is expected for repacking (existing `GitStore` + `libgraph`), but the
+spec §11 table must be updated if a pack library is proposed.
 
 ## Blocked
 
-- (none). 6a/6b review findings are fixed and verified (6b closed at PASS).
-  Open deltas (artifact/image retention, the `/out` quota prerequisite, the
-  Engine API floor, `Project.docker_image` having no writer, userns) are
-  recorded below and in spec §16; none block 6c.
+- (none). Phase 6 is complete and all review findings are fixed and verified.
+  Open deltas (artifact/image retention, run-history paging, per-project run
+  concurrency, the `/out` quota prerequisite, the Engine API floor,
+  `Project.docker_image` having no writer, userns) are recorded below and in
+  spec §16; none block Phase 7.
 
 ## Spec Deltas / Open Items
 
@@ -498,9 +525,10 @@ LiveView + PubSub slice, so no new dependency gate is expected.
   tree on every navigation (one bounded blob read; no extra query); callers own
   quarantine (the LiveView hides the panel, 6b must re-check at the run
   boundary); the manifest file itself remains publicly browsable repository
-  content; `Project.actions_manifest` is still unused; `expose` is parsed but
-  not honored (§16). 6b resolved run durability with a durable row; artifact
-  and image retention remain open (§16).
+  content; `Project.actions_manifest` is still unused; `expose` is parsed and
+  reserved — 6c resolved it as unhonored while the panel stays members-only
+  (§16). 6b resolved run durability with a durable row; artifact and image
+  retention remain open (§16).
 - **Actions 6b notes (2026-11-06)** — `execute/1` is synchronous and `start/4`
   wraps it in `Actions.TaskSupervisor`; `recover_stale/2` CASes per row, and
   `list/get` call it with `remove_containers: false` so reads never touch
@@ -517,6 +545,23 @@ LiveView + PubSub slice, so no new dependency gate is expected.
   network), and awareness that `Dockerfile` `FROM` pulls are daemon-side. Still
   open: artifact/image retention, per-project run concurrency,
   `Project.docker_image` has no writer, userns (§16).
+- **Actions 6c notes (2026-11-07)** — run pages authorize in `handle_params/3`
+  (the same accepted exception as `ReviewLive`: the static render performs two
+  indexed lookups, while expensive run/log/artifact data stays in
+  `assign_async`). A Run click re-reads membership, reuses the rendered
+  quarantine answer in normal view, and re-derives it only in raw view (where
+  the answer was forced to `:ok`), so the normal path keeps the single staging
+  scan; staging remains the authority. `Runs.start/4` moved `recover_stale/1`
+  (and orphan container removal) inside the spawned task, so the click never
+  blocks on the Docker proxy. `Runs.list/get` require `CAD_ACTIONS_ENABLED`
+  (`:disabled`); the pages redirect, the nav link hides, and downloads 404.
+  Logs are post-exit; the page follows `{:action_run_updated, …}` and renders
+  `Presentation.terminal_text/1` output (ANSI/OSC, C0/C1, bidi stripped; invalid
+  UTF-8 replaced) in an escaped `<pre>`. Artifact downloads accept only an exact
+  path from `Artifacts.list/1` (controller wildcard params arrive as a list and
+  are joined first), serve `application/octet-stream` + `attachment` +
+  `private, no-store`, and map a vanished file to 404. The run list shows 50
+  rows and the detail renders the first 100 artifacts (no paging yet, §16).
 - **Phase 5b implementation notes (2026-11-06)** — every commit gets a
   `SyncPending` row written in the same transaction as the node (and spawn);
   `pushable/3` keeps a doc-held parent in the parent set and gates only
@@ -1156,3 +1201,35 @@ version, and recovery findings), then PASS. Verification: `mix format
 --check-formatted`, dev + `MIX_ENV=prod mix compile --warnings-as-errors`, 898
 tests green (252 shared + 188 daemon + 458 server; +54). Next: 6c (web run
 experience).
+
+2026-11-07 — **Phase 6c (web run experience)** shipped from
+`.claude/plans/phase-6c-runs/plan.md` (`@phx-full`). 6b was committed first as
+`962d308` after a clean gate. 6c adds manager-only Run controls on the node
+action panel (membership re-read per event, rendered-quarantine reuse except in
+raw view, enabled flag checked), member-only `RunLive.Index`
+(`/p/:slug/runs`) and `RunLive.Show` (`/p/:slug/runs/:run_id`) with
+`assign_async` loading, subscribe-after-connect, and live refresh from
+`{:action_run_updated, …}`, plus `RunArtifactController` for allowlisted
+downloads. `Runs.start/4` recovery moved into the task; `Runs.list/get` are
+gated by `CAD_ACTIONS_ENABLED`; `Runs.read_artifact/2` accepts only an exact
+recorded path on a regular file. Output renders through
+`Presentation.terminal_text/1` in an escaped `<pre>` (ANSI/OSC, C0/C1, bidi
+stripped; invalid UTF-8 replaced). New Presentation helpers and run/artifact
+CSS; `expose` resolved as parsed-but-unhonored (members-only). Spec
+§7.2/§8.2/§8.3/§8.4/§13/§16, `phase-6-prep.md`, `docs/README.md`, and
+`docs/ui-notes.md` updated. Verification: `mix format --check-formatted`, dev +
+`MIX_ENV=prod mix compile --warnings-as-errors`, 940 tests green (252 shared +
+188 daemon + 500 server; +42 net). Independent review PASS WITH WARNINGS; the
+one Medium regression (a second snapshot scan on every Run click) was fixed by
+reusing the rendered answer outside raw view, and the Lows were addressed
+(disabled-deployment gating, artifact render cap, download headers/404 rescue,
+raw-view quarantine re-check, catch-all handlers, docs, test determinism).
+Lesson:
+`.claude/solutions/phoenix-issues/assign-async-key-and-controller-wildcard-list-20261107.md`.
+
+**Handoff note:** 6c is implemented, reviewed, and verified but **not
+committed** — the working tree holds the 6c slice. Suggested before the next
+session: `git add -A && git commit -m "feat: Phase 6c — web run experience"`.
+Server tests need Postgres on `localhost:55432` (container `cadence-test-pg`).
+Next: Phase 7 (storage engineering) planning; carry-overs are listed in
+**Next**.

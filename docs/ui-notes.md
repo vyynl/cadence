@@ -13,9 +13,10 @@ styling pass is planned after 4c-3 (incident panel) unless a demo is imminent.
 
 ## Open
 
-- **6c action logs:** captured logs are TTY output and may contain ANSI/terminal
-  escape sequences. Render them escaped in a `<pre>` (never `raw/1`) and add a
-  "download" or "copy" affordance only after the escape handling is in place.
+- **6c action logs:** the run page renders captured logs as escaped text in a
+  `<pre>` (ANSI/control sequences stripped). A "download raw log" or "copy"
+  affordance is still missing; add it only if needed, keeping the same escaping
+  rules for any inline render.
 
 ## Done
 

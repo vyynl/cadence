@@ -124,4 +124,112 @@ defmodule Cadence.ServerWeb.PresentationTest do
       assert Presentation.docs_badge_class(nil) == "badge docs-badge"
     end
   end
+
+  describe "run_status_label/1" do
+    test "labels every run status" do
+      assert Presentation.run_status_label(:queued) == "queued"
+      assert Presentation.run_status_label(:running) == "running"
+      assert Presentation.run_status_label(:succeeded) == "succeeded"
+      assert Presentation.run_status_label(:failed) == "failed"
+      assert Presentation.run_status_label(:timed_out) == "timed out"
+      assert Presentation.run_status_label(:interrupted) == "interrupted"
+    end
+
+    test "falls back for an unknown or nil status" do
+      assert Presentation.run_status_label(:other) == "unknown"
+      assert Presentation.run_status_label(nil) == "unknown"
+    end
+  end
+
+  describe "run_status_class/1" do
+    test "maps statuses onto the semantic badge variants" do
+      assert Presentation.run_status_class(:queued) == "badge status-badge status-pending"
+      assert Presentation.run_status_class(:running) == "badge status-badge status-pending"
+      assert Presentation.run_status_class(:succeeded) == "badge status-badge status-approved"
+      assert Presentation.run_status_class(:failed) == "badge status-badge status-rejected"
+      assert Presentation.run_status_class(:timed_out) == "badge status-badge status-rejected"
+      assert Presentation.run_status_class(:interrupted) == "badge status-badge status-rejected"
+    end
+
+    test "falls back to the neutral badge" do
+      assert Presentation.run_status_class(:other) == "badge status-badge"
+      assert Presentation.run_status_class(nil) == "badge status-badge"
+    end
+  end
+
+  describe "run_error_label/1" do
+    test "explains each closed run error reason" do
+      assert Presentation.run_error_label("quarantined") =~ "quarantined"
+      assert Presentation.run_error_label("no_image") =~ "No image"
+      assert Presentation.run_error_label("build_failed") =~ "build"
+      assert Presentation.run_error_label("timeout") =~ "timed out"
+    end
+
+    test "keeps nil nil and collapses unknown reasons" do
+      assert Presentation.run_error_label(nil) == nil
+      assert Presentation.run_error_label("something_new") == "The action failed to run."
+    end
+  end
+
+  describe "run_duration/2" do
+    test "formats sub-minute, minute, and hour durations" do
+      started = ~U[2026-11-06 09:00:00.000Z]
+
+      assert Presentation.run_duration(started, DateTime.add(started, 500, :millisecond)) ==
+               "0.5s"
+
+      assert Presentation.run_duration(started, DateTime.add(started, 65, :second)) == "1m 5s"
+      assert Presentation.run_duration(started, DateTime.add(started, 3_720, :second)) == "1h 2m"
+    end
+
+    test "returns nil until the run has started and finished" do
+      started = ~U[2026-11-06 09:00:00.000Z]
+      assert Presentation.run_duration(nil, started) == nil
+      assert Presentation.run_duration(started, nil) == nil
+    end
+
+    test "truncates instead of rounding across the minute boundary" do
+      started = ~U[2026-11-06 09:00:00.000Z]
+      finished = DateTime.add(started, 59_990, :millisecond)
+      assert Presentation.run_duration(started, finished) == "59.9s"
+    end
+  end
+
+  describe "terminal_text/1" do
+    test "strips ANSI CSI and OSC sequences" do
+      assert Presentation.terminal_text("\e[31mred\e[0m\n") == "red\n"
+      assert Presentation.terminal_text("\e]0;title\ahello") == "hello"
+      assert Presentation.terminal_text("\e[2K\e[1;1Hprogress") == "progress"
+    end
+
+    test "normalizes CRLF and lone carriage returns" do
+      assert Presentation.terminal_text("a\r\nb\rc") == "a\nb\nc"
+    end
+
+    test "removes NUL and remaining control bytes but keeps newlines and tabs" do
+      assert Presentation.terminal_text("a\x00b\x07c\td\ne") == "abc\td\ne"
+    end
+
+    test "removes C1 controls and bidi overrides" do
+      assert Presentation.terminal_text("a\u0085b\u202Ec\u2066d") == "abcd"
+    end
+
+    test "replaces invalid UTF-8 instead of raising" do
+      text = Presentation.terminal_text(<<0xFF, 0xFE, "ok">>)
+
+      assert String.valid?(text)
+      assert text =~ "ok"
+      assert text =~ "�"
+    end
+
+    test "leaves HTML for HEEx to escape" do
+      assert Presentation.terminal_text("<script>alert(1)</script>") ==
+               "<script>alert(1)</script>"
+    end
+
+    test "handles nil and non-binary input" do
+      assert Presentation.terminal_text(nil) == ""
+      assert Presentation.terminal_text(:not_a_log) == ""
+    end
+  end
 end

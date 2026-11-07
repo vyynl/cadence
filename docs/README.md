@@ -23,7 +23,7 @@ history, not current instructions.
 | Phase 4 — unions & review | Complete |
 | UI styling & freshness pass (4e) | Complete |
 | Phase 5 — doc automation | Code complete (5a shared primitives, 5b daemon worker, 5c daemon API + Neovim, P4 deferred/pushed docs + docs badge); P5 release verification pending |
-| Phase 6 — Docker actions | In progress (6a manifest foundation + 6b runner complete; 6c web run experience next) |
+| Phase 6 — Docker actions | Complete (6a manifest foundation, 6b runner, 6c web run experience); action log streaming and retention remain §16 deltas |
 
 ## Current docs
 

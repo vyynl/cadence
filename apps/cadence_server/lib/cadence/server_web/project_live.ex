@@ -17,11 +17,26 @@ defmodule Cadence.ServerWeb.ProjectLive do
   would replay the animation and disturb the selected pane. A push does re-read
   only the selected node's docs child (a follow-up node can appear while the
   code snapshot is open), which leaves `dag_layout` untouched.
+
+  Docker actions (spec §8): members see the snapshot's action list; a manager
+  gets a Run control that re-reads the membership and starts a run through
+  `Actions.Runs.start/4` before navigating to the run page. Run status events
+  are ignored here because the run page owns that subscription.
   """
 
   use Cadence.ServerWeb, :live_view
 
-  alias Cadence.Server.{Accounts, Actions, Incidents, Portfolio, ProjectAdmin, PublicContent}
+  alias Cadence.Server.{
+    Accounts,
+    Actions,
+    Authorization,
+    Incidents,
+    Portfolio,
+    ProjectAdmin,
+    PublicContent
+  }
+
+  alias Cadence.Server.Actions.Runs
   alias Cadence.ServerWeb.Components.{DAG, Repo}
   alias Cadence.ServerWeb.DAGLayout
   alias Cadence.ServerWeb.Metadata
@@ -178,6 +193,63 @@ defmodule Cadence.ServerWeb.ProjectLive do
   end
 
   @impl true
+  def handle_event("run_action", %{"action" => action_name}, socket) do
+    case {socket.assigns.project, socket.assigns.selected_node, socket.assigns[:current_user]} do
+      {%Project{} = project, %Node{} = node, %{id: user_id}} ->
+        # Mount/handle_params authorization is not enough: re-read the membership
+        # and refresh the control assign before any run row is written (Iron
+        # Law 10). Runs.start/4 re-checks as well.
+        membership = Portfolio.membership_for(user_id, project.id)
+        can_manage? = Authorization.can_manage?(membership)
+
+        socket = assign(socket, membership: membership, can_manage?: can_manage?)
+
+        if can_manage? do
+          # Raw view forces the rendered quarantine answer to :ok, so re-derive
+          # the real status before writing a run row. Normal view reuses the
+          # cached answer, keeping the store walk to staging (6b's single-scan
+          # rule); staging remains the authority either way.
+          quarantine =
+            if socket.assigns.raw_view? do
+              Portfolio.quarantine_status(project, node)
+            else
+              socket.assigns.quarantine
+            end
+
+          cond do
+            not Actions.enabled?() ->
+              {:noreply, put_flash(socket, :error, run_error(:disabled))}
+
+            quarantine == :quarantined ->
+              {:noreply,
+               put_flash(socket, :error, "This snapshot is quarantined and cannot run actions.")}
+
+            true ->
+              case Runs.start(%{id: user_id}, project.id, node.id, action_name) do
+                {:ok, run} ->
+                  {:noreply,
+                   socket
+                   |> put_flash(:info, "Action queued.")
+                   |> push_navigate(to: ~p"/p/#{project.slug}/runs/#{run.id}")}
+
+                {:error, reason} ->
+                  {:noreply, put_flash(socket, :error, run_error(reason))}
+              end
+          end
+        else
+          {:noreply, put_flash(socket, :error, run_forbidden_message())}
+        end
+
+      _other ->
+        {:noreply, put_flash(socket, :error, run_forbidden_message())}
+    end
+  end
+
+  def handle_event("run_action", _params, socket) do
+    {:noreply, put_flash(socket, :error, run_forbidden_message())}
+  end
+
+  @impl true
   def handle_info({:incidents_changed, project_id, _incident_id, _proposal_id, node_id}, socket) do
     project = socket.assigns.project
     selected = socket.assigns.selected_node
@@ -219,6 +291,15 @@ defmodule Cadence.ServerWeb.ProjectLive do
 
   def handle_info({:preferences_updated, _project_id, _user_id}, socket), do: {:noreply, socket}
 
+  # The project page does not render run state; a run started here navigates to
+  # the run page, which owns its own subscription. Ignoring the event keeps the
+  # pane from re-rendering on every status change.
+  def handle_info({:action_run_updated, _project_id, _run_id, _status}, socket),
+    do: {:noreply, socket}
+
+  # Future project-topic events must not crash the public page.
+  def handle_info(_message, socket), do: {:noreply, socket}
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -238,6 +319,7 @@ defmodule Cadence.ServerWeb.ProjectLive do
 
           <p :if={@membership} class="project-nav">
             <.link navigate={~p"/p/#{@project.slug}/reviews"}>Reviews</.link>
+            <.link :if={Actions.enabled?()} navigate={~p"/p/#{@project.slug}/runs"}>Runs</.link>
           </p>
 
           <details :if={@members} class="members-panel">
@@ -318,11 +400,26 @@ defmodule Cadence.ServerWeb.ProjectLive do
                         <p class="eyebrow">Actions</p>
                         <ul class="action-list">
                           <li :for={action <- actions}>
-                            <span class="action-name">{action.name}</span>
+                            <div class="action-heading">
+                              <span class="action-name">{action.name}</span>
+                              <button
+                                :if={@can_manage?}
+                                type="button"
+                                class="admin-button button-primary"
+                                phx-click="run_action"
+                                phx-value-action={action.name}
+                                phx-disable-with="Starting…"
+                              >
+                                Run
+                              </button>
+                            </div>
                             <p :if={action.description} class="note">{action.description}</p>
                             <code>{action.command}</code>
                           </li>
                         </ul>
+                        <p :if={@membership} class="action-history">
+                          <.link navigate={~p"/p/#{@project.slug}/runs"}>Run history</.link>
+                        </p>
                       </section>
                     <% :invalid -> %>
                       <section class="actions-panel" aria-label="Actions">
@@ -727,6 +824,19 @@ defmodule Cadence.ServerWeb.ProjectLive do
   defp actions_view({:ok, %{actions: actions}}), do: {:ok, actions}
   defp actions_view({:error, reason}) when reason in [:not_found, :disabled, :forbidden], do: nil
   defp actions_view({:error, _reason}), do: :invalid
+
+  defp run_forbidden_message do
+    "Only the project owner or a trusted member can run actions."
+  end
+
+  defp run_error(:disabled), do: "Action runs are disabled for this deployment."
+  defp run_error(:forbidden), do: run_forbidden_message()
+  defp run_error(:not_found), do: "That action or snapshot is no longer available."
+  defp run_error(:quarantined), do: "This snapshot is quarantined and cannot run actions."
+  defp run_error(:unknown_action), do: "That action is no longer in the manifest."
+  defp run_error(:run_failed), do: "The run could not be started."
+  defp run_error(%Ecto.Changeset{}), do: "The run request was invalid."
+  defp run_error(_reason), do: "The run could not be started."
 
   defp dag_intro_ms do
     Application.get_env(:cadence_server, :dag_intro_ms, 1200)

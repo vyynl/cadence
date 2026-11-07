@@ -1,10 +1,11 @@
 defmodule Cadence.ServerWeb.ReviewAccess do
   @moduledoc """
-  The single access rule for the member-only review hub (spec §6.6, §7.2).
+  The single access rule for member-only project surfaces (spec §6.6, §7.2).
 
-  Review pages are authenticated: the visitor must be a project member with
-  `Authorization.can_view?/1`. The public `/proposals/:token` page stays the
-  anonymous, identity-free surface, so this module is never used there.
+  Used by the review hub/detail pages and the action-run list/detail pages. The
+  visitor must be a project member with `Authorization.can_view?/1`. Public
+  pages (the portfolio, project home, `/proposals/:token`) never use this
+  module.
 
   Callers run this in `handle_params/3` — a refused visitor must be redirected,
   and an `assign_async` failure cannot navigate.

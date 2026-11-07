@@ -72,8 +72,10 @@ defmodule Cadence.Server.Actions.Runs do
   Validate a run request and insert a `:queued` row.
 
   Members may list actions (6a); only owner/trusted may run one. The open
-  incident check is cheap and catches the common quarantine case; the content
-  scan runs during staging so the store is walked once.
+  incident check is cheap and catches the mutable quarantine case; the content
+  scan runs during staging, which keeps the store walk single for the normal
+  flow. The UI reuses its rendered scan on a click and only re-derives it in raw
+  view, where that answer was deliberately bypassed.
   """
   @spec prepare(map(), String.t(), String.t(), String.t()) ::
           {:ok, ActionRun.t()} | {:error, error()}
@@ -96,17 +98,21 @@ defmodule Cadence.Server.Actions.Runs do
   `prepare/4` plus an asynchronous execution task.
 
   Returns as soon as the run row exists; the caller (6c) follows progress on the
-  project PubSub topic.
+  project PubSub topic. Stale-run recovery (including orphan container removal)
+  runs inside the task, before execution, so a manager's click never blocks on
+  the Docker proxy.
   """
   @spec start(map(), String.t(), String.t(), String.t()) ::
           {:ok, ActionRun.t()} | {:error, error()}
   def start(actor, project_id, node_id, action_name) do
     with {:ok, run} <- prepare(actor, project_id, node_id, action_name) do
-      # Recovery writes rows, so it only runs after the caller proved manager
-      # access to this project.
-      _ = recover_stale(run.project_id)
-
-      case Task.Supervisor.start_child(TaskSupervisor, fn -> execute(run) end) do
+      case Task.Supervisor.start_child(TaskSupervisor, fn ->
+             # Recovery writes rows and may remove containers; both belong off
+             # the caller's process. The just-inserted row is fresh, so it is
+             # never selected as stale.
+             _ = recover_stale(run.project_id)
+             execute(run)
+           end) do
         {:ok, _pid} ->
           {:ok, run}
 
@@ -147,11 +153,17 @@ defmodule Cadence.Server.Actions.Runs do
     end
   end
 
-  @doc "A project's runs, newest first (member-scoped; used by 6c)."
+  @doc """
+  A project's runs, newest first (member-scoped; used by 6c).
+
+  Returns `{:error, :disabled}` when the action layer is off for this
+  deployment, matching the run boundary.
+  """
   @spec list(map(), String.t(), keyword()) ::
-          {:ok, [ActionRun.t()]} | {:error, :not_found | :forbidden}
+          {:ok, [ActionRun.t()]} | {:error, :not_found | :forbidden | :disabled}
   def list(actor, project_id, opts \\ []) do
-    with {:ok, project_id} <- uuid(project_id),
+    with :ok <- check_enabled(),
+         {:ok, project_id} <- uuid(project_id),
          {:ok, _membership} <- authorize_viewer(actor, project_id) do
       # Keep a read page honest without blocking it on the Docker proxy: mark
       # abandoned rows here, leave container removal to a manager-triggered
@@ -170,11 +182,17 @@ defmodule Cadence.Server.Actions.Runs do
     end
   end
 
-  @doc "One run, scoped to a project and a member (used by 6c)."
+  @doc """
+  One run, scoped to a project and a member (used by 6c).
+
+  Returns `{:error, :disabled}` when the action layer is off for this
+  deployment.
+  """
   @spec get(map(), String.t(), String.t()) ::
-          {:ok, ActionRun.t()} | {:error, :not_found | :forbidden}
+          {:ok, ActionRun.t()} | {:error, :not_found | :forbidden | :disabled}
   def get(actor, project_id, run_id) do
-    with {:ok, project_id} <- uuid(project_id),
+    with :ok <- check_enabled(),
+         {:ok, project_id} <- uuid(project_id),
          {:ok, run_id} <- uuid(run_id),
          {:ok, _membership} <- authorize_viewer(actor, project_id) do
       _ = recover_stale(project_id, remove_containers: false)
@@ -186,7 +204,13 @@ defmodule Cadence.Server.Actions.Runs do
     end
   end
 
-  @doc "Read the captured log (nil when the run produced none)."
+  @doc """
+  Read the captured log (nil when the run produced none).
+
+  Only pass a run obtained from `get/3` (or a returned run struct from
+  `prepare/4`/`execute/1`): this function trusts the row's relative path and
+  does not re-authorize.
+  """
   @spec log(ActionRun.t()) :: {:ok, binary()} | {:error, :not_found}
   def log(%ActionRun{log_path: nil}), do: {:error, :not_found}
 
@@ -197,13 +221,43 @@ defmodule Cadence.Server.Actions.Runs do
     end
   end
 
-  @doc "List the artifacts collected for a run."
+  @doc """
+  List the artifacts collected for a run.
+
+  As with `log/1`, pass only a run obtained from `get/3`; the row's relative
+  path is trusted and membership is not re-checked.
+  """
   @spec artifacts(ActionRun.t()) :: [%{path: String.t(), size: non_neg_integer()}]
   def artifacts(%ActionRun{artifact_path: nil}), do: []
 
   def artifacts(%ActionRun{artifact_path: path}) do
     Artifacts.list(Path.join(artifact_root(), path))
   end
+
+  @doc """
+  Resolve one collected artifact to an absolute path for download.
+
+  Only an exact relative path already returned by `artifacts/1` is accepted, so
+  a crafted path cannot escape the run directory or reach the staging volume.
+  The resolved entry must still be a regular file (no symlink target).
+  """
+  @spec read_artifact(ActionRun.t(), String.t()) :: {:ok, String.t()} | {:error, :not_found}
+  def read_artifact(%ActionRun{artifact_path: nil}, _relative), do: {:error, :not_found}
+
+  def read_artifact(%ActionRun{} = run, relative) when is_binary(relative) do
+    if Enum.any?(artifacts(run), &(&1.path == relative)) do
+      path = Path.join(Path.join(artifact_root(), run.artifact_path), relative)
+
+      case File.lstat(path) do
+        {:ok, %File.Stat{type: :regular}} -> {:ok, path}
+        _other -> {:error, :not_found}
+      end
+    else
+      {:error, :not_found}
+    end
+  end
+
+  def read_artifact(_run, _relative), do: {:error, :not_found}
 
   @doc """
   Mark this project's abandoned `queued`/`running` rows `:interrupted`.

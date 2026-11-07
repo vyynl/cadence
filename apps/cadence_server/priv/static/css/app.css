@@ -1095,3 +1095,131 @@ code {
   border-color: var(--broken);
   color: var(--broken);
 }
+
+/* Action runs (spec §8.3): list, detail, captured output, artifacts. */
+.action-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.9rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.action-history {
+  margin: 0.6rem 0 0;
+  font-size: 0.85rem;
+}
+
+.run-page {
+  max-width: 72rem;
+}
+
+.run-page section + section {
+  margin-top: 1.75rem;
+}
+
+.run-list {
+  margin: 0 0 1.75rem;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  list-style: none;
+  overflow: hidden;
+}
+
+.run-list li + li {
+  border-top: 1px solid var(--line);
+}
+
+.run-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.9rem;
+  align-items: center;
+  padding: 0.65rem 0.8rem;
+}
+
+.run-row:hover,
+.run-row:focus-within {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.run-row .file-name {
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.run-row .file-name:hover,
+.run-row .file-name:focus-visible {
+  text-decoration: underline;
+}
+
+.run-detail-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.9rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.run-detail-heading h2 {
+  margin: 0;
+}
+
+.run-error {
+  margin: 0.5rem 0 0;
+  color: var(--status-rejected-text);
+  font-weight: 600;
+}
+
+.run-meta {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.35rem 1rem;
+  margin: 0.75rem 0 1.5rem;
+  font-size: 0.9rem;
+}
+
+.run-meta dt {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.run-meta dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.run-log {
+  margin: 0.5rem 0 0;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--muted) 8%, transparent);
+  color: var(--fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 40rem;
+  overflow-y: auto;
+}
+
+.artifact-list {
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.artifact-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.9rem;
+  align-items: baseline;
+  padding: 0.35rem 0;
+}
+
+.artifact-row a {
+  overflow-wrap: anywhere;
+}

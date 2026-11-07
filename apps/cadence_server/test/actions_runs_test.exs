@@ -503,6 +503,10 @@ defmodule Cadence.Server.Actions.RunsTest do
       assert_receive {:action_run_updated, ^project_id, ^run_id, :succeeded}, 2_000
 
       assert Repo.get!(ActionRun, run.id).status == :succeeded
+
+      # The task removes the container after the terminal write; wait for the
+      # cleared id so the test cannot race the real Docker client on exit.
+      assert eventually(fn -> is_nil(Repo.get!(ActionRun, run.id).container_id) end)
     end
   end
 
@@ -527,6 +531,85 @@ defmodule Cadence.Server.Actions.RunsTest do
       # A caller-supplied limit is clamped, never passed straight into Ecto.
       assert {:ok, _runs} = Runs.list(%{id: viewer.id}, project.id, limit: 0)
       assert {:ok, _runs} = Runs.list(%{id: viewer.id}, project.id, limit: "nope")
+    end
+
+    test "read APIs are disabled with the action layer", %{project: project, owner: owner} do
+      Application.put_env(:cadence_server, :actions_enabled, false)
+
+      assert Runs.list(%{id: owner.id}, project.id) == {:error, :disabled}
+
+      assert Runs.get(%{id: owner.id}, project.id, Ecto.UUID.generate()) ==
+               {:error, :disabled}
+    end
+  end
+
+  describe "read_artifact/2" do
+    test "returns an absolute path for a recorded artifact", %{
+      project: project,
+      owner: owner,
+      node: node,
+      volume_path: volume_path
+    } do
+      assert {:ok, run} = prepare(owner, project, node)
+      out_dir = Path.join([volume_path, run.id, "out"])
+      File.mkdir_p!(out_dir)
+
+      FakeDocker.script(%{
+        on_wait: fn -> File.write!(Path.join(out_dir, "report.txt"), "ok\n") end
+      })
+
+      assert {:ok, finished} = Runs.execute(run)
+      assert {:ok, path} = Runs.read_artifact(finished, "report.txt")
+      assert File.read!(path) == "ok\n"
+    end
+
+    test "rejects traversal, unknown names, and a run without artifacts", %{
+      project: project,
+      owner: owner,
+      node: node,
+      volume_path: volume_path
+    } do
+      assert {:ok, run} = prepare(owner, project, node)
+      out_dir = Path.join([volume_path, run.id, "out"])
+      File.mkdir_p!(out_dir)
+
+      FakeDocker.script(%{
+        on_wait: fn -> File.write!(Path.join(out_dir, "report.txt"), "ok\n") end
+      })
+
+      assert {:ok, finished} = Runs.execute(run)
+
+      assert Runs.read_artifact(finished, "../output.log") == {:error, :not_found}
+      assert Runs.read_artifact(finished, "../../../../etc/passwd") == {:error, :not_found}
+      assert Runs.read_artifact(finished, "nope.txt") == {:error, :not_found}
+      assert Runs.read_artifact(finished, "") == {:error, :not_found}
+
+      assert Runs.read_artifact(%{finished | artifact_path: nil}, "report.txt") ==
+               {:error, :not_found}
+    end
+
+    test "a symlink is never in the allowlist", %{
+      project: project,
+      owner: owner,
+      node: node,
+      volume_path: volume_path,
+      artifact_path: artifact_path
+    } do
+      assert {:ok, run} = prepare(owner, project, node)
+      out_dir = Path.join([volume_path, run.id, "out"])
+      File.mkdir_p!(out_dir)
+
+      FakeDocker.script(%{
+        on_wait: fn -> File.write!(Path.join(out_dir, "report.txt"), "ok\n") end
+      })
+
+      assert {:ok, finished} = Runs.execute(run)
+
+      outside = Path.join(artifact_path, "outside.txt")
+      File.write!(outside, "secret\n")
+      File.ln_s!(outside, Path.join([artifact_path, run.id, "artifacts", "link.txt"]))
+
+      assert Runs.read_artifact(finished, "link.txt") == {:error, :not_found}
     end
   end
 
@@ -620,6 +703,19 @@ defmodule Cadence.Server.Actions.RunsTest do
   end
 
   ## Helpers
+
+  defp eventually(fun, attempts \\ 100)
+
+  defp eventually(fun, 0), do: fun.()
+
+  defp eventually(fun, attempts) do
+    if fun.() do
+      true
+    else
+      Process.sleep(20)
+      eventually(fun, attempts - 1)
+    end
+  end
 
   defp prepare(user, project, node) do
     Runs.prepare(%{id: user.id}, project.id, node.id, "run_analysis")

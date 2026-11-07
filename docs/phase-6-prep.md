@@ -2,14 +2,14 @@
 
 **Spec:** §8 (concept, language support, isolation, security), §12.4 (compose
 socket proxy), §12.6 (env contract), §12.9 (security notes), §13 Phase 6.
-**Status:** 6a and 6b complete; 6c next.
+**Status:** 6a, 6b, and 6c complete.
 
 ## Goal
 
 A project can ship an `actions/manifest.json` in its repository. Members see
 the project's actions; owners/trusted members run one against a chosen node
-snapshot in an isolated container, stream its output, and keep the output as an
-artifact attached to that node.
+snapshot in an isolated container, follow the status live, and keep the output
+as an artifact attached to that node (captured post-exit).
 
 ## Verified starting state
 
@@ -86,15 +86,22 @@ and the demo socket proxy/volumes. Decisions taken during 6b:
 - Tests use a fake Docker client; no test talks to a real daemon.
 - Demo compose gains `docker-socket-proxy` and the shared action volume.
 
-### 6c — web run experience
+### 6c — web run experience (shipped)
 
-- Run buttons on the action panel, gated by `can_manage?` and re-checked in
-  `handle_event`.
-- Streamed output over a per-run PubSub topic; LiveView subscribes after
-  `connected?/1`.
-- Artifact listing linked from the node that triggered the run.
-- Resolve `expose` semantics (public listing vs members-only) in spec §16 if
-  still ambiguous; docs/spec closeout.
+Shipped as `RunLive.Index` (`/p/:slug/runs`) and `RunLive.Show`
+(`/p/:slug/runs/:run_id`), manager-only Run controls on the node action panel,
+and `RunArtifactController` for allowlisted downloads. Decisions taken during
+6c:
+
+- the panel stays members-only, so `expose` remains parsed but unhonored (§16);
+- the run list/detail refresh from the existing
+  `{:action_run_updated, project_id, run_id, status}` event; logs are captured
+  post-exit, so no partial streaming;
+- output is rendered as escaped text with ANSI/control sequences stripped;
+- artifact downloads accept only an exact path from the run's recorded
+  collection and are served as an attachment;
+- each page reuses the member access rule and `Runs` re-authorizes; every
+  `handle_event` re-reads the membership.
 
 ## Test matrix
 
@@ -104,7 +111,7 @@ and the demo socket proxy/volumes. Decisions taken during 6b:
 | Actions context | `actions_test.exs` | disabled; missing manifest; too large; invalid manifest; non-member forbidden; viewer may list; manager may list; other project's node |
 | Project page | `project_live_test.exs` | member sees name/description/command; anonymous does not; quarantined snapshot hides; no manifest hides; disabled hides |
 | Runner (6b) | `actions_runs_test.exs`, `actions_docker_engine_test.exs`, `actions_staging_test.exs` | image reuse/build; limits; no network; log capture; artifact path; failure mapping; request mapping; staging caps |
-| UI (6c) | `project_live_test.exs` | run button only for managers; event authorization; streamed output; run failure |
+| UI (6c) | `run_live_test.exs`, `project_live_test.exs` | run control only for managers; forced event refused; raw-view quarantine re-check; run list/detail member-only and live-refreshed; escaped/ANSI-stripped output; artifact download allowlist (nested/space/traversal); disabled deployment |
 
 ## Acceptance for 6a
 

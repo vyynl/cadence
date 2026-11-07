@@ -33,6 +33,7 @@ defmodule Cadence.ServerWeb.Router do
 
     get("/", PortfolioController, :index)
     get("/proposals/:token", ProposalController, :show, log: false)
+    get("/p/:slug/runs/:run_id/artifacts/*path", RunArtifactController, :show)
 
     ash_authentication_live_session :project do
       live("/p/:slug", ProjectLive, :home)
@@ -42,6 +43,8 @@ defmodule Cadence.ServerWeb.Router do
       live("/p/:slug/n/:node_id/blob/*path", ProjectLive, :blob)
       live("/p/:slug/reviews", ReviewLive.Index, :index)
       live("/p/:slug/reviews/:proposal_id", ReviewLive.Show, :show)
+      live("/p/:slug/runs", RunLive.Index, :index)
+      live("/p/:slug/runs/:run_id", RunLive.Show, :show)
     end
 
     get("/auth/tokens/new", TokenController, :new)

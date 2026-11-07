@@ -630,7 +630,17 @@ never public. `/auth`, `/sync`, `/health`, and static paths are reserved.
 - Pin/unpin nodes (owner only; trusted members may not pin, §4.5).
 - A read-only member list with roles/approver flags (owner/trusted only).
 - See the snapshot's Docker action list (any member) and trigger one
-  (owner/trusted only, Phase 6b).
+  (owner/trusted only; runner in 6b, UI in 6c).
+- See the project's action run history and one run's status, provenance, and
+  artifacts (any member); start a run from the node action panel
+  (owner/trusted only). `/p/:slug/runs` lists runs newest first and
+  `/p/:slug/runs/:run_id` shows the run. Both are member-only and subscribe to
+  `project:<id>`: a run status change refreshes the page live. Captured output
+  is rendered as escaped text with ANSI/control sequences stripped (never
+  `raw/1`); output is available after the container exits. Artifacts download
+  only through the recorded collection (`application/octet-stream`,
+  `content-disposition: attachment`); a non-member, another project's run, an
+  unknown artifact, and a traversal attempt are all a plain 404.
 - Manage memberships.
 - Review and approve/reject meld proposals (shareable link).
 - The review hub: `/p/:slug/reviews` lists the project's proposals
@@ -883,7 +893,8 @@ client-pushed content, so parsing is strict and capped
 `^[a-z0-9][a-z0-9_-]{0,63}$`, commands are 1–512 bytes, descriptions are at
 most 200 bytes, commands and descriptions reject control/bidi characters, and
 duplicate names are rejected. Members may see the action list; running one
-requires the owner/trusted role (Phase 6b). A missing, malformed, or oversized
+requires the owner/trusted role (Phase 6b runner, Phase 6c UI). A missing,
+malformed, or oversized
 manifest hides the panel or renders a shape-only notice — it never fails the
 project page.
 
@@ -904,7 +915,12 @@ backend never parses Go/Python/Elixir source. It only:
 1. Builds the image (once, cached).
 2. Starts a container with the project's tree mounted.
 3. Runs the action command.
-4. Streams stdout/stderr back to the web UI or TUI.
+4. Captures stdout/stderr for the member run page (post-exit; the page follows
+   status changes live).
+
+`expose` is parsed and validated but **not honored** in Phase 6: the action
+panel and run pages are member views (§7.1/§7.2), so no anonymous listing
+exists. The flag is reserved for a future per-project public-action decision.
 
 Language templates for `Dockerfile` generation: Elixir, Python, Go, Node,
 Rust, etc. These live in `cadence_server/priv/templates/`.
@@ -953,6 +969,13 @@ Rust, etc. These live in `cadence_server/priv/templates/`.
   `/out` is not quota'd while the container runs, so
   `CAD_ACTIONS_VOLUME_PATH` must live on a filesystem with a size/space limit;
   Cadence enforces only the post-exit collection caps.
+- The member run page renders the captured log inside an escaped `<pre>` with
+  ANSI CSI/OSC sequences and remaining control bytes removed and invalid UTF-8
+  replaced; HTML is never passed through `raw/1`. Log capture is post-exit, so
+  the page follows status events live but output appears when the container
+  exits. Artifact downloads are served only for an exact path from the run's
+  recorded collection, as `application/octet-stream` with
+  `content-disposition: attachment`; everything else is a 404.
 - The staging directory is removed after collection; the container is always
   removed, including on timeout and start failure. A container orphaned by a
   server restart is removed by stale-run recovery.
@@ -983,7 +1006,8 @@ Rust, etc. These live in `cadence_server/priv/templates/`.
   that relies on a `Dockerfile` fails as `build_failed`; a
   `project.docker_image` project still runs.
 - `CAD_ACTIONS_ENABLED=false` disables the action layer entirely for
-  deployments that don't need it.
+  deployments that don't need it: no list, no run, and no run history or
+  artifact download route (historical rows are retained but not served).
 
 ---
 
@@ -1879,8 +1903,11 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   and CPU/memory/PID/read-only-rootfs limits, capped logs and artifacts,
   durable `action_runs` rows, and the demo socket proxy/volumes
   (§8.2–§8.4, §11, §12.4).
-- 6c — web run experience: run buttons, streamed output over PubSub/LiveView,
-  artifact links, and the `expose` visibility decision (§16 if still open).
+- 6c — web run experience (shipped): manager-only Run controls on the node
+  action panel, a member-only run list (`/p/:slug/runs`) and run detail
+  (`/p/:slug/runs/:run_id`) with live status events, escaped post-exit output,
+  artifact downloads through the recorded allowlist, and the `expose`
+  resolution (members-only; the flag is reserved) (§7.2, §8.2, §8.3, §16).
 
 **Phase 7 — Storage engineering (week 18+)**
 - Server-side lossless repack: pack loose objects into packfiles with delta
@@ -1988,13 +2015,12 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       lazy.nvim/packer specs.
 - [ ] **Docker-in-Docker vs. host socket proxy:** host socket proxy is the
       current plan (§8.4). Revisit if isolation needs increase.
-- [ ] **Action `expose` semantics (Phase 6c):** `actions/manifest.json` carries
-      `expose`, but 6a parses it without honoring it. Decide whether
-      `expose: true` publishes the action to anonymous visitors (listing only;
-      execution stays owner/trusted) or whether the whole panel remains
-      members-only. Until then members see all actions and anonymous visitors
-      see none. The manifest file itself is ordinary repository content
-      (browsable per §7.5) and is not confidential.
+- [x] **Action `expose` semantics (Phase 6c):** resolved — the action panel
+      and run pages remain member-only (§7.1/§7.2): members see the list,
+      owner/trusted run an action, and anonymous visitors see nothing. `expose`
+      stays parsed and validated but is not honored; it is reserved for a
+      future per-project public-action listing, which would also need a public
+      loader (the manifest file itself is already ordinary repository content).
 - [x] **Action run durability:** resolved in 6b — a server-only `action_runs`
       row is written before any container exists; a run interrupted by a
       restart stays `running` until `recover_stale/1` marks it `:interrupted`
@@ -2002,6 +2028,10 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - [ ] **Action artifact retention:** 6b writes
       `<CAD_ARTIFACT_PATH>/<run_id>/…` without pruning. Add age/size retention
       (or a per-project quota) before artifact growth matters.
+- [ ] **Run history/artifact paging:** the project run list shows the newest 50
+      rows and the run page renders at most the first 100 collected artifacts
+      (the collection itself caps at 1,000). Add paging or streams if a project
+      accumulates deep history or large artifact sets.
 - [ ] **Action run concurrency:** 6b does not cap concurrent runs per project.
       Each run is a separate container, so a burst of manager clicks can consume
       host resources up to the per-container limits. Add a per-project queue (or
@@ -2029,15 +2059,16 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       root-owned image still runs uid 0 inside the container. Consider
       `userns-remap` or a forced non-root uid for stronger isolation.
 - [ ] **`Project.docker_image` has no writer:** the runner honors the column,
-      but only tests set it today. 6c or an admin surface must provide a way to
+      but only tests set it today. An admin surface must provide a way to
       set/clear it (and to validate that the image can run against
-      `/workspace`).
-- [ ] **Action log capture is post-exit:** 6b reads logs after the container
-      exits (TTY mode, stderr merged into stdout). Live streaming to the web UI
-      is 6c; the `action_runs` row plus the post-commit
-      `{:action_run_updated, project_id, run_id, status}` PubSub event are the
-      contract. Logs contain terminal/ANSI escapes and must be escaped when
-      rendered.
+      `/workspace`). 6c did not add one.
+- [ ] **Action log streaming is post-exit:** 6b captures logs after the
+      container exits (TTY mode, stderr merged into stdout), and 6c follows the
+      `{:action_run_updated, project_id, run_id, status}` PubSub event on the
+      member run page. Partial/live output streaming would need a follow API on
+      the Docker client; until then the page shows status live and output at the
+      end. Logs contain terminal/ANSI escapes and are stripped before rendering
+      (§8.3).
 - [ ] **`Project.actions_manifest` is unused:** the data model still has the
       column (§4.2), but 6a reads the manifest from the selected node snapshot.
       Repurpose it as a cache or remove it in a schema slice so the model and
