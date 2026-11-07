@@ -1,12 +1,14 @@
 # Cadence — Progress
 
 ## Current Phase
-**Phase 7 — storage engineering is in progress.** 7a (shared pack layer) is
-complete: Git pack v2/idx v2 write+read with ofs/ref deltas, transparent
-loose-first `GitStore` reads, verified atomic `pack_objects/3`, and a shared
-index cache. Next is **7b (server repacker)**; 7c (sync existence handshake)
-follows, with the optional Phase 5 P5 smoke and the union/UI live checks as
-carry-over.
+**Phase 7 — storage engineering is in progress.** 7a (shared pack layer) and
+7b (server repacker) are complete: pack v2/idx v2 write+read with ofs/ref
+deltas, transparent loose-first `GitStore` reads, verified atomic
+`pack_objects/3`, a shared index cache, a threshold/backstop/CLI repacker with
+transaction-scoped per-project locking, and deferred loose deletion that only
+unlinks after a later run re-verifies the pack. Next is **7c (sync existence
+handshake)**, with the optional Phase 5 P5 smoke and the union/UI live checks
+as carry-over.
 
 ## Done (summary)
 
@@ -458,6 +460,35 @@ carry-over.
   deletion recorded for 7b). Spec §11/§13/§16, `docs/phase-7-prep.md`, and
   `docs/README.md` updated. Lesson:
   `.claude/solutions/data-integrity/pack-v2-byte-format-20261107.md`.
+- **Phase 7b (server repacker)** — `Cadence.Server.Storage` + `Storage.Repacker`
+  (plus `Storage.TaskSupervisor`) repack a project's loose objects without
+  changing any read path. A run is: `GitStore.invalidate_cache/1` once → remove
+  crash-left `tmp-*` pairs and half-completed `pack-*.pack`/`.idx` renames older
+  than a 5 min grace → for every loose object covered by a usable pack, re-read
+  it **through the pack** and re-hash (`GitStore.verify_packed/2`, new) and only
+  then unlink (failures counted/logged) → pack the remaining loose objects in
+  `CAD_REPACK_MAX_PACK_BYTES` batches, reading **loose files only** and
+  re-hashing them (`GitStore.read_loose_raw/2`, new). The writing phase never
+  deletes (OTP cannot fsync a directory); the next threshold run or the 6 h
+  backstop performs the verified sweep. Threshold counts on-disk loose
+  objects/bytes (so a pack run is followed by its sweep); one run per project
+  via an in-process FIFO queue plus a transaction-scoped
+  `pg_try_advisory_xact_lock(hashtext('cadence.repack'), hashtext(project_id))`
+  (a `:busy` result is skipped, never a failure, and keeps any existing
+  cooldown). `Sync.push_nodes/2` calls `Storage.maybe_repack/1` after the push
+  commits (best-effort, async); `mix cadence.repack [--project <id|slug>]` runs
+  unconditionally and prints stats/outcome. Failure cooldown = one
+  `CAD_REPACK_INTERVAL_MS`; the backstop bypasses it. Config:
+  `CAD_REPACK_ENABLED`, `CAD_REPACK_MIN_OBJECTS` (1000), `CAD_REPACK_MIN_BYTES`
+  (64 MiB), `CAD_REPACK_INTERVAL_MS` (6 h, `0` disables backstop+cooldown),
+  `CAD_REPACK_MAX_PACK_BYTES` (64 MiB). Spec §12.6/§13/§16,
+  `docs/phase-7-prep.md`, `docs/README.md`, `.env.example` updated. 29 new tests
+  (storage/repacker/git store) + a push-wiring case; 1023 total (309 shared +
+  188 daemon + 526 server). Two read-only review cycles: PASS WITH WARNINGS,
+  then the second pass found 3 new warnings, all fixed (empty-batch packer call,
+  orphan-sweep grace for in-flight renames, content re-hash on loose reads).
+  Lesson:
+  `.claude/solutions/data-integrity/repack-deferred-deletion-20261107.md`.
 - **4e gate:** 640 tests green (161 shared + 125 daemon + 354 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
@@ -471,17 +502,18 @@ carry-over.
 
 ## Next
 
-**Immediate step:** start **Phase 7b (server repacker)** (spec §13, §16;
-`docs/phase-7-prep.md` §7b). Implement `Cadence.Server.Storage`/`Repacker`: one
-run per project (advisory lock), threshold after a successful push (1,000 loose
-objects or 64 MiB) plus a 6 h backstop and `mix cadence.repack`. The writing run
-must **not** delete loose copies; a later sweep re-verifies the pack (present,
-trailer, every covered SHA readable) and only then unlinks them. Use
-`GitStore.loose_objects/1`, `read_raw/2`, and `pack_objects/3`; subtract SHAs
-already present in pack indexes. Config: `CAD_REPACK_ENABLED`,
-`CAD_REPACK_MIN_OBJECTS`, `CAD_REPACK_MIN_BYTES`, `CAD_REPACK_INTERVAL_MS`,
-`CAD_REPACK_MAX_PACK_BYTES` (§12.6). Tests use temp stores and cover threshold,
-crash leaves, deferred deletion, and idempotency.
+**Immediate step:** start **Phase 7c (sync existence handshake)** (spec
+§10.2/§10.6, §13; `docs/phase-7-prep.md` §7c). Add `POST /sync/objects/exists`
+(bearer PAT, writable roles, project-scoped; `%{project_id, shas: [40-hex]}` →
+`%{present: [40-hex]}`, capped by `CAD_SYNC_EXISTS_LIMIT`, default 5000),
+answered from `GitStore.present_shas/2` (index membership, not one
+`has_object?/2` per SHA). Daemon `SyncClient.objects_exist/2`; `push_batch/3`
+collects the batch's unique object SHAs, asks once, drops present objects per
+node before encoding, and falls back to the current full push on any handshake
+failure (timeout/5xx/429). A server 422 after a filtered push is treated as a
+handshake miss: retry the batch once with all objects, then surface the normal
+node error. Node metadata is always sent; only `git_objects` shrinks
+(`Sync.ensure_complete/2` stays the authority). No new dependency.
 
 **Integration contract (6c, for anything that touches runs):**
 `Actions.Runs.prepare/4` returns `{:ok, %ActionRun{}}` or
@@ -522,20 +554,45 @@ Carry-over (small, not blocking Phase 7):
    the first 100 artifacts (no paging); no per-project run concurrency cap; no
    artifact/image retention; action log streaming remains post-exit.
 
-**Spin-up:** `@phx-full` (or `@phx-plan` → `@phx-work`) at Phase 7b. No new
+**Spin-up:** `@phx-full` (or `@phx-plan` → `@phx-work`) at Phase 7c. No new
 dependency is expected; the pack layer is hand-written and the spec §11 table
 already records it.
 
 ## Blocked
 
-- (none). Phase 7a is complete and both review cycles' findings are fixed and
+- (none). Phase 7b is complete and both review cycles' findings are fixed and
   verified. Open deltas (artifact/image retention, run-history paging,
   per-project run concurrency, the `/out` quota prerequisite, the Engine API
   floor, `Project.docker_image` having no writer, userns) are recorded below
-  and in spec §16; none block 7b.
+  and in spec §16; none block 7c.
 
 ## Spec Deltas / Open Items
 
+- **Repacker 7b notes (2026-11-07)** — deletion needs **two** runs by design:
+  the writing run never unlinks (OTP cannot fsync a directory), and the next
+  run re-reads each covered entry through the pack and re-hashes it before
+  `File.rm`. Loose objects therefore count toward the threshold even after a
+  pack covers them; that is what makes the next check the sweep, and it means
+  pack + loose coexist for at most one trigger/backstop interval (budget 2×
+  object storage). The advisory lock is **transaction-scoped** and the file
+  work runs inside `Repo.transaction`, so a run holds one pooled connection and
+  — if the DB backend is terminated mid-run (network drop,
+  `idle_in_transaction_session_timeout`) — the lock is released while the run
+  continues. That is accepted: concurrent runs use atomic renames,
+  content-addressed writes, and verify-before-delete, so the worst case is
+  wasted work/duplicate packs. Crash debris and half-completed renames are only
+  removed after a 5 minute grace (module constant, not env) so a writer whose
+  lock was lost is never mistaken for garbage. The read path still validates
+  zlib + declared size, not the SHA (7a contract); only the repacker's
+  `verify_packed/2` and `read_loose_raw/2` re-hash. There is no run timeout: a
+  hung run wedges the single-worker queue and holds the lock (the next
+  Repacker generation or the CLI reports `:busy`, never corrupts). Queue and
+  cooldown state are in-memory, so a Repacker restart loses them (the backstop
+  re-derives work; an orphaned in-flight task finishes alone). Each run adds a
+  pack; there is no consolidation/multi-pack index and corrupt `pack-*` pairs
+  are deliberately kept (they may be the only copy of already-swept objects).
+  Real lock contention cannot be exercised in the sandbox (one connection per
+  test); tests cover sequential release plus the injected `:busy` seam.
 - **Pack layer 7a notes (2026-11-07)** — pack entry ends come from the idx
   offsets (the compressed slice ends at the next offset/trailer), not from
   zlib: `safeInflate/2` can return `:finished` on a partial stream. The cache
@@ -1286,3 +1343,30 @@ Verification: `mix format --check-formatted`, dev + `MIX_ENV=prod mix compile
 +54 shared). Lesson:
 `.claude/solutions/data-integrity/pack-v2-byte-format-20261107.md`. Next: 7b
 (server repacker).
+
+2026-11-07 — **Phase 7b (server repacker)** shipped from
+`.claude/plans/phase-7b-repacker/plan.md` (`@phx-full`). `Cadence.Server.Storage`
+runs sweep-then-pack: it invalidates the pack cache once, removes crash debris
+(`tmp-*` and half-renamed `pack-*` pairs, 5 min grace), unlinks a loose object
+only after `GitStore.verify_packed/2` read it through the pack and re-hashed it,
+then packs the remaining loose objects in `CAD_REPACK_MAX_PACK_BYTES` batches
+read via `GitStore.read_loose_raw/2` (loose-only, re-hashed, so a corrupt loose
+file is skipped rather than aborting the run). `Storage.Repacker` is a
+single-worker FIFO with per-project dedupe, a failure cooldown (one interval)
+and a backstop that bypasses it; the cross-process fence is a transaction-scoped
+`pg_try_advisory_xact_lock` and `:busy` is a skip, not a failure.
+`Sync.push_nodes/2` triggers a best-effort check after commit and
+`mix cadence.repack [--project <id|slug>]` runs on demand. Config:
+`CAD_REPACK_ENABLED`, `CAD_REPACK_MIN_OBJECTS`, `CAD_REPACK_MIN_BYTES`,
+`CAD_REPACK_INTERVAL_MS`, `CAD_REPACK_MAX_PACK_BYTES`. Spec
+§12.6/§13/§16, `docs/phase-7-prep.md`, `docs/README.md`, `.env.example`
+updated. Verification: `mix format --check-formatted`, dev +
+`MIX_ENV=prod mix compile --warnings-as-errors`, 1023 tests green (309 shared +
+188 daemon + 526 server), and a `mix cadence.repack` smoke (run 1 packs + keeps
+loose, run 2 sweeps, run 3 no-op, debris removed). Two read-only reviews: PASS
+WITH WARNINGS, then a second pass found 3 new warnings, all fixed (no empty-pack
+call, orphan grace, content re-hash). Lesson:
+`.claude/solutions/data-integrity/repack-deferred-deletion-20261107.md`. Committed
+at `e6903b6` (`feat: Phase 7b — server repacker with verified deferred loose
+sweep`), with this handoff note as the follow-up docs commit; working tree
+clean. Next: 7c (sync existence handshake).
