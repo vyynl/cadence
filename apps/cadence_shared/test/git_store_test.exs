@@ -836,6 +836,60 @@ defmodule Cadence.Shared.GitStoreTest do
       assert GitStore.read_commit(repo, commit) == nil
     end
 
+    test "verify_packed/2 reads through the pack and re-hashes it", %{repo: repo} do
+      # A loose-only object has no packed copy to verify.
+      loose_only = GitStore.write_blob(repo, "loose only")
+      assert GitStore.verify_packed(repo, loose_only) == {:error, :not_packed}
+      assert GitStore.verify_packed(repo, String.duplicate("0", 40)) == {:error, :not_packed}
+
+      data = "verify me\n"
+      sha = GitStore.write_blob(repo, data)
+      {:ok, _info} = GitStore.pack_objects(repo, [%{sha: sha, type: :blob, data: data}])
+      assert GitStore.verify_packed(repo, sha) == :ok
+
+      # Corrupt the packed entry while the loose copy stays valid: the verifier
+      # must read the pack (and fail), not the loose file (which would pass).
+      pack = hd(GitStore.packs(repo))
+      offset = Map.fetch!(pack.offsets, sha)
+      File.write!(pack.pack_path, corrupt_entry(File.read!(pack.pack_path), offset))
+      GitStore.invalidate_cache(repo)
+
+      assert GitStore.verify_packed(repo, sha) == {:error, :corrupt}
+      assert GitStore.read_blob(repo, sha) == data
+    end
+
+    test "read_loose_raw/2 reads only the loose file", %{repo: repo} do
+      data = "loose only\n"
+      sha = GitStore.write_blob(repo, data)
+
+      assert {:ok, {:blob, ^data}} = GitStore.read_loose_raw(repo, sha)
+      assert GitStore.read_loose_raw(repo, String.duplicate("0", 40)) == {:error, :not_found}
+      assert GitStore.read_loose_raw(repo, "not-a-sha") == {:error, :not_found}
+
+      {:ok, _info} = GitStore.pack_objects(repo, [%{sha: sha, type: :blob, data: data}])
+      remove_loose!(repo, sha)
+
+      # The packed copy answers read_raw/2, but there is no loose file left.
+      assert {:ok, {:blob, ^data}} = GitStore.read_raw(repo, sha)
+      assert GitStore.read_loose_raw(repo, sha) == {:error, :not_found}
+
+      # A corrupt loose file is reported instead of being masked by the pack.
+      write_garbage_loose!(repo, sha)
+      assert GitStore.read_loose_raw(repo, sha) == {:error, :corrupt}
+      assert GitStore.read_blob(repo, sha) == data
+    end
+
+    test "read_loose_raw/2 rejects content that hashes to a different SHA", %{repo: repo} do
+      sha = String.duplicate("cd", 20)
+      <<dir::binary-size(2)>> <> rest = sha
+      path = Path.join([repo.home_dir, "objects", dir, rest])
+      File.mkdir_p!(Path.dirname(path))
+      # A valid zlib object file, but for different content under this path.
+      File.write!(path, :zlib.compress("blob 5\0other"))
+
+      assert GitStore.read_loose_raw(repo, sha) == {:error, :corrupt}
+    end
+
     test "invalidate_cache/1 forces a re-read of pack indexes", %{repo: repo} do
       first = GitStore.write_blob(repo, "first")
 
@@ -851,6 +905,23 @@ defmodule Cadence.Shared.GitStoreTest do
       assert :ok = GitStore.invalidate_cache(repo)
       assert GitStore.read_blob(repo, first) == "first"
     end
+  end
+
+  # Zero bytes inside one entry while keeping the pack size and trailer intact,
+  # so the index is still discovered and that entry's read must fail.
+  defp corrupt_entry(bin, offset) do
+    size = byte_size(bin)
+    take = min(16, max(size - offset, 0))
+    prefix = binary_part(bin, 0, offset)
+    rest = binary_part(bin, offset + take, size - offset - take)
+    prefix <> :binary.copy(<<0>>, take) <> rest
+  end
+
+  defp write_garbage_loose!(repo, sha) do
+    <<dir::binary-size(2)>> <> rest = sha
+    path = Path.join([repo.home_dir, "objects", dir, rest])
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, "not zlib")
   end
 
   defp remove_loose!(repo, sha) do

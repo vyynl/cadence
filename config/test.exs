@@ -58,6 +58,14 @@ config :cadence_server,
   proposal_max_files: 200,
   scan_max_files: 1000,
   scan_max_bytes: 65_536,
+  # Background repacking must never reach the database from a spawned task in
+  # the sandbox: keep the threshold unreachable and the backstop off. The
+  # repacker tests opt in with explicit values.
+  repack_enabled: true,
+  repack_min_objects: 1_000_000,
+  repack_min_bytes: 1_073_741_824,
+  repack_interval_ms: 0,
+  repack_max_pack_bytes: 67_108_864,
   meld_timeout_ms: 5_000,
   meld_rate_limit: 100,
   meld_max_ops: 10,

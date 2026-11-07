@@ -84,6 +84,33 @@ defmodule Cadence.ServerWeb.SyncNodesTest do
     assert File.read!(Path.join(checkout, "README.md")) == "# Child\n"
   end
 
+  test "a successful push asks the repacker to check the project", %{
+    conn: conn,
+    project: project,
+    plaintext: plaintext
+  } do
+    parent = self()
+    previous = Application.get_env(:cadence_server, :repack_runner)
+
+    Application.put_env(:cadence_server, :repack_runner, fn id ->
+      send(parent, {:repack, id})
+    end)
+
+    on_exit(fn -> restore_env(:repack_runner, previous) end)
+
+    dag = build_dag(tmp_dir())
+
+    payload = %{
+      "nodes" => [node_payload(project, dag.root_id, dag.root, [], dag.repo, "root")]
+    }
+
+    push = conn |> authed(plaintext) |> post_json("/sync/nodes", payload)
+    assert %{"mappings" => [_mapping]} = json_response(push, 200)
+
+    assert_receive {:repack, project_id}, 1_000
+    assert project_id == project.id
+  end
+
   test "retrying the same push is idempotent", %{
     conn: conn,
     project: project,

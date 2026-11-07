@@ -681,6 +681,72 @@ defmodule Cadence.Shared.GitStore do
   end
 
   @doc """
+  Verify that `sha` is readable from a pack and still hashes to `sha`.
+
+  This is the repacker's pre-deletion check: `read_raw/2` is loose-first, so it
+  cannot prove that a packed copy is usable while the loose file still exists.
+  Here the entry is read through the packs only (never the loose file) and the
+  content is re-hashed against the SHA it is addressed by. Every pack that
+  covers the SHA is tried, so a duplicate in a newer (repair) pack can still
+  verify even if an older copy is corrupt.
+
+  Returns `:ok`, `{:error, :not_packed}` when no usable pack covers the SHA, or
+  `{:error, :corrupt}` when at least one covers it but none reads back
+  correctly. Only packs whose trailer matches their index are considered.
+  """
+  @spec verify_packed(t(), sha()) :: :ok | {:error, :not_packed | :corrupt}
+  def verify_packed(repo, sha) do
+    case Enum.filter(packs(repo), &Map.has_key?(&1.offsets, sha)) do
+      [] -> {:error, :not_packed}
+      candidates -> verify_candidates(candidates, sha)
+    end
+  end
+
+  defp verify_candidates([], _sha), do: {:error, :corrupt}
+
+  defp verify_candidates([pack | rest], sha) do
+    case Pack.read_object(pack.pack_path, pack.offsets, sha, ends: pack.ends) do
+      {:ok, {type, data}} ->
+        if object_sha(type, data) == sha, do: :ok, else: verify_candidates(rest, sha)
+
+      {:error, _reason} ->
+        verify_candidates(rest, sha)
+    end
+  end
+
+  @doc """
+  Read an object from its loose file only, returning its Git type and payload.
+
+  Unlike `read_raw/2` this never falls back to a pack, so the repacker can tell
+  "the loose copy is unreadable" from "the object is elsewhere". The content is
+  re-hashed against `sha`: a decodable but different object (a file restored to
+  the wrong path) is `:corrupt`, not a candidate for packing.
+
+  Returns `{:error, :not_found}` for a malformed SHA or a missing file, and
+  `{:error, :corrupt}` when the file does not decode to the object it claims.
+  """
+  @spec read_loose_raw(t(), sha()) ::
+          {:ok, {atom(), binary()}} | {:error, :not_found | :corrupt}
+  def read_loose_raw(repo, sha) when is_binary(sha) and byte_size(sha) == 40 do
+    if valid_sha?(sha) do
+      case read_loose_object(repo, sha) do
+        {:ok, {type, data}} ->
+          if object_sha(type, data) == sha, do: {:ok, {type, data}}, else: {:error, :corrupt}
+
+        :not_found ->
+          {:error, :not_found}
+
+        :corrupt ->
+          {:error, :corrupt}
+      end
+    else
+      {:error, :not_found}
+    end
+  end
+
+  def read_loose_raw(_repo, _sha), do: {:error, :not_found}
+
+  @doc """
   List loose objects present in the store.
 
   Returns `%{sha, size, path}` maps sorted by SHA, where `size` is the on-disk
@@ -1141,8 +1207,8 @@ defmodule Cadence.Shared.GitStore do
   defp read_object(repo, sha) when is_binary(sha) and byte_size(sha) == 40 do
     if valid_sha?(sha) do
       case read_loose_object(repo, sha) do
-        nil -> read_packed_object(repo, sha)
-        object -> object
+        {:ok, object} -> object
+        _missing_or_corrupt -> read_packed_object(repo, sha)
       end
     end
   end
@@ -1154,14 +1220,20 @@ defmodule Cadence.Shared.GitStore do
 
     case File.read(path) do
       {:ok, compressed} ->
-        decode_object_file(compressed)
+        case decode_object_file(compressed) do
+          nil -> :corrupt
+          object -> {:ok, object}
+        end
+
+      {:error, :enoent} ->
+        :not_found
 
       {:error, _reason} ->
-        nil
+        :corrupt
     end
   end
 
-  defp read_loose_object(_repo, _sha), do: nil
+  defp read_loose_object(_repo, _sha), do: :not_found
 
   defp read_packed_object(repo, sha) when is_binary(sha) and byte_size(sha) == 40 do
     case find_packed(packs(repo), sha) do

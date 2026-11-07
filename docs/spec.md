@@ -1630,6 +1630,11 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_PROPOSAL_MAX_FILES` | no | `200` | Max changed files listed on a public proposal page |
 | `CAD_SCAN_MAX_FILES` | no | `10000` | Max files scanned for secret quarantine |
 | `CAD_SCAN_MAX_BYTES` | no | `16777216` | Max snapshot bytes scanned for secret quarantine |
+| `CAD_REPACK_ENABLED` | no | `true` | Server repo repacking (pack + deferred loose sweep) |
+| `CAD_REPACK_MIN_OBJECTS` | no | `1000` | On-disk loose objects that trigger a repack |
+| `CAD_REPACK_MIN_BYTES` | no | `67108864` | On-disk loose object bytes (compressed) that trigger a repack |
+| `CAD_REPACK_INTERVAL_MS` | no | `21600000` | Repack backstop interval and push-trigger failure cooldown (`0` disables both) |
+| `CAD_REPACK_MAX_PACK_BYTES` | no | `67108864` | Max uncompressed input bytes per packfile (larger sets are split) |
 | `CAD_MELD_TIMEOUT_MS` | no | `60000` | Timeout per meld agent attempt (a synchronous union can take `(retries + 1) × timeout + backoff`) |
 | `CAD_MELD_RATE_LIMIT` | no | `5` | Meld agent calls per server rate window |
 | `CAD_MELD_RATE_SCALE` | no | `60000` | Meld rate window in milliseconds |
@@ -1916,11 +1921,18 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   `pack_objects/3` verifies every object and renames atomically, and a shared
   ETS cache avoids re-parsing an index per object. 7a never repacks
   automatically and never deletes loose objects (§15).
-- 7b — server repacker: threshold after a successful push (default 1,000 loose
-  objects or 64 MiB per project), a 6 h backstop sweep, a manual
-  `mix cadence.repack`, one run per project, and deferred loose deletion — a
-  later sweep re-verifies the pack before unlinking (OTP cannot fsync a
-  directory, so the run that writes the pack never deletes).
+- 7b — server repacker (shipped): threshold after a successful push (default
+  1,000 on-disk loose objects or 64 MiB per project), a 6 h backstop sweep, a
+  manual `mix cadence.repack`, one run per project (queue + transaction-scoped
+  advisory lock), and deferred loose deletion — a run first re-verifies every
+  covered SHA through the pack and unlinks loose copies, then packs the rest;
+  the run that writes a pack never deletes (OTP cannot fsync a directory). A
+  failed pack leaves loose objects intact, an unreadable loose object is never
+  deleted, and nothing prunes history or unreachable objects (§15, §16).
+  Batches are bounded by input bytes so only one batch is resident at a time;
+  crash-left temp files and final-named packs without an index are swept; pack
+  + loose coexist until the next verified run (at most one interval), so
+  deployments must budget transient 2× object storage.
 - 7c — sync object negotiation: `POST /sync/objects/exists` answers which SHAs
   the server holds; the daemon omits them from `git_objects` and falls back to
   a full push on any handshake failure (§10.2, §10.6).
@@ -2116,7 +2128,13 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       deleted only in a later sweep, after the pack containing it is verified
       present and readable (the writing run never deletes, because OTP cannot
       fsync a directory); unreachable objects and history are never pruned
-      (§15).
+      (§15). Implemented in 7b (`Cadence.Server.Storage` + `Storage.Repacker`):
+      the threshold counts on-disk loose objects and bytes, the queue is
+      process-local and the cross-node/CLI fence is a transaction-scoped
+      Postgres advisory lock, and a failed push-triggered run cools down for one
+      interval. Residual: no pack consolidation/multi-pack index (each run adds
+      packs) and no run timeout (a run holds one pooled connection for its
+      duration).
 - [ ] **Parents `uuid[]` → edges migration threshold:** when the materialized
       parent array should become a separate edge table. Independent of the
       storage repack trigger above.

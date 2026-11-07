@@ -2,8 +2,8 @@
 
 **Spec:** §13 Phase 7, §15 (principles 1/5/7), §10.2/§10.6 (push + wire
 format), §12.6 (env contract), §16 ("Storage repack trigger").
-**Status:** 7a is complete (2026-11-07). 7b (repacker) and 7c (existence
-handshake) are planned but not implemented.
+**Status:** 7a and 7b are complete (2026-11-07). 7c (existence handshake) is
+planned but not implemented.
 
 ## Goal
 
@@ -63,7 +63,7 @@ Shipped as `GitStore.Pack`, `GitStore.Pack.Index`, `GitStore.Pack.Delta`,
 loose-first; the cache validates each pack's trailer against its index and
 skips a mismatched pair. 54 new shared tests; 994 total green (306 shared + 188 daemon + 500 server).
 
-### 7b — server repacker job
+### 7b — server repacker job (shipped 2026-11-07)
 
 - `Cadence.Server.Storage` + `Repacker` (supervised `GenServer` or `Task` under
   a dedicated supervisor) with bounded concurrency (1 per project, small global
@@ -85,6 +85,27 @@ skips a mismatched pair. 54 new shared tests; 994 total green (306 shared + 188 
   (split oversized sets), following the decision below.
 - Metrics/logs are shape-only (pack name, object count, bytes, delta ratio);
   no object content is logged.
+
+Shipped as `Cadence.Server.Storage` (`stats/1`, `run_if_needed/1`, `run/2`,
+`maybe_repack/1`, `project_ids/0`), `Storage.Repacker` (single-worker queue,
+push dedupe, failure cooldown, 6 h backstop), `Storage.TaskSupervisor`,
+`GitStore.verify_packed/2` (pack-only read + re-hash), the
+`Sync.push_nodes/2` post-commit trigger, and `mix cadence.repack
+[--project <id|slug>]`. A run is: remove crash-left `tmp-*` pairs and
+final-named packs with no index once they are older than a 5 min grace (a
+rename in flight is never mistaken for debris) → for every loose object covered
+by a usable pack, verify through the pack and unlink (unlink failures are
+counted and logged) → pack the remaining loose objects, reading **loose files
+only**, re-hashing them against their SHA, and in `CAD_REPACK_MAX_PACK_BYTES`
+batches so peak memory is bounded. The threshold counts on-disk loose
+objects/bytes (so the run after a pack writes is the sweep that deletes them);
+the lock is transaction-scoped so a crashed run cannot leak it; an unreadable
+loose object is skipped and never deleted, and a failed pack leaves every loose
+copy in place. Tests:
+`apps/cadence_server/test/storage_repacker_test.exs` (+ a push-wiring case in
+`sync_nodes_test.exs`) and `git_store_test.exs`. Config:
+`CAD_REPACK_ENABLED`, `CAD_REPACK_MIN_OBJECTS`, `CAD_REPACK_MIN_BYTES`,
+`CAD_REPACK_INTERVAL_MS`, `CAD_REPACK_MAX_PACK_BYTES` (§12.6).
 
 ### 7c — sync existence handshake
 

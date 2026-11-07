@@ -12,6 +12,8 @@ defmodule Cadence.Server.Application do
       Cadence.Server.LLMRateLimit,
       Cadence.Server.MeldWorker,
       Cadence.Server.Actions.TaskSupervisor,
+      Cadence.Server.Storage.TaskSupervisor,
+      Cadence.Server.Storage.Repacker,
       Cadence.ServerWeb.Endpoint
     ]
 

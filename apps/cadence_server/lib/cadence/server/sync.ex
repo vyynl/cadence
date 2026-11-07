@@ -13,7 +13,7 @@ defmodule Cadence.Server.Sync do
 
   import Ecto.Query
 
-  alias Cadence.Server.{Melds, NodeScans, ProjectGit, Repo, SyncNotifier}
+  alias Cadence.Server.{Melds, NodeScans, ProjectGit, Repo, Storage, SyncNotifier}
   alias Cadence.Shared.{GitStore, Membership, Node, Project, UUID}
   alias Cadence.Shared.Sync.NodeCodec
 
@@ -39,6 +39,8 @@ defmodule Cadence.Server.Sync do
       NodeScans.scan_nodes(project_id, created_nodes)
       broadcast(project_id, Enum.map(mappings, & &1.cloud_id))
       SyncNotifier.project_changed(project_id)
+      # Storage maintenance is async and threshold-gated (spec §13 Phase 7b).
+      Storage.maybe_repack(project_id)
       {:ok, %{mappings: mappings}}
     end
   end

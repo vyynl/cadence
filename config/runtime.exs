@@ -136,6 +136,12 @@ if config_env() != :test do
     proposal_max_files: String.to_integer(System.get_env("CAD_PROPOSAL_MAX_FILES", "200")),
     scan_max_files: String.to_integer(System.get_env("CAD_SCAN_MAX_FILES", "10000")),
     scan_max_bytes: String.to_integer(System.get_env("CAD_SCAN_MAX_BYTES", "16777216")),
+    repack_enabled: System.get_env("CAD_REPACK_ENABLED", "true") == "true",
+    repack_min_objects: String.to_integer(System.get_env("CAD_REPACK_MIN_OBJECTS", "1000")),
+    repack_min_bytes: String.to_integer(System.get_env("CAD_REPACK_MIN_BYTES", "67108864")),
+    repack_interval_ms: String.to_integer(System.get_env("CAD_REPACK_INTERVAL_MS", "21600000")),
+    repack_max_pack_bytes:
+      String.to_integer(System.get_env("CAD_REPACK_MAX_PACK_BYTES", "67108864")),
     meld_timeout_ms: String.to_integer(System.get_env("CAD_MELD_TIMEOUT_MS", "60000")),
     meld_rate_limit: String.to_integer(System.get_env("CAD_MELD_RATE_LIMIT", "5")),
     meld_rate_scale: String.to_integer(System.get_env("CAD_MELD_RATE_SCALE", "60000")),
