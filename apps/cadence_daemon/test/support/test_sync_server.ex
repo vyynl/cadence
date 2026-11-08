@@ -16,8 +16,13 @@ defmodule Cadence.Daemon.TestSyncServer do
         preferences: %{},
         next_seq: 1,
         next_failure: nil,
+        next_push_failure: nil,
         next_node_failure: nil,
-        last_union: nil
+        last_union: nil,
+        present: MapSet.new(),
+        exists_calls: 0,
+        push_calls: 0,
+        reject_empty_push: false
       }
     end)
   end
@@ -30,6 +35,11 @@ defmodule Cadence.Daemon.TestSyncServer do
   @doc "Makes the next request fail with `status`/`body`."
   def fail_next(server, status, body \\ %{"error" => "forced failure"}) do
     Agent.update(server, &%{&1 | next_failure: {status, body}})
+  end
+
+  @doc "Makes the next `/sync/nodes` request fail with `status`/`body`."
+  def fail_next_push(server, status, body \\ %{"error" => "forced failure"}) do
+    Agent.update(server, &%{&1 | next_push_failure: {status, body}})
   end
 
   @doc "Makes the next push containing `node_id` fail with `status`/`body`."
@@ -71,6 +81,27 @@ defmodule Cadence.Daemon.TestSyncServer do
 
   @doc "Returns the last `/sync/union` request body, or `nil`."
   def last_union(server), do: Agent.get(server, & &1.last_union)
+
+  @doc "Marks `shas` as already held by the fake server."
+  def set_present(server, shas) when is_list(shas) do
+    Agent.update(server, &%{&1 | present: MapSet.new(shas)})
+  end
+
+  @doc "Number of `/sync/objects/exists` requests received."
+  def exists_calls(server), do: Agent.get(server, & &1.exists_calls)
+
+  @doc "Number of `/sync/nodes` requests received."
+  def push_calls(server), do: Agent.get(server, & &1.push_calls)
+
+  @doc """
+  Makes the next push with any empty `git_objects` list fail with 422.
+
+  Models a real server whose `ensure_complete/2` rejects a node after a stale
+  handshake answer. The flag is cleared by that push attempt.
+  """
+  def reject_empty_push_once(server) do
+    Agent.update(server, &%{&1 | reject_empty_push: true})
+  end
 
   defp handle(server, conn) do
     case take_failure(server) do
@@ -145,15 +176,51 @@ defmodule Cadence.Daemon.TestSyncServer do
     end
   end
 
+  defp route(server, %{method: "POST", request_path: "/sync/objects/exists"} = conn) do
+    params = conn.body_params
+    project_id = params["project_id"]
+    shas = params["shas"]
+
+    cond do
+      not is_list(shas) ->
+        json(conn, 422, %{"error" => "invalid sync payload"})
+
+      not known_project?(server, project_id) ->
+        json(conn, 404, %{"error" => "project not found"})
+
+      true ->
+        present =
+          Agent.get_and_update(server, fn state ->
+            present = Enum.filter(shas, &MapSet.member?(state.present, &1))
+            {present, %{state | exists_calls: state.exists_calls + 1}}
+          end)
+
+        json(conn, 200, %{present: present})
+    end
+  end
+
   defp route(server, %{method: "POST", request_path: "/sync/nodes"} = conn) do
     nodes = conn.body_params["nodes"] || []
+    Agent.update(server, &%{&1 | push_calls: &1.push_calls + 1})
 
-    case take_node_failure(server, nodes) do
-      {status, body, node_id} ->
-        json(conn, status, Map.put(body, "failed_local_id", node_id))
+    case take_push_failure(server) do
+      {status, body} ->
+        json(conn, status, body)
 
       nil ->
-        push_nodes(server, conn, nodes)
+        case take_node_failure(server, nodes) do
+          {status, body, node_id} ->
+            json(conn, status, Map.put(body, "failed_local_id", node_id))
+
+          nil ->
+            case take_empty_push_rejection(server, nodes) do
+              {status, body, node_id} ->
+                json(conn, status, Map.put(body, "failed_local_id", node_id))
+
+              nil ->
+                push_nodes(server, conn, nodes)
+            end
+        end
     end
   end
 
@@ -234,7 +301,8 @@ defmodule Cadence.Daemon.TestSyncServer do
 
   defp push_nodes(server, conn, nodes) do
     with [project_id] <- nodes |> Enum.map(&get_in(&1, ["metadata", "project_id"])) |> Enum.uniq(),
-         true <- known_project?(server, project_id) do
+         true <- known_project?(server, project_id),
+         :ok <- objects_available?(server, nodes) do
       mappings =
         Agent.get_and_update(server, fn state ->
           {state, mappings} =
@@ -260,10 +328,52 @@ defmodule Cadence.Daemon.TestSyncServer do
 
       json(conn, 200, %{mappings: mappings})
     else
-      [] -> json(conn, 422, %{"error" => "empty batch"})
-      false -> json(conn, 404, %{"error" => "project not found"})
-      _ -> json(conn, 422, %{"error" => "mixed projects"})
+      [] ->
+        json(conn, 422, %{"error" => "empty batch"})
+
+      false ->
+        json(conn, 404, %{"error" => "project not found"})
+
+      {:missing_object, node_id} ->
+        json(conn, 422, %{
+          "error" => "commit object missing from push",
+          "failed_local_id" => node_id
+        })
+
+      _ ->
+        json(conn, 422, %{"error" => "mixed projects"})
     end
+  end
+
+  # A real server re-walks every commit, so an omitted commit it does not hold
+  # is a 422 even when the rest of the node looks fine.
+  defp objects_available?(server, nodes) do
+    present = Agent.get(server, & &1.present)
+
+    case Enum.find(nodes, fn node ->
+           Map.get(node, "git_objects", []) == [] and
+             not MapSet.member?(present, get_in(node, ["metadata", "git_commit_sha"]))
+         end) do
+      nil -> :ok
+      node -> {:missing_object, node["local_id"]}
+    end
+  end
+
+  defp take_empty_push_rejection(server, nodes) do
+    Agent.get_and_update(server, fn state ->
+      if state.reject_empty_push do
+        case Enum.find(nodes, &(&1["git_objects"] == [])) do
+          nil ->
+            {nil, %{state | reject_empty_push: false}}
+
+          node ->
+            {{422, %{"error" => "commit object missing from push"}, node["local_id"]},
+             %{state | reject_empty_push: false}}
+        end
+      else
+        {nil, state}
+      end
+    end)
   end
 
   defp take_node_failure(server, nodes) do
@@ -285,6 +395,12 @@ defmodule Cadence.Daemon.TestSyncServer do
   defp take_failure(server) do
     Agent.get_and_update(server, fn state ->
       {state.next_failure, %{state | next_failure: nil}}
+    end)
+  end
+
+  defp take_push_failure(server) do
+    Agent.get_and_update(server, fn state ->
+      {state.next_push_failure, %{state | next_push_failure: nil}}
     end)
   end
 

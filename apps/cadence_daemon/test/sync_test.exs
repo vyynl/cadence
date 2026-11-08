@@ -96,6 +96,186 @@ defmodule Cadence.Daemon.SyncTest do
     assert length(Nodes.list(project.id)) == 1
   end
 
+  describe "existence handshake" do
+    test "push omits objects the server already holds", %{
+      project: project,
+      work_dir: work_dir,
+      git_dir: git_dir,
+      server: server
+    } do
+      queue = start_queue(project, work_dir, git_dir)
+      {:ok, node} = commit(queue, work_dir, "first")
+      assert eventually(fn -> pending?(project.id, node.id) end)
+
+      TestSyncServer.set_present(server, object_shas(git_dir, node.git_commit_sha))
+      configure_sync()
+
+      assert :ok = Sync.sync(project.id)
+
+      assert [wire] = TestSyncServer.nodes(server)
+      assert wire["id"] == node.id
+      assert wire["git_objects"] == []
+      assert wire["message"] == "first"
+      assert TestSyncServer.exists_calls(server) == 1
+      assert TestSyncServer.push_calls(server) == 1
+    end
+
+    test "an empty present set leaves the push unchanged", %{
+      project: project,
+      work_dir: work_dir,
+      git_dir: git_dir,
+      server: server
+    } do
+      queue = start_queue(project, work_dir, git_dir)
+      {:ok, node} = commit(queue, work_dir, "first")
+      assert eventually(fn -> pending?(project.id, node.id) end)
+
+      configure_sync()
+      assert :ok = Sync.sync(project.id)
+
+      assert [wire] = TestSyncServer.nodes(server)
+      assert wire["id"] == node.id
+      assert wire["git_objects"] != []
+      assert TestSyncServer.exists_calls(server) == 1
+    end
+
+    test "a handshake failure falls back to a full push", %{
+      project: project,
+      work_dir: work_dir,
+      git_dir: git_dir,
+      server: server
+    } do
+      queue = start_queue(project, work_dir, git_dir)
+      {:ok, node} = commit(queue, work_dir, "first")
+      assert eventually(fn -> pending?(project.id, node.id) end)
+
+      configure_sync()
+      assert :ok = Sync.ensure_project(project.id)
+      TestSyncServer.fail_next(server, 503)
+
+      assert :ok = Sync.sync(project.id)
+
+      # The failed request never reached the exists route.
+      assert TestSyncServer.exists_calls(server) == 0
+      assert [wire] = TestSyncServer.nodes(server)
+      assert wire["id"] == node.id
+      assert wire["git_objects"] != []
+      assert TestSyncServer.push_calls(server) == 1
+    end
+
+    test "a 422 on a filtered push retries once with every object", %{
+      project: project,
+      work_dir: work_dir,
+      git_dir: git_dir,
+      server: server
+    } do
+      queue = start_queue(project, work_dir, git_dir)
+      {:ok, node} = commit(queue, work_dir, "first")
+      assert eventually(fn -> pending?(project.id, node.id) end)
+
+      full = object_shas(git_dir, node.git_commit_sha)
+      TestSyncServer.set_present(server, full)
+      TestSyncServer.reject_empty_push_once(server)
+      configure_sync()
+
+      assert :ok = Sync.sync(project.id)
+
+      assert TestSyncServer.push_calls(server) == 2
+      assert [wire] = TestSyncServer.nodes(server)
+      assert wire["id"] == node.id
+      assert Enum.sort(Enum.map(wire["git_objects"], & &1["sha"])) == Enum.sort(full)
+    end
+
+    test "a filtered push that fails with a 5xx is not retried", %{
+      project: project,
+      work_dir: work_dir,
+      git_dir: git_dir,
+      server: server
+    } do
+      queue = start_queue(project, work_dir, git_dir)
+      {:ok, node} = commit(queue, work_dir, "first")
+      assert eventually(fn -> pending?(project.id, node.id) end)
+
+      TestSyncServer.set_present(server, object_shas(git_dir, node.git_commit_sha))
+      configure_sync()
+      assert :ok = Sync.ensure_project(project.id)
+      TestSyncServer.fail_next_push(server, 500)
+
+      assert {:error, {:http, 500, _body}} = Sync.push_pending(project.id)
+      assert TestSyncServer.push_calls(server) == 1
+      assert pending?(project.id, node.id)
+    end
+
+    test "filters per object, not per node", %{
+      project: project,
+      work_dir: work_dir,
+      git_dir: git_dir,
+      server: server
+    } do
+      queue = start_queue(project, work_dir, git_dir)
+      {:ok, node} = commit(queue, work_dir, "first")
+      assert eventually(fn -> pending?(project.id, node.id) end)
+
+      objects = node_objects(git_dir, node.git_commit_sha)
+      blob = Enum.find(objects, &(&1.type == :blob))
+      TestSyncServer.set_present(server, [blob.sha])
+      configure_sync()
+
+      assert :ok = Sync.sync(project.id)
+
+      assert [wire] = TestSyncServer.nodes(server)
+      sent = Enum.map(wire["git_objects"], & &1["sha"])
+      refute blob.sha in sent
+      assert node.git_commit_sha in sent
+      assert length(sent) == length(objects) - 1
+    end
+
+    test "a non-positive local cap disables the handshake", %{
+      project: project,
+      work_dir: work_dir,
+      git_dir: git_dir,
+      server: server
+    } do
+      Application.put_env(:cadence_daemon, :sync_exists_limit, 0)
+
+      queue = start_queue(project, work_dir, git_dir)
+      {:ok, node} = commit(queue, work_dir, "first")
+      assert eventually(fn -> pending?(project.id, node.id) end)
+
+      TestSyncServer.set_present(server, object_shas(git_dir, node.git_commit_sha))
+      configure_sync()
+
+      assert :ok = Sync.sync(project.id)
+
+      assert TestSyncServer.exists_calls(server) == 0
+      assert [wire] = TestSyncServer.nodes(server)
+      assert wire["git_objects"] != []
+    end
+
+    test "chunks requests under the local cap", %{
+      project: project,
+      work_dir: work_dir,
+      git_dir: git_dir,
+      server: server
+    } do
+      Application.put_env(:cadence_daemon, :sync_exists_limit, 2)
+
+      queue = start_queue(project, work_dir, git_dir)
+      {:ok, node} = commit(queue, work_dir, "first")
+      assert eventually(fn -> pending?(project.id, node.id) end)
+
+      shas = object_shas(git_dir, node.git_commit_sha)
+      TestSyncServer.set_present(server, shas)
+      configure_sync()
+
+      assert :ok = Sync.sync(project.id)
+
+      assert TestSyncServer.exists_calls(server) == div(length(shas) + 1, 2)
+      assert [wire] = TestSyncServer.nodes(server)
+      assert wire["git_objects"] == []
+    end
+  end
+
   test "pull imports a remote DAG into a clean local store", %{
     project: project,
     git_dir: git_dir,
@@ -578,7 +758,7 @@ defmodule Cadence.Daemon.SyncTest do
     configure_sync()
     assert :ok = Sync.ensure_project(project.id)
 
-    TestSyncServer.fail_next(server, 500)
+    TestSyncServer.fail_next_push(server, 500)
 
     assert {:error, {:http, 500, %{"error" => "forced failure"}}} =
              Sync.push_pending(project.id)
@@ -606,7 +786,7 @@ defmodule Cadence.Daemon.SyncTest do
     configure_sync()
     assert :ok = Sync.ensure_project(project.id)
 
-    TestSyncServer.fail_next(server, 422, %{
+    TestSyncServer.fail_next_push(server, 422, %{
       "error" => "node failed",
       "failed_local_id" => Ecto.UUID.generate()
     })
@@ -706,7 +886,8 @@ defmodule Cadence.Daemon.SyncTest do
         :sync_enabled,
         :sync_req_options,
         :sync_request_timeout_ms,
-        :sync_channel_enabled
+        :sync_channel_enabled,
+        :sync_exists_limit
       ],
       &Application.delete_env(:cadence_daemon, &1)
     )
@@ -721,6 +902,16 @@ defmodule Cadence.Daemon.SyncTest do
   defp commit(queue, work_dir, message) do
     File.write!(Path.join(work_dir, "a.txt"), "#{message}\n")
     CommitQueue.commit(queue, message)
+  end
+
+  defp object_shas(git_dir, commit_sha) do
+    git_dir |> node_objects(commit_sha) |> Enum.map(& &1.sha)
+  end
+
+  defp node_objects(git_dir, commit_sha) do
+    git = GitStore.open(git_dir, bare: true)
+    {:ok, objects} = GitStore.objects_from(git, commit_sha)
+    objects
   end
 
   defp pending_ids(project_id) do

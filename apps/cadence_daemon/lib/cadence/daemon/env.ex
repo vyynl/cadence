@@ -122,6 +122,19 @@ defmodule Cadence.Daemon.Env do
     Application.get_env(:cadence_daemon, :sync_push_limit, 100)
   end
 
+  @doc """
+  Maximum SHAs sent in one existence-handshake request.
+
+  The daemon splits a batch's unique SHAs into chunks of this size and asks the
+  server once per chunk. The server enforces the same cap per request, so a
+  daemon value larger than the server's makes the handshake fall back to a full
+  push. A non-positive value disables the handshake.
+  """
+  @spec sync_exists_limit() :: pos_integer()
+  def sync_exists_limit do
+    Application.get_env(:cadence_daemon, :sync_exists_limit, 5_000)
+  end
+
   @doc "Extra `Req` options for sync HTTP calls (tests inject `Req.Test`)."
   @spec sync_req_options() :: keyword()
   def sync_req_options do

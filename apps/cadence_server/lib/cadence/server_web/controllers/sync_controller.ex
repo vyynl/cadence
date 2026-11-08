@@ -38,6 +38,13 @@ defmodule Cadence.ServerWeb.SyncController do
     end
   end
 
+  def objects_exist(conn, _params) do
+    case Sync.objects_exist(conn.assigns.current_user, conn.body_params) do
+      {:ok, response} -> json(conn, 200, response)
+      {:error, reason} -> error(conn, reason)
+    end
+  end
+
   def push_preferences(conn, _params) do
     case Sync.push_preferences(conn.assigns.current_user, conn.body_params) do
       {:ok, response} -> json(conn, 200, response)
@@ -134,6 +141,8 @@ defmodule Cadence.ServerWeb.SyncController do
   defp message(:missing_commit), do: "commit object missing from push"
   defp message(:invalid_objects), do: "invalid git objects"
   defp message({:invalid_objects, _reason}), do: "invalid git objects"
+  defp message(:invalid_sha), do: "invalid object sha"
+  defp message(:too_many_shas), do: "too many object shas"
   defp message(:object_store_incomplete), do: "server object store is incomplete"
   defp message(:invalid_node), do: "invalid node metadata"
   defp message(:invalid_flag), do: "invalid flag"

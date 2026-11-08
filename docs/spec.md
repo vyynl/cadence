@@ -1246,6 +1246,17 @@ or `config/`.
   from an owner/trusted member succeed.
 - Push: `POST /sync/nodes` with a batch of new local nodes (Git objects +
   metadata). A batch is scoped to one project and must be parents-first.
+- Negotiate (optional): before a push the daemon may call
+  `POST /sync/objects/exists` with the batch's unique object SHAs. The server
+  answers the subset it already holds (loose objects plus pack indexes) and the
+  daemon omits them from each node's `git_objects`; metadata is always sent. Any
+  handshake failure (timeout, 5xx, 429, an older server's 404) falls back to the
+  current full push. A 422 on a filtered push is treated as a stale answer: the
+  daemon resends the batch once with every object. `ensure_complete/2` remains
+  the authority, so an omitted object the server lacks is a 422, never
+  corruption. Requests are capped by `CAD_SYNC_EXISTS_LIMIT`; the daemon splits
+  a batch's unique SHAs into capped chunks and unions the answers, abandoning
+  the handshake for the whole batch if any chunk fails.
 - The daemon's local node UUID is the cloud node ID; `PushNodesResponse`
   returns identity `{local_id, cloud_id}` mappings. This makes retries
   idempotent.
@@ -1340,6 +1351,20 @@ SyncMessage.PushNodes metadata
   project_id, git_commit_sha, parents, flags, message, session_metadata,
   created_at, docs_state, pinned
   # created_by is server-owned (the authenticated user)
+
+SyncMessage.ObjectsExists
+  project_id: uuid
+  shas: [40hex]                       # unique, ≤ CAD_SYNC_EXISTS_LIMIT per request
+  # Bearer PAT; owner/trusted only. Unknown project 404, non-member/viewer 403,
+  # malformed or over-cap payload 422 (`invalid object sha` /
+  # `too many object shas`). Answered from loose files plus pack indexes in one
+  # pass, not one lookup per SHA. The daemon chunks a batch's unique SHAs and
+  # unions the answers.
+
+SyncMessage.ObjectsExistsResponse
+  present: [40hex]                    # subset of `shas`, input order, deduped
+  # Any handshake failure is non-fatal: the daemon sends every object. A 422 on
+  # a handshake-filtered push triggers one full-object retry.
 
 SyncMessage.PushPreferences
   membership: %{project_id, active_heads, session_pointer, updated_at}
@@ -1622,6 +1647,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_DB_POOL_SIZE` | no | `10` | Ecto pool |
 | `CAD_GIT_STORE_PATH` | no | `/data/git` | Git object storage |
 | `CAD_SYNC_PULL_LIMIT` | no | `100` | Max nodes returned per pull batch |
+| `CAD_SYNC_EXISTS_LIMIT` | no | `5000` | Max SHAs per existence-handshake request (server cap; the daemon chunks at its own value, which should not exceed this) |
 | `CAD_DAG_INTRO_MS` | no | `1200` | First-load DAG/repo intro animation duration |
 | `CAD_FILE_MAX_BYTES` | no | `524288` | Max bytes rendered in the public file viewer |
 | `CAD_FILE_MAX_LINES` | no | `2000` | Max lines rendered in the public file viewer |
@@ -1699,6 +1725,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_SYNC_RETRY_BACKOFF_MS` | no | `30000` | Base retry delay for failed sync operations |
 | `CAD_SYNC_MAX_ATTEMPTS` | no | `10` | Max automatic retries for a pending node |
 | `CAD_SYNC_PUSH_LIMIT` | no | `100` | Max nodes per push batch |
+| `CAD_SYNC_EXISTS_LIMIT` | no | `5000` | Existence-handshake chunk size (keep at or below the server's cap) |
 | `CAD_IGNORE` | no | `_build,deps,node_modules,.venv,venv,__pycache__,.elixir_ls,target` | Comma-separated entry names skipped when snapshotting the working tree (`.git` is always skipped) |
 | `CAD_LLM_TIMEOUT_MS` | no | `5000` | LLM request timeout |
 | `CAD_LLM_RATE_LIMIT` | no | `10` | LLM calls per rate window |
@@ -1933,9 +1960,12 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   crash-left temp files and final-named packs without an index are swept; pack
   + loose coexist until the next verified run (at most one interval), so
   deployments must budget transient 2× object storage.
-- 7c — sync object negotiation: `POST /sync/objects/exists` answers which SHAs
-  the server holds; the daemon omits them from `git_objects` and falls back to
-  a full push on any handshake failure (§10.2, §10.6).
+- 7c — sync object negotiation (shipped): `POST /sync/objects/exists` answers
+  which SHAs the server holds from loose objects plus pack indexes; the daemon
+  omits them from `git_objects`, falls back to a full push on any handshake
+  failure, and retries once with every object if a filtered push 422s. Over-cap
+  requests are refused by the server and skipped by the daemon
+  (§10.2, §10.6, §12.6).
 
 ---
 

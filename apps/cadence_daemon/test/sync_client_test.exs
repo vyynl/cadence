@@ -234,6 +234,33 @@ defmodule Cadence.Daemon.SyncClientTest do
              {:error, {:http, 403, %{"error" => "insufficient project role"}}}
   end
 
+  test "objects_exist/2 posts the batch and returns the present subset" do
+    configure()
+    project_id = Ecto.UUID.generate()
+    shas = [String.duplicate("a", 40), String.duplicate("b", 40)]
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      assert conn.method == "POST"
+      assert conn.request_path == "/sync/objects/exists"
+      assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer #{@token}"]
+      assert conn.body_params == %{"project_id" => project_id, "shas" => shas}
+
+      Req.Test.json(conn, %{present: [hd(shas)]})
+    end)
+
+    assert SyncClient.objects_exist(project_id, shas) == {:ok, [hd(shas)]}
+  end
+
+  test "objects_exist/2 rejects a malformed response" do
+    configure()
+    sha = String.duplicate("a", 40)
+
+    Req.Test.stub(__MODULE__, fn conn -> Req.Test.json(conn, %{present: [1]}) end)
+
+    assert SyncClient.objects_exist(Ecto.UUID.generate(), [sha]) ==
+             {:error, {:invalid_response, %{"present" => [1]}}}
+  end
+
   defp configure do
     Application.put_env(:cadence_daemon, :server_url, "https://cadence.test")
     Application.put_env(:cadence_daemon, :auth_token, @token)

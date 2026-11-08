@@ -48,6 +48,40 @@ defmodule Cadence.Server.Sync do
   def push_nodes(_user, _params), do: {:error, :invalid_payload}
 
   @doc """
+  Answers which of `shas` the project's object store already holds (spec §10.2,
+  §10.6).
+
+  The caller must be an `:owner`/`:trusted` member. Answers from loose files and
+  pack indexes in one pass (`GitStore.present_shas/2`), not one lookup per SHA.
+  Invalid SHAs are refused rather than silently reported absent; the request is
+  capped by `CAD_SYNC_EXISTS_LIMIT`.
+  """
+  @spec objects_exist(user(), map()) :: {:ok, %{present: [String.t()]}} | {:error, term()}
+  def objects_exist(user, %{"project_id" => project_id, "shas" => shas})
+      when is_list(shas) do
+    with {:ok, project_id} <- uuid(project_id),
+         {:ok, _membership} <- authorize_membership(user, project_id),
+         {:ok, shas} <- parse_shas(shas) do
+      store = ProjectGit.open(project_id)
+      {:ok, %{present: GitStore.present_shas(store, shas)}}
+    end
+  end
+
+  def objects_exist(_user, _params), do: {:error, :invalid_payload}
+
+  defp parse_shas(shas) do
+    limit = Application.get_env(:cadence_server, :sync_exists_limit, 5_000)
+
+    cond do
+      length(shas) > limit -> {:error, :too_many_shas}
+      Enum.all?(shas, &valid_sha?/1) -> {:ok, Enum.uniq(shas)}
+      true -> {:error, :invalid_sha}
+    end
+  end
+
+  defp valid_sha?(sha), do: is_binary(sha) and Regex.match?(~r/^[0-9a-f]{40}$/, sha)
+
+  @doc """
   Requests a meld proposal for `parent_node_ids` (spec §6.5, §10.6).
 
   Synchronous: `Melds.propose/3` may call the meld model, so the caller's HTTP

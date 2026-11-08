@@ -55,7 +55,8 @@ if config_env() != :test do
     sync_retry_backoff_ms:
       String.to_integer(System.get_env("CAD_SYNC_RETRY_BACKOFF_MS", "30000")),
     sync_max_attempts: String.to_integer(System.get_env("CAD_SYNC_MAX_ATTEMPTS", "10")),
-    sync_push_limit: String.to_integer(System.get_env("CAD_SYNC_PUSH_LIMIT", "100"))
+    sync_push_limit: String.to_integer(System.get_env("CAD_SYNC_PUSH_LIMIT", "100")),
+    sync_exists_limit: String.to_integer(System.get_env("CAD_SYNC_EXISTS_LIMIT", "5000"))
 
   config :cadence_daemon,
     docs_enabled: System.get_env("CAD_DOCS_ENABLED", "true") == "true",
@@ -128,6 +129,7 @@ if config_env() != :test do
     token_signing_secret: System.get_env("CAD_TOKEN_SIGNING_SECRET") || secret_key_base,
     git_store_path: git_store_path,
     sync_pull_limit: String.to_integer(System.get_env("CAD_SYNC_PULL_LIMIT", "100")),
+    sync_exists_limit: String.to_integer(System.get_env("CAD_SYNC_EXISTS_LIMIT", "5000")),
     dag_intro_ms: String.to_integer(System.get_env("CAD_DAG_INTRO_MS", "1200")),
     file_max_bytes: String.to_integer(System.get_env("CAD_FILE_MAX_BYTES", "524288")),
     file_max_lines: String.to_integer(System.get_env("CAD_FILE_MAX_LINES", "2000")),

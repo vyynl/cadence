@@ -439,44 +439,100 @@ defmodule Cadence.Daemon.Sync do
 
   defp push_batch(project_id, nodes) do
     with {:ok, git} <- NodeStore.open(project_id),
-         {:ok, payload} <- encode_push_nodes(git, nodes),
-         {:ok, %{mappings: mappings}} <- SyncClient.push(payload) do
-      pending_ids = MapSet.new(nodes, & &1.id)
-
-      pushed_ids =
-        mappings
-        |> Enum.flat_map(&mapping_id/1)
-        |> Enum.filter(&MapSet.member?(pending_ids, &1))
-        |> Enum.uniq()
-
-      # Stamp the SHA that was actually sent: the node may have changed while
-      # the push was in flight (e.g. a docs job completed).
-      sha_by_id = Map.new(nodes, &{&1.id, &1.git_commit_sha})
-      pushed = Enum.map(pushed_ids, &{&1, Map.fetch!(sha_by_id, &1)})
-
-      :ok = SyncLedger.mark_pushed(pushed)
-      {:ok, length(pushed)}
+         {:ok, entries} <- load_node_objects(git, nodes) do
+      present = present_objects(project_id, entries)
+      push_encoded(nodes, entries, present, MapSet.size(present) > 0)
     end
   end
 
-  defp encode_push_nodes(git, nodes) do
+  # Anything the server already holds is omitted from `git_objects`; metadata is
+  # always sent (spec §10.2). A 422 on a filtered push means the answer raced or
+  # was stale: retry once with every object so the normal node error, if any,
+  # still surfaces.
+  defp push_encoded(nodes, entries, present, filtered?) do
+    case SyncClient.push(encode_push_nodes(entries, present)) do
+      {:ok, %{mappings: mappings}} ->
+        record_pushed(nodes, mappings)
+
+      {:error, {:http, 422, _body}} when filtered? ->
+        case SyncClient.push(encode_push_nodes(entries, MapSet.new())) do
+          {:ok, %{mappings: mappings}} -> record_pushed(nodes, mappings)
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp load_node_objects(git, nodes) do
     nodes
     |> Enum.reduce_while({:ok, []}, fn node, {:ok, acc} ->
       case GitStore.objects_from(git, node.git_commit_sha) do
         {:ok, objects} ->
-          {:cont, {:ok, [encode_push_node(node, objects) | acc]}}
+          {:cont, {:ok, [%{node: node, objects: objects} | acc]}}
 
         {:error, reason} ->
           {:halt, {:error, {:objects, node.id, reason}}}
       end
     end)
     |> case do
-      {:ok, nodes} -> {:ok, Enum.reverse(nodes)}
+      {:ok, entries} -> {:ok, Enum.reverse(entries)}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp encode_push_node(node, objects) do
+  # The handshake is an optimization only. Requests are chunked under
+  # `CAD_SYNC_EXISTS_LIMIT`; if any chunk fails (timeout, 5xx, 429, an older
+  # server's 404) the whole batch is sent unfiltered. A stale "absent" answer
+  # from the pack-index cache is safe: the server 422s a genuinely missing
+  # object and the push retries once with every object. A non-positive limit
+  # disables the handshake rather than asking once per object.
+  defp present_objects(project_id, entries) do
+    shas =
+      entries
+      |> Enum.flat_map(fn %{objects: objects} -> Enum.map(objects, & &1.sha) end)
+      |> Enum.uniq()
+
+    limit = Env.sync_exists_limit()
+
+    if shas == [] or limit <= 0 do
+      MapSet.new()
+    else
+      handshake(project_id, shas, limit)
+    end
+  end
+
+  defp handshake(project_id, shas, limit) do
+    shas
+    |> Enum.chunk_every(limit)
+    |> Enum.reduce_while({:ok, MapSet.new()}, fn chunk, {:ok, present} ->
+      case SyncClient.objects_exist(project_id, chunk) do
+        {:ok, found} -> {:cont, {:ok, MapSet.union(present, MapSet.new(found))}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, present} ->
+        present
+
+      {:error, reason} ->
+        Logger.debug(fn ->
+          "sync existence handshake skipped for project #{project_id}: #{inspect(reason)}"
+        end)
+
+        MapSet.new()
+    end
+  end
+
+  defp encode_push_nodes(entries, present) do
+    Enum.map(entries, fn %{node: node, objects: objects} ->
+      encode_push_node(node, objects, present)
+    end)
+  end
+
+  defp encode_push_node(node, objects, present) do
+    objects = Enum.reject(objects, &MapSet.member?(present, &1.sha))
     encoded = NodeCodec.encode_node(node, objects)
 
     %{
@@ -484,6 +540,24 @@ defmodule Cadence.Daemon.Sync do
       "git_objects" => encoded["git_objects"],
       "metadata" => Map.drop(encoded, ["id", "git_objects", "created_by"])
     }
+  end
+
+  defp record_pushed(nodes, mappings) do
+    pending_ids = MapSet.new(nodes, & &1.id)
+
+    pushed_ids =
+      mappings
+      |> Enum.flat_map(&mapping_id/1)
+      |> Enum.filter(&MapSet.member?(pending_ids, &1))
+      |> Enum.uniq()
+
+    # Stamp the SHA that was actually sent: the node may have changed while
+    # the push was in flight (e.g. a docs job completed).
+    sha_by_id = Map.new(nodes, &{&1.id, &1.git_commit_sha})
+    pushed = Enum.map(pushed_ids, &{&1, Map.fetch!(sha_by_id, &1)})
+
+    :ok = SyncLedger.mark_pushed(pushed)
+    {:ok, length(pushed)}
   end
 
   defp mapping_id(%{"local_id" => local_id}), do: [local_id]

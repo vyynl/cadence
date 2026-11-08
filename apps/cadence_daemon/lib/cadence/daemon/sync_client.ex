@@ -10,7 +10,7 @@ defmodule Cadence.Daemon.SyncClient do
 
   alias Cadence.Daemon.Env
   alias Cadence.Shared.Project
-  alias Cadence.Shared.Sync.PushPreferences
+  alias Cadence.Shared.Sync.{ObjectsExists, PushPreferences}
 
   @doc "Whether a server URL and bearer token are configured."
   @spec configured?() :: boolean()
@@ -44,6 +44,31 @@ defmodule Cadence.Daemon.SyncClient do
       case body do
         %{"mappings" => mappings} when is_list(mappings) ->
           {:ok, %{mappings: mappings}}
+
+        _ ->
+          {:error, {:invalid_response, body}}
+      end
+    end
+  end
+
+  @doc """
+  Asks the server which object SHAs it already holds (spec §10.2, §10.6).
+
+  Returns the present subset in server order. A failure is not fatal: the caller
+  falls back to sending every object.
+  """
+  @spec objects_exist(Ecto.UUID.t(), [String.t()]) :: {:ok, [String.t()]} | {:error, term()}
+  def objects_exist(project_id, shas) when is_list(shas) do
+    payload = %ObjectsExists{project_id: project_id, shas: shas}
+
+    with {:ok, body} <- request(:post, "/sync/objects/exists", json: payload) do
+      case body do
+        %{"present" => present} when is_list(present) ->
+          if Enum.all?(present, &is_binary/1) do
+            {:ok, present}
+          else
+            {:error, {:invalid_response, body}}
+          end
 
         _ ->
           {:error, {:invalid_response, body}}

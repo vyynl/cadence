@@ -12,7 +12,8 @@ config :cadence_daemon,
   local_user_id: "00000000-0000-0000-0000-000000000000",
   start_api: false,
   llm_retry_backoff_ms: 60_000,
-  llm_retry_attempts: 3
+  llm_retry_attempts: 3,
+  sync_exists_limit: 5_000
 
 config :cadence_server, Cadence.Server.Repo,
   url:
@@ -50,6 +51,7 @@ config :cadence_server,
   actions_max_log_bytes: 1_048_576,
   actions_max_artifact_bytes: 1_048_576,
   sync_pull_limit: 100,
+  sync_exists_limit: 5_000,
   dag_intro_ms: 0,
   file_max_bytes: 4096,
   file_max_lines: 100,

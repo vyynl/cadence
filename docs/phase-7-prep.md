@@ -2,8 +2,8 @@
 
 **Spec:** §13 Phase 7, §15 (principles 1/5/7), §10.2/§10.6 (push + wire
 format), §12.6 (env contract), §16 ("Storage repack trigger").
-**Status:** 7a and 7b are complete (2026-11-07). 7c (existence handshake) is
-planned but not implemented.
+**Status:** 7a, 7b, and 7c are complete (2026-11-07). 7d
+(verification/closeout) remains.
 
 ## Goal
 
@@ -107,7 +107,7 @@ copy in place. Tests:
 `CAD_REPACK_ENABLED`, `CAD_REPACK_MIN_OBJECTS`, `CAD_REPACK_MIN_BYTES`,
 `CAD_REPACK_INTERVAL_MS`, `CAD_REPACK_MAX_PACK_BYTES` (§12.6).
 
-### 7c — sync existence handshake
+### 7c — sync existence handshake (shipped 2026-11-07)
 
 - `POST /sync/objects/exists` (bearer PAT, writable roles, project-scoped):
   `%{project_id, shas: [40-hex]}` → `%{present: [40-hex]}`. Capped; invalid
@@ -123,9 +123,22 @@ copy in place. Tests:
   a server 422, not corruption. The route answers from
   `GitStore.present_shas/2` (index membership), not one `has_object?/2` call
   per SHA.
-- Config: `CAD_SYNC_EXISTS_LIMIT` (default 5000); over-cap batches send all
-  objects (or chunk — decide in the slice plan).
+- Config: `CAD_SYNC_EXISTS_LIMIT` (default 5000); the daemon chunks a batch's
+  unique SHAs into capped requests and unions the answers (a failed chunk sends
+  the whole batch unfiltered).
 - Spec §10.2/§10.6 updated with the route, request/response, cap, and fallback.
+
+Shipped as `Cadence.Shared.Sync.ObjectsExists`, `POST /sync/objects/exists`
+(`Sync.objects_exist/2`, answered by `GitStore.present_shas/2` on
+`ProjectGit.open/1`), daemon `SyncClient.objects_exist/2` +
+`Env.sync_exists_limit/0`, and a `Sync.push_batch/3` refactor that loads each
+node's objects once, chunks the batch's unique SHAs under the cap, unions the
+answers, filters `git_objects`, and retries once with every object after a
+filtered 422. A failed chunk abandons the handshake for the whole batch; the
+server independently refuses over-cap requests. Tests:
+`apps/cadence_server/test/sync_objects_exists_test.exs`, plus the daemon
+`sync_client_test.exs` / `sync_test.exs` cases and the `TestSyncServer`
+existence route. `CAD_SYNC_EXISTS_LIMIT` is recorded in §12.6.
 
 ### 7d — verification / closeout (fold into 7b/7c if small)
 
@@ -139,7 +152,7 @@ copy in place. Tests:
 |---|---|---|
 | P7-D1 | Repack trigger (§16) | **Approved 2026-11-07.** Threshold after a successful push (best-effort, async) plus a periodic backstop and a manual mix task. Defaults: 1,000 loose objects or 64 MiB per project, interval 6 h, concurrency 1. |
 | P7-D2 | Loose-object deletion | **Approved 2026-11-07.** Delete a loose file only after the pack containing it is verified readable and renamed into place. "Non-destructive" means no history/unreachable-object pruning, not "keep two copies forever." |
-| P7-D3 | Handshake shape | Dedicated `POST /sync/objects/exists`, one request per push batch, full-push fallback on any error, 5,000-SHA cap. |
+| P7-D3 | Handshake shape | Dedicated `POST /sync/objects/exists`, one request per capped chunk of a push batch, full-push fallback on any error, 5,000-SHA cap per request. |
 | P7-D4 | Format fidelity | **Approved 2026-11-07 and shipped in 7a.** Real Git pack v2 + idx v2 (SHA-1, zlib, ofs/ref-delta), no new dependency, no thin packs. Interop remains a non-goal (§14) but the bytes are standard. |
 | P7-D5 | Slice order | **Approved 2026-11-07.** 7a → 7b → 7c. 7a is invisible (no behavior/config change) and gates the rest because `has_object?` must answer from packs. |
 
@@ -168,7 +181,7 @@ store fully readable with loose objects intact; nothing prunes history.
 
 **7c:** a second push of an already-stored node sends no `git_objects` and
 still succeeds; a handshake failure falls back to the current full push; the
-server never accepts an incomplete node.
+server never accepts an incomplete node. Shipped 2026-11-07.
 
 ## Risks
 
