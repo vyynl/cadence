@@ -13,6 +13,16 @@ defmodule Cadence.Server.Storage.Repacker do
   it is the retry path. A `{:error, :busy}` result means another process (or the
   CLI) holds the project lock and is not recorded as a failure.
 
+  A run is bounded by `CAD_REPACK_TIMEOUT_MS` (`Storage.run_timeout_ms/0`; `0`
+  disables). A task past the bound is killed: the run body holds a
+  transaction-scoped advisory lock, so the kill rolls the transaction back and
+  returns its pooled connection, and the next queued project starts. Killing is
+  safe because pack writes are `.tmp` + verify + rename (the next run's grace
+  sweep removes debris) and the pack phase never deletes anything: a loose copy
+  is unlinked only by a later sweep, after re-reading and re-hashing it through
+  an existing pack. A timeout counts as a failure for the push cooldown, so a
+  pathological store is retried by the backstop, not on every push.
+
   The runner is resolved per run from
   `Application.get_env(:cadence_server, :repack_runner, &Storage.run_if_needed/1)`
   so tests can observe scheduling without touching a store (the same injection
@@ -51,6 +61,7 @@ defmodule Cadence.Server.Storage.Repacker do
       runner: Keyword.get(opts, :runner),
       interval_ms: Keyword.get(opts, :interval_ms, Storage.interval_ms()),
       cooldown_ms: Keyword.get(opts, :cooldown_ms, Storage.interval_ms()),
+      timeout_ms: Keyword.get(opts, :timeout_ms, Storage.run_timeout_ms()),
       queue: :queue.new(),
       queued: MapSet.new(),
       running: nil,
@@ -71,19 +82,40 @@ defmodule Cadence.Server.Storage.Repacker do
   end
 
   @impl true
-  def handle_info({ref, result}, %{running: {ref, project_id}} = state) do
+  def handle_info({ref, result}, %{running: %{ref: ref} = running} = state) do
     Process.demonitor(ref, [:flush])
+    disarm_timeout(running.timer)
     state = %{state | running: nil}
-    {:noreply, state |> finish(project_id, result) |> start_next()}
+    {:noreply, state |> finish(running.project_id, result) |> start_next()}
   end
 
-  def handle_info({:DOWN, ref, :process, _pid, reason}, %{running: {ref, project_id}} = state) do
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %{running: %{ref: ref} = running} = state) do
+    disarm_timeout(running.timer)
+
     Logger.warning(
-      "repack task crashed project=#{project_id} class=#{inspect(crash_class(reason))}"
+      "repack task crashed project=#{running.project_id} class=#{inspect(crash_class(reason))}"
     )
 
     state = %{state | running: nil}
-    {:noreply, state |> finish(project_id, {:error, :crashed}) |> start_next()}
+    {:noreply, state |> finish(running.project_id, {:error, :crashed}) |> start_next()}
+  end
+
+  # A run past its bound is cancelled, never awaited: a cooperative deadline
+  # cannot interrupt a single hung batch. The demonitor + kill pair means the
+  # `:DOWN` is dropped, so the timeout is recorded exactly once.
+  def handle_info({:repack_timeout, ref}, %{running: %{ref: ref} = running} = state) do
+    if Process.alive?(running.pid) do
+      Process.demonitor(ref, [:flush])
+      Process.exit(running.pid, :kill)
+      state = %{state | running: nil}
+      {:noreply, state |> finish(running.project_id, {:error, :timeout}) |> start_next()}
+    else
+      # The run finished at the deadline; its result or `:DOWN` is queued and
+      # handled normally, with the correct outcome. A task that has sent its
+      # result but not yet exited is still alive and is treated as timed out:
+      # the cost is one cooldown interval and the work is idempotent.
+      {:noreply, state}
+    end
   end
 
   def handle_info(:backstop, state) do
@@ -112,7 +144,7 @@ defmodule Cadence.Server.Storage.Repacker do
     end
   end
 
-  defp running?(%{running: {_ref, project_id}}, project_id), do: true
+  defp running?(%{running: %{project_id: project_id}}, project_id), do: true
   defp running?(_state, _project_id), do: false
 
   defp start_next(%{running: nil} = state) do
@@ -121,7 +153,16 @@ defmodule Cadence.Server.Storage.Repacker do
         state = %{state | queue: queue, queued: MapSet.delete(state.queued, project_id)}
         runner = state.runner || default_runner()
         task = Task.Supervisor.async_nolink(TaskSupervisor, fn -> runner.(project_id) end)
-        %{state | running: {task.ref, project_id}}
+
+        %{
+          state
+          | running: %{
+              ref: task.ref,
+              pid: task.pid,
+              project_id: project_id,
+              timer: arm_timeout(task.ref, state.timeout_ms)
+            }
+        }
 
       {:empty, _queue} ->
         state
@@ -129,6 +170,15 @@ defmodule Cadence.Server.Storage.Repacker do
   end
 
   defp start_next(state), do: state
+
+  defp arm_timeout(ref, timeout) when is_integer(timeout) and timeout > 0 do
+    Process.send_after(self(), {:repack_timeout, ref}, timeout)
+  end
+
+  defp arm_timeout(_ref, _timeout), do: nil
+
+  defp disarm_timeout(nil), do: :ok
+  defp disarm_timeout(timer), do: Process.cancel_timer(timer)
 
   defp default_runner do
     Application.get_env(:cadence_server, :repack_runner, &Storage.run_if_needed/1)
@@ -143,6 +193,14 @@ defmodule Cadence.Server.Storage.Repacker do
 
       {:error, :disabled} ->
         %{state | failed_at: Map.delete(state.failed_at, project_id)}
+
+      # A killed run is the one failure with a distinct, useful log line.
+      {:error, :timeout} ->
+        Logger.warning(
+          "repack run timed out project=#{project_id} timeout_ms=#{state.timeout_ms}"
+        )
+
+        %{state | failed_at: Map.put(state.failed_at, project_id, now())}
 
       {:error, reason} ->
         Logger.warning(

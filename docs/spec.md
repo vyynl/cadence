@@ -1722,6 +1722,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_REPACK_MIN_OBJECTS` | no | `1000` | On-disk loose objects that trigger a repack |
 | `CAD_REPACK_MIN_BYTES` | no | `67108864` | On-disk loose object bytes (compressed) that trigger a repack |
 | `CAD_REPACK_INTERVAL_MS` | no | `21600000` | Repack backstop interval and push-trigger failure cooldown (`0` disables both) |
+| `CAD_REPACK_TIMEOUT_MS` | no | `600000` | Wall-clock bound for one background repack run; the worker kills a task past it (`0` disables; values above 24 h are clamped). The manual `mix cadence.repack` task is not interrupted |
 | `CAD_REPACK_MAX_PACK_BYTES` | no | `67108864` | Max uncompressed input bytes per packfile (larger sets are split) |
 | `CAD_MELD_TIMEOUT_MS` | no | `60000` | Timeout per meld agent attempt (a synchronous union can take `(retries + 1) × timeout + backoff`) |
 | `CAD_MELD_RATE_LIMIT` | no | `5` | Meld agent calls per server rate window |
@@ -2046,7 +2047,12 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   Batches are bounded by input bytes so only one batch is resident at a time;
   crash-left temp files and final-named packs without an index are swept; pack
   + loose coexist until the next verified run (at most one interval), so
-  deployments must budget transient 2× object storage.
+  deployments must budget transient 2× object storage. The background worker
+  bounds one run at `CAD_REPACK_TIMEOUT_MS` (default 10 min; `0` disables) and
+  kills a task past it; the transaction-scoped lock rolls back and returns its
+  pooled connection, and the timeout counts as a failure for the push cooldown
+  (the backstop still retries). The manual task is operator-controlled and not
+  interrupted (§12.6, §16).
 - 7c — sync object negotiation (shipped): `POST /sync/objects/exists` answers
   which SHAs the server holds from loose objects plus pack indexes; the daemon
   omits them from `git_objects`, falls back to a full push on any handshake
@@ -2290,9 +2296,15 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       the threshold counts on-disk loose objects and bytes, the queue is
       process-local and the cross-node/CLI fence is a transaction-scoped
       Postgres advisory lock, and a failed push-triggered run cools down for one
-      interval. Residual: no pack consolidation/multi-pack index (each run adds
-      packs) and no run timeout (a run holds one pooled connection for its
-      duration).
+      interval. One run is bounded by `CAD_REPACK_TIMEOUT_MS` (default 10 min;
+      `0` disables): the worker kills a task past the bound, which rolls back the
+      transaction and releases both the advisory lock and its pooled connection;
+      the timeout starts the push cooldown and the 6 h backstop retries. A store
+      that legitimately needs longer converges across backstop runs (each run's
+      completed pack renames are durable), so raising the bound trades time for
+      progress per interval. The manual `mix cadence.repack` task is
+      operator-controlled and not interrupted. Residual: no pack
+      consolidation/multi-pack index (each run adds packs).
 - [ ] **Parents `uuid[]` → edges migration threshold:** when the materialized
       parent array should become a separate edge table. Independent of the
       storage repack trigger above.

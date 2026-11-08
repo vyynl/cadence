@@ -80,8 +80,9 @@ skips a mismatched pair. 54 new shared tests; 994 total green (306 shared + 188 
   during deletion still leaves the pack. A `.tmp` pair left by a crash is
   invisible to discovery and is swept on the next run.
 - Config (§12.6): `CAD_REPACK_ENABLED`, `CAD_REPACK_MIN_OBJECTS`,
-  `CAD_REPACK_MIN_BYTES`, `CAD_REPACK_INTERVAL_MS`, `CAD_REPACK_MAX_PACK_BYTES`
-  (split oversized sets), following the decision below.
+  `CAD_REPACK_MIN_BYTES`, `CAD_REPACK_INTERVAL_MS`, `CAD_REPACK_TIMEOUT_MS`
+  (post-close: bounds one background run), `CAD_REPACK_MAX_PACK_BYTES` (split
+  oversized sets), following the decision below.
 - Metrics/logs are shape-only (pack name, object count, bytes, delta ratio);
   no object content is logged.
 
@@ -104,7 +105,8 @@ copy in place. Tests:
 `apps/cadence_server/test/storage_repacker_test.exs` (+ a push-wiring case in
 `sync_nodes_test.exs`) and `git_store_test.exs`. Config:
 `CAD_REPACK_ENABLED`, `CAD_REPACK_MIN_OBJECTS`, `CAD_REPACK_MIN_BYTES`,
-`CAD_REPACK_INTERVAL_MS`, `CAD_REPACK_MAX_PACK_BYTES` (§12.6).
+`CAD_REPACK_INTERVAL_MS`, `CAD_REPACK_TIMEOUT_MS` (post-close: the worker kills
+a run past the bound), `CAD_REPACK_MAX_PACK_BYTES` (§12.6).
 
 ### 7c — sync existence handshake (shipped 2026-11-07)
 

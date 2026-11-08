@@ -6,8 +6,8 @@ Phase 7 (7a–7d) shipped, the union live smoke is recorded, and the post-7
 startup gap is closed (`docs/daemon-setup.md`). The demo-stack visual pass and
 `:CadProposals` shipped. 6c operational hardening is finished: **M1 (durable
 per-project run queue), M2 (artifact/image retention), and M3 (run/artifact
-paging)** are shipped. No active milestone; the remaining work is the optional
-list under **Next**.
+paging)** are shipped, and the **7b repack run timeout** residue is closed. No
+active milestone; the remaining work is the optional list under **Next**.
 
 ## Done (summary)
 
@@ -676,6 +676,30 @@ list under **Next**.
   re-fetch the same window. `.run-pager` CSS is one small token-only block.
   Spec §7.2/§8.3/§13/§16 and `docs/README.md` updated. 14 new tests; 1101 total
   (312 shared + 207 daemon + 582 server).
+- **Repack run timeout (7b residue)** — one background repack run is now bounded
+  by `CAD_REPACK_TIMEOUT_MS` (default `600000` = 10 min; `0` disables; a
+  negative/non-integer value falls back to the default so a typo cannot remove
+  the bound). `Storage.Repacker` stores `%{ref, pid, project_id, timer}` per
+  run, cancels the timer on a result and on `:DOWN`, and on
+  `{:repack_timeout, ref}` demonitors + kills the task, records
+  `{:error, :timeout}` (a distinct log line with the configured milliseconds),
+  and starts the next queued project. A timeout counts as a failure for the
+  push cooldown, so the 6 h backstop (which bypasses the cooldown) is the retry
+  path. A run that already exited at the deadline is left to its queued
+  result (`Process.alive?` check), and a stale timer is ignored by ref. The run
+  body, the manual `mix cadence.repack` task, and the threshold logic are
+  unchanged; no new dependency, process, table, or status. Tests: a blocked run
+  is killed at 50 ms and the next project runs (the first is then cooled down);
+  `timeout_ms: 0` leaves a blocked run alive; a dedicated unboxed
+  `storage_repack_timeout_test.exs` proves `:busy` while a real `Storage.run/2`
+  holds the transaction-scoped lock, `{:ok, _}` after the holder is killed, and
+  (end to end) that the worker's own kill lets the next project run and the
+  killed project's lock be reclaimed (a brutal kill on a sandboxed shared
+  checkout invalidates the owner, so these properties cannot live in the
+  sandbox); the killed task is asserted dead, the fast project is not cooled
+  down, and the accessor covers default/`0`/negative/above-24 h. Spec
+  §12.6/§13/§16, `.env.example`, `docs/phase-7-prep.md`, and the 7b notes
+  updated. 6 new tests; 1107 total (312 shared + 207 daemon + 588 server).
 - **4e gate:** 640 tests green (161 shared + 125 daemon + 354 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
@@ -723,11 +747,10 @@ Carry-over (post-Phase-7, optional):
    remains post-exit; run paging is offset-based (a cursor is the fix if the
    window shift ever matters). Per-project run concurrency, artifact/image
    retention, and run/artifact paging are resolved by M1/M2/M3.
-3. **7b/7c residues** (spec §16): pack consolidation / multi-pack index; no
-   run timeout (a hung repack wedges the single-worker queue until restart);
-   the repack threshold path was not exercised on the demo seed (its stores are
+3. **7b/7c residues** (spec §16): pack consolidation / multi-pack index; the
+   repack threshold path was not exercised on the demo seed (its stores are
    below 1,000 objects — the manual two-run path was used, and the threshold is
-   unit-tested).
+   unit-tested). A hung repack is now bounded by `CAD_REPACK_TIMEOUT_MS`.
 
 **Spin-up:** `@phx-full` for the docs live smoke (needs `CAD_LLM_API_KEY`) or if
 a `docs/ui-notes.md` item turns into a multi-file fix; `@phx-quick` for a
@@ -740,8 +763,8 @@ dependency is expected.
   `:CadProposals`, and 6c M1 (run queue) / M2 (retention) / M3 (paging) are
   complete, and every review's must-fix item is applied and verified.
   Pre-existing follow-ups (unreadable-object isolation, re-push of an existing
-  row whose objects were later lost, the 8 MB retry ceiling, pack consolidation,
-  the missing repack timeout) remain recorded below and in spec §16.
+  row whose objects were later lost, the 8 MB retry ceiling, pack consolidation)
+  remain recorded below and in spec §16.
 
 ## Spec Deltas / Open Items
 
@@ -831,15 +854,23 @@ dependency is expected.
   removed after a 5 minute grace (module constant, not env) so a writer whose
   lock was lost is never mistaken for garbage. The read path still validates
   zlib + declared size, not the SHA (7a contract); only the repacker's
-  `verify_packed/2` and `read_loose_raw/2` re-hash. There is no run timeout: a
-  hung run wedges the single-worker queue and holds the lock (the next
-  Repacker generation or the CLI reports `:busy`, never corrupts). Queue and
-  cooldown state are in-memory, so a Repacker restart loses them (the backstop
-  re-derives work; an orphaned in-flight task finishes alone). Each run adds a
-  pack; there is no consolidation/multi-pack index and corrupt `pack-*` pairs
-  are deliberately kept (they may be the only copy of already-swept objects).
-  Real lock contention cannot be exercised in the sandbox (one connection per
-  test); tests cover sequential release plus the injected `:busy` seam.
+  `verify_packed/2` and `read_loose_raw/2` re-hash. One run is bounded by
+  `CAD_REPACK_TIMEOUT_MS` (default 10 min; `0` disables): the worker kills a
+  task past it, the transaction-scoped lock rolls back and releases its pooled
+  connection, and the timeout starts the push cooldown (the 6 h backstop still
+  retries). The kill is safe because pack writes are `.tmp` + verify + rename
+  and the pack phase never deletes anything — a loose copy is unlinked only by a
+  later sweep after re-reading and re-hashing it through a pack; crash debris
+  keeps its 5-minute grace.
+  Queue and cooldown state are in-memory, so a Repacker restart loses them (the
+  backstop re-derives work; an orphaned in-flight task finishes alone). Each
+  run adds a pack; there is no consolidation/multi-pack index and corrupt
+  `pack-*` pairs are deliberately kept (they may be the only copy of
+  already-swept objects). Real lock contention cannot be exercised in the
+  sandbox, so a dedicated unboxed test (`storage_repack_timeout_test.exs`)
+  proves `:busy` while a run holds the lock and completion after the holder is
+  killed; the sandboxed tests cover sequential release plus the injected
+  `:busy` seam.
 - **Pack layer 7a notes (2026-11-07)** — pack entry ends come from the idx
   offsets (the compressed slice ends at the next offset/trailer), not from
   zlib: `safeInflate/2` can return `:finished` on a partial stream. The cache
@@ -1831,4 +1862,42 @@ gaps (exact page-size boundary, empty project, `page/3` scoping/disabled,
 vacuously). Lesson:
 `.claude/solutions/liveview-issues/async-result-renders-stale-ok-while-loading-20261108.md`.
 Next: no planned milestone; optional work in **Next**. Committed with this
+slice's feature commit.
+
+2026-11-08 — **Repack run timeout** shipped from
+`.claude/plans/repack-timeout/plan.md` (approved as written). The single
+repack worker now bounds one run at `CAD_REPACK_TIMEOUT_MS` (default 600000 =
+10 min; `0` disables; a negative value falls back to the default and values
+above 24 h are clamped, so a typo cannot remove the bound — a non-integer env
+value fails the boot parse like every other integer setting). `Storage.Repacker`
+keeps `%{ref, pid, project_id, timer}` per run,
+cancels the timer on a result and `:DOWN`, and on `{:repack_timeout, ref}`
+demonitors + kills the task, records `{:error, :timeout}` (a distinct log line
+with the configured milliseconds) and starts the next queued project. The
+timeout counts as a failure for the push cooldown, so the 6 h backstop is the
+retry path; a run that already exited at the deadline is left to its queued
+result, and a stale timer is ignored by ref. The kill is safe because pack
+writes are `.tmp` + verify + rename (the next run's 5 min grace sweep removes
+debris, and the pack phase never deletes — a later sweep unlinks a loose copy
+only after re-reading and re-hashing it through a pack) and the advisory lock
+is transaction-scoped, so DBConnection rolls back and releases the pooled
+connection. The run body, manual `mix cadence.repack`, and threshold logic are
+unchanged; no new dependency, process, table, or status. Spec
+§12.6/§13/§16, `.env.example`, and the 7b notes updated. Verification: format
+clean, dev + `MIX_ENV=prod` compile clean, 1107 tests green (312 shared + 207
+daemon + 588 server; +6). The lock-release property is proved by a dedicated
+unboxed `storage_repack_timeout_test.exs` (a brutal kill on a sandboxed shared
+checkout invalidates the owner, so the sandbox cannot model a production pool);
+it writes no rows and restores `:manual`, and an end-to-end case there runs the
+worker's real kill against `Storage.run/2` and then reclaims the killed
+project's lock. Read-only review PASS WITH WARNINGS; fixed the one MEDIUM (the
+kill test now asserts the hung task is dead), the fast-path cooldown check, the
+misleading "never deletes" wording (the pack phase never deletes; the sweep
+unlinks only after verifying through a pack), the unreachable non-integer claim
+(the env parser rejects junk at boot), the missing task-doc sentence, a 24 h
+clamp on the bound, and the phase-7-prep config list. A second review pass
+confirmed the kill/end-to-end assertions are non-vacuous; its three Lows are
+also closed (the clamp is asserted, spec §12.6 states the clamp, and the
+end-to-end test uses a 300 ms bound so a slow host cannot kill the healthy
+project's pack write). Next: optional work in **Next**; committed with this
 slice's feature commit.

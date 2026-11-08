@@ -13,7 +13,9 @@ defmodule Mix.Tasks.Cadence.Repack do
   run writes packs and sweeps loose copies that a **previous** verified run
   covered, so an object needs two runs to disappear: the first packs it, the
   second verifies and unlinks it. Pack + loose coexist until then (at most one
-  backstop interval, so budget transient 2× object storage).
+  backstop interval, so budget transient 2× object storage). The manual task is
+  operator-controlled: `CAD_REPACK_TIMEOUT_MS` bounds only the background
+  worker, so a `mix` run is not interrupted (`Ctrl-C` it if it hangs).
 
   This task is `mix`-only. It never binds the HTTP port, so it is safe inside an
   already-running container (`docker compose exec server mix cadence.repack`).

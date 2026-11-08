@@ -142,6 +142,7 @@ if config_env() != :test do
     repack_min_objects: String.to_integer(System.get_env("CAD_REPACK_MIN_OBJECTS", "1000")),
     repack_min_bytes: String.to_integer(System.get_env("CAD_REPACK_MIN_BYTES", "67108864")),
     repack_interval_ms: String.to_integer(System.get_env("CAD_REPACK_INTERVAL_MS", "21600000")),
+    repack_timeout_ms: String.to_integer(System.get_env("CAD_REPACK_TIMEOUT_MS", "600000")),
     repack_max_pack_bytes:
       String.to_integer(System.get_env("CAD_REPACK_MAX_PACK_BYTES", "67108864")),
     meld_timeout_ms: String.to_integer(System.get_env("CAD_MELD_TIMEOUT_MS", "60000")),

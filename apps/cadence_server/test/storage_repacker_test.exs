@@ -491,6 +491,104 @@ defmodule Cadence.Server.StorageRepackerTest do
     end
   end
 
+  describe "timeout" do
+    test "a run past the bound is killed and the queue advances", %{project: project} do
+      parent = self()
+      other = Ecto.UUID.generate()
+
+      # Only the first project hangs; the second proves a normal run still
+      # completes under the same timeout configuration.
+      runner = fn id ->
+        send(parent, {:ran, id, self()})
+
+        if id == project.id do
+          receive do
+            :never -> :ok
+          end
+        else
+          :ok
+        end
+      end
+
+      start_supervised!(
+        {Repacker,
+         name: :test_repacker, interval_ms: 0, cooldown_ms: 60_000, timeout_ms: 50, runner: runner}
+      )
+
+      Repacker.schedule(project.id, server: :test_repacker)
+      Repacker.schedule(other, server: :test_repacker)
+
+      assert_receive {:ran, first, first_pid}, 1_000
+      assert first == project.id
+      assert_receive {:ran, second, _second_pid}, 1_000
+      assert second == other
+
+      # The hung task really was killed (not merely un-tracked), so its
+      # transaction and lock are gone.
+      refute Process.alive?(first_pid)
+      await_idle(:test_repacker)
+
+      # The killed project is cooled down like any other failure; the project
+      # that completed normally is not.
+      Repacker.schedule(project.id, server: :test_repacker)
+      refute_receive {:ran, _id, _pid}, 200
+
+      Repacker.schedule(other, server: :test_repacker)
+      assert_receive {:ran, ^other, _pid}, 1_000
+    end
+
+    test "timeout_ms 0 leaves a blocked run in place", %{project: project} do
+      parent = self()
+
+      runner = fn id ->
+        send(parent, {:ran, id, self()})
+
+        receive do
+          :finish -> :ok
+        end
+      end
+
+      start_supervised!(
+        {Repacker,
+         name: :test_repacker, interval_ms: 0, cooldown_ms: 1_000, timeout_ms: 0, runner: runner}
+      )
+
+      Repacker.schedule(project.id, server: :test_repacker)
+      assert_receive {:ran, id, pid}, 1_000
+      assert id == project.id
+
+      # Past the point a 50 ms bound would have killed it, the task is alive
+      # and still owns the worker.
+      refute_receive {:ran, _id, _pid}, 200
+      assert Process.alive?(pid)
+      assert %{running: %{project_id: ^id}} = :sys.get_state(:test_repacker)
+
+      send(pid, :finish)
+      await_idle(:test_repacker)
+    end
+
+    test "run_timeout_ms/0 defaults and falls back for junk" do
+      assert Storage.run_timeout_ms() == 600_000
+
+      put_env(:repack_timeout_ms, -1)
+      assert Storage.run_timeout_ms() == 600_000
+
+      put_env(:repack_timeout_ms, "soon")
+      assert Storage.run_timeout_ms() == 600_000
+    end
+
+    test "run_timeout_ms/0 honors a positive value, 0, and the 24 h clamp" do
+      put_env(:repack_timeout_ms, 12_345)
+      assert Storage.run_timeout_ms() == 12_345
+
+      put_env(:repack_timeout_ms, 0)
+      assert Storage.run_timeout_ms() == 0
+
+      put_env(:repack_timeout_ms, 90_000_000)
+      assert Storage.run_timeout_ms() == 86_400_000
+    end
+  end
+
   defp write_blobs(store, count, size \\ 32) do
     1..count
     |> Enum.map(fn index ->

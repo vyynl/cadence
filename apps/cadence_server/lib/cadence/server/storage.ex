@@ -62,6 +62,12 @@ defmodule Cadence.Server.Storage do
   # never mistaken for garbage.
   @cleanup_grace_seconds 300
 
+  # Generous wall-clock bound for one background run; the Repacker uses it to
+  # kill a hung task. A typo falls back to this value, never to "disabled". The
+  # cap keeps `Process.send_after/3` inside its supported range.
+  @default_timeout_ms 600_000
+  @max_timeout_ms 86_400_000
+
   @type stats :: %{
           loose_objects: non_neg_integer(),
           loose_bytes: non_neg_integer(),
@@ -114,6 +120,25 @@ defmodule Cadence.Server.Storage do
   @spec max_pack_bytes() :: pos_integer()
   def max_pack_bytes,
     do: max(Application.get_env(:cadence_server, :repack_max_pack_bytes, 67_108_864), 1)
+
+  @doc """
+  Wall-clock bound for one background repack run (`CAD_REPACK_TIMEOUT_MS`).
+
+  `Cadence.Server.Storage.Repacker` kills a task that runs longer than this, so
+  a hung run cannot wedge the queue or hold its pooled connection forever. `0`
+  disables the bound; a negative or non-integer runtime value falls back to the
+  default so a typo can never remove it by accident (the env parser rejects a
+  non-integer `CAD_REPACK_TIMEOUT_MS` at boot, like every other integer
+  setting). Values above 24 h are clamped. The manual `mix cadence.repack` path
+  is operator-controlled and is not interrupted.
+  """
+  @spec run_timeout_ms() :: non_neg_integer()
+  def run_timeout_ms do
+    case Application.get_env(:cadence_server, :repack_timeout_ms, @default_timeout_ms) do
+      value when is_integer(value) and value >= 0 -> min(value, @max_timeout_ms)
+      _other -> @default_timeout_ms
+    end
+  end
 
   ## Read models
 
