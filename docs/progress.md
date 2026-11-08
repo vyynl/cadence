@@ -600,6 +600,17 @@ are listed in **Next**.
   Spec §5.1/§6.1/§6.5/§13/§16, the plugin README, and the daemon-upgrade
   migration note updated. 7 new daemon tests (+2 router scenarios) and the Lua
   spec; 1058 total (312 shared + 207 daemon + 539 server).
+- **`:CadProposals` live smoke (2026-11-08)** — end to end against the demo
+  server with a fresh daemon state dir: migrated all migrations (including
+  `union_proposals`) → booted → registered a project → watcher commit + spawn →
+  `POST /union` returned `201` with a pending meld (no LLM) → `GET /proposals`
+  returned the journal entry (URL, 2 parents, age) → headless Neovim ran
+  `:CadProposals` with `vim.ui.select` choosing the first item; both the `+`
+  register and the notification carried
+  `http://localhost:4000/proposals/<token>`. The public page returned 200 and
+  the token never appeared in the daemon SQL log (`log: false`). Cleaned up the
+  daemon process, PAT file, and temp state; the demo server retains a
+  `proposals-smoke` project as demo data.
 - **4e gate:** 640 tests green (161 shared + 125 daemon + 354 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
@@ -1636,3 +1647,16 @@ rescue, dev SQL token log, weak cap test, missing best-effort test, stale doc,
 README/spec wording) — all fixed. Verification: format, dev/prod compile,
 1058 tests (312 shared + 207 daemon + 539 server), `luac -p`, and both headless
 Lua specs. Next: the optional docs live smoke or a 6c/7b residue.
+
+2026-11-08 — **`:CadProposals` live smoke passed.** Used a fresh
+`/tmp` daemon state dir and the running demo server: migration (including
+`union_proposals`), boot with `CAD_SERVER_URL`/`CAD_AUTH_TOKEN`, project
+registration, a watcher commit + sandbox spawn, `POST /union` (201, pending
+meld, conflict-free so no LLM), `GET /proposals` (journal entry with URL, two
+parents, age), and headless Neovim `:CadProposals` (select the first item; the
+`+` register and the notification carried the public URL). The public proposal
+page returned 200, and the capability token was absent from the daemon SQL log
+(`log: false`). Cleaned up the daemon, PAT file, and temp state. The demo server
+now also lists a `proposals-smoke` project (demo data; `docker compose down -v`
+resets it). This closes the only untested surface from the `:CadProposals`
+slice.
