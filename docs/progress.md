@@ -4,8 +4,9 @@
 **Post-Phase 7 — build order complete.** Phase 7 (7a–7d) shipped, the union
 live smoke is recorded, and the post-7 startup gap is closed: a fresh daemon
 state dir with sync configured now boots instead of crashing, and the operator
-setup is documented in `docs/daemon-setup.md`. The next stage is the optional
-carry-over checks (**Next**), not new build-order work.
+setup is documented in `docs/daemon-setup.md`. The demo-stack visual pass
+(wide/narrow, light/dark) is also done and fixed one CSS overflow; the
+remaining optional carry-overs are listed in **Next**.
 
 ## Done (summary)
 
@@ -575,6 +576,15 @@ carry-over checks (**Next**), not new build-order work.
   daemon + 539 server). Read-only review found one BLOCKER (the socket read
   path) and one HIGH (the cast-based wake was not pinned); both fixed and
   covered by the test.
+- **Demo-stack visual pass (2026-11-08)** — headless Chromium at 1440×1000 and
+  390×844, light and dark, over `/`, `/p/cadence-demo`, both review hubs
+  (`cadence-demo`, `meld-review`), `/p/cadence-demo/runs` (empty state), and a
+  pending public proposal. No horizontal overflow, dark tokens applied
+  (`#0d1117`/`#e6edf3`), incident severity/status/docs/file-status badges
+  readable, no console/page errors. Fixed the proposal queue's `PROMOTION`
+  label overflowing the fixed `.file-kind` column into the title
+  (`min-width` + `nowrap`). Header-nav spacing and the unseeded run-detail page
+  are recorded as open notes in `docs/ui-notes.md`.
 - **4e gate:** 640 tests green (161 shared + 125 daemon + 354 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
@@ -588,15 +598,11 @@ carry-over checks (**Next**), not new build-order work.
 
 ## Next
 
-**Immediate step:** the manual browser/styling check of the demo stack —
-`docker compose up`, then `/`, `/p/cadence-demo`, `/p/cadence-demo/reviews`, a
-run page, one pending proposal, and `/proposals/<token>` at wide and narrow
-widths in light and dark. There are no browser tests; 4e and 6c verified
-server-rendered markup and CSS only. Capture layout/contrast observations in
-`docs/ui-notes.md`.
-
-The daemon boot guard and its setup docs are done; the rest of the carry-over
-list below is optional and independent.
+**Immediate step:** the optional `:CadProposals` Neovim surface for the union
+proposal token/URL (no server dependency), or the Phase 5 P5 docs live smoke
+with a real `CAD_LLM_API_KEY`. The demo-stack visual check is done; its two open
+notes (header-nav spacing, unseeded run detail) are in `docs/ui-notes.md`.
+Everything below is optional and independent.
 
 **Integration contract (6c, for anything that touches runs):**
 `Actions.Runs.prepare/4` returns `{:ok, %ActionRun{}}` or
@@ -617,24 +623,19 @@ Carry-over (post-Phase-7, optional):
 
 1. **Phase 5 P5 docs live smoke** — with a real `CAD_LLM_API_KEY`.
 2. **Optional `:CadProposals` surface** for the union token returned to Neovim.
-3. **Manual styling check**: `docker compose up`, then `/`,
-   `/p/cadence-demo`, `/p/cadence-demo/reviews`, a run page, one pending
-   proposal, and `/proposals/<token>` at wide and narrow widths in light and
-   dark. There are no browser tests; 4e and 6c verified server-rendered markup
-   and CSS only.
-4. **6c residues** (spec §16): run history pages at 50 rows and the detail at
+3. **6c residues** (spec §16): run history pages at 50 rows and the detail at
    the first 100 artifacts (no paging); no per-project run concurrency cap; no
    artifact/image retention; action log streaming remains post-exit.
-5. **7b/7c residues** (spec §16): pack consolidation / multi-pack index; no
+4. **7b/7c residues** (spec §16): pack consolidation / multi-pack index; no
    run timeout (a hung repack wedges the single-worker queue until restart);
    the repack threshold path was not exercised on the demo seed (its stores are
    below 1,000 objects — the manual two-run path was used, and the threshold is
    unit-tested).
 
-**Spin-up:** the immediate check is manual/browser only. For the optional
-carry-overs, use `@phx-quick` for the `:CadProposals` surface and `@phx-full`
-for a docs live smoke (needs `CAD_LLM_API_KEY`). The planned build order in spec
-§13 is complete; no new dependency is expected.
+**Spin-up:** `@phx-quick` for the `:CadProposals` surface; `@phx-full` for the
+docs live smoke (needs `CAD_LLM_API_KEY`) or if a `docs/ui-notes.md` item turns
+into a multi-file fix. The planned build order in spec §13 is complete; no new
+dependency is expected.
 
 ## Blocked
 
@@ -1585,3 +1586,14 @@ path), 1 HIGH (cast-based wake not pinned), 3 MEDIUM, 6 LOW — all fixed
 --warnings-as-errors`, 1050 tests green (312 shared + 199 daemon + 539 server;
 +1 daemon). The planned build order is complete; next is the optional manual
 styling check (see **Next**).
+
+2026-11-08 — **Demo-stack visual pass** (post-Phase 7). Headless Chromium
+(1440×1000 and 390×844, light/dark) over `/`, `/p/cadence-demo`, both review
+hubs, `/p/cadence-demo/runs` (empty state), and a pending public proposal: no
+horizontal overflow at 390px, dark tokens applied, incident/status/docs/file
+badges readable, and no console/page errors. One real bug fixed: the proposal
+queue's `PROMOTION` kind label overflowed the fixed `.file-kind` column into
+the title (`min-width` + `white-space: nowrap`). Open notes in
+`docs/ui-notes.md`: header-nav spacing and the unseeded run-detail page. CSS-only
+change; no Elixir behavior affected. Next: the optional `:CadProposals` surface
+or the docs live smoke (needs `CAD_LLM_API_KEY`).
