@@ -1,9 +1,10 @@
 # Cadence — Progress
 
 ## Current Phase
-**Phase 7 — storage engineering is complete (7a–7d).** The git build order in
-spec §13 ends here. The next session picks up the carry-over list in **Next**
-(open review suggestions, optional live smokes, §16 deltas).
+**Phase 7 — storage engineering is complete (7a–7d).** The planned build order
+in spec §13 ends here. The post-7d freshness follow-ups and the union live smoke
+are also done; the next stage is the daemon boot guard + setup docs (**Next**),
+then the optional live checks and §16 deltas.
 
 ## Done (summary)
 
@@ -539,6 +540,24 @@ spec §13 ends here. The next session picks up the carry-over list in **Next**
   reuses the rendered answer, so an owner needs an event/navigation to run
   against a snapshot whose previous scan failed (staging remains the authority
   and the refusal is fail-closed).
+- **Union live smoke (2026-11-08)** — the last untested trigger surface is
+  validated end to end. Local project `union-smoke` (work dir
+  `~/cadence-union-demo`) was registered with the daemon; its two parents were
+  provisioned and pushed (`POST /sync/projects` → `POST /sync/objects/exists` →
+  `POST /sync/nodes`), and `:CadUnion` posted `POST /sync/union` at 01:21:20.
+  The server created a meld proposal (`tYycH91…`) with
+  `llm: skipped_no_conflicts`, `conflict_count: 0`, `prompt_version: meld-v1`,
+  and no incident. Approval attached/pinned node `4154773e` ("Meld of 2
+  sessions", both parents, `in-progress`) and the daemon converged to the
+  identical id/SHA/parents/pin; `sync_pending` drained. `/p/union-smoke` and the
+  public proposal page both returned 200. The result diff is empty because
+  `branch-b` was spawned from the same tree (a re-run with a divergent branch
+  would show a file). Setup notes: LazyVim spec at
+  `~/.config/nvim/lua/plugins/cadence.lua` (`dir = …/cadence.nvim`,
+  `lazy = false`); the daemon must be migrated once
+  (`mix ecto.migrate -r Cadence.Daemon.Repo`) and started with
+  `mix run --no-start --no-halt -e 'Application.ensure_all_started(:cadence_daemon)'`
+  plus `CAD_SERVER_URL`/`CAD_AUTH_TOKEN`/`CAD_SYNC_ENABLED=true`.
 - **4e gate:** 640 tests green (161 shared + 125 daemon + 354 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
@@ -552,12 +571,16 @@ spec §13 ends here. The next session picks up the carry-over list in **Next**
 
 ## Next
 
-**Immediate step:** run the **union live smoke** — the one shipped trigger
-surface with no live run. `docker compose up --build -d`, start the daemon
-against the demo server, select two nodes in Neovim, run `:CadUnion`, and
-confirm the proposal token/URL notification plus the review page. Record the
-result in this file. This exercises `POST /union` → `POST /sync/union` →
-`Melds.propose/3` end to end; the plan is in `docs/demo.md`.
+**Immediate step:** fix the daemon boot guard found during the union smoke.
+`Cadence.Daemon.Application.maybe_start_sync/0` calls
+`SyncLedger.rehydrate/0` without the "no such table" rescue that
+`Projects.rehydrate`, `MessageQueue.rehydrate`, and `DocQueue.rehydrate` use, so
+a fresh state dir + configured sync crashes the app instead of logging a
+warning (the smoke hit this before migrations). Guard it in the
+`SyncLedger` rehydrate path, add a regression test (boot an empty DB with sync
+configured), and document the daemon setup
+(`mix ecto.migrate -r Cadence.Daemon.Repo`, token minting, the
+`--no-start` daemon command) in `cadence.nvim/README.md` or `docs/`.
 
 **Integration contract (6c, for anything that touches runs):**
 `Actions.Runs.prepare/4` returns `{:ok, %ActionRun{}}` or
@@ -592,7 +615,8 @@ Carry-over (post-Phase-7, optional):
    below 1,000 objects — the manual two-run path was used, and the threshold is
    unit-tested).
 
-**Spin-up:** `@phx-full` (or `@phx-quick` for the two review suggestions). The
+**Spin-up:** `@phx-quick` for the boot guard + setup docs (one code path plus a
+regression test), or `@phx-full` if the fresh-DB test needs a harness. The
 planned build order in spec §13 is complete; no new dependency is expected.
 
 ## Blocked
@@ -605,6 +629,17 @@ planned build order in spec §13 is complete; no new dependency is expected.
 
 ## Spec Deltas / Open Items
 
+- **Daemon boot on an unmigrated DB (2026-11-08, found in the union smoke)** —
+  with sync configured, `maybe_start_sync/0` calls `SyncLedger.rehydrate/0`,
+  which raises `Exqlite.Error` when `sync_state`/`sync_pending` do not exist;
+  the other rehydrates rescue "no such table" and log. A fresh state dir must be
+  migrated first (`mix ecto.migrate -r Cadence.Daemon.Repo`). The guard (and a
+  setup-docs note) is the next stage.
+- **Union smoke result shape (2026-11-08)** — the two parents had identical
+  trees (`branch-b` was spawned from the first node), so the approved meld
+  reports "No file changes" despite `file_count: 1`; a divergent branch would
+  render a diff. Conflict-free melds skip the model (`llm:
+  skipped_no_conflicts`), so no `CAD_LLM_API_KEY` is needed for that path.
 - **Post-7d quarantine retry scope (2026-11-07)** — `ProjectLive` now caches
   only authoritative quarantine answers and retries a failed scan on the next
   navigation or incident event. A Run click still reuses the rendered answer, so
@@ -1503,3 +1538,20 @@ is unit-tested. Verification: `mix format --check-formatted`, dev +
 `MIX_ENV=prod mix compile --warnings-as-errors`, 1049 tests green (312 shared +
 198 daemon + 539 server; +3). Review: PASS, no findings requiring a change; the
 Run-click retry scope is recorded in Spec Deltas. Next: the union live smoke.
+
+2026-11-08 — **Union live smoke passed; environment cleaned up.** The daemon
+(local `union-smoke`, work dir `~/cadence-union-demo`) provisioned and pushed
+two parents, `:CadUnion` posted `POST /sync/union`, the server created a meld
+proposal (`llm: skipped_no_conflicts`, `conflict_count: 0`, `prompt_version:
+meld-v1`, no incident), the owner approved it, and the meld node `4154773e`
+("Meld of 2 sessions", both parents, `in-progress`, pinned) converged to the
+daemon with identical id/SHA/parents. `sync_pending` drained; `/p/union-smoke`
+and the public proposal page returned 200. This live-validates the 4d union
+route, the 7c existence handshake, and approval/pin convergence. Setup: LazyVim
+spec at `~/.config/nvim/lua/plugins/cadence.lua`; the daemon needed
+`mix ecto.migrate -r Cadence.Daemon.Repo` once and was started with
+`mix run --no-start --no-halt -e 'Application.ensure_all_started(:cadence_daemon)'`.
+Cleanup: `docker compose down` (named volumes kept), stale daemon socket
+removed, scratch files deleted; the migrated daemon DB and `~/cadence-union-demo`
+remain. Next: the unmigrated-DB boot guard + daemon setup docs (recorded in
+**Next** and Spec Deltas).
