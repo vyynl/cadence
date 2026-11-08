@@ -1,13 +1,14 @@
 # Cadence — Progress
 
 ## Current Phase
-**Post-Phase 7 — build order complete; 6c operational hardening complete.**
-Phase 7 (7a–7d) shipped, the union live smoke is recorded, and the post-7
-startup gap is closed (`docs/daemon-setup.md`). The demo-stack visual pass and
-`:CadProposals` shipped. 6c operational hardening is finished: **M1 (durable
-per-project run queue), M2 (artifact/image retention), and M3 (run/artifact
-paging)** are shipped, and the **7b repack run timeout** residue is closed. No
-active milestone; the remaining work is the optional list under **Next**.
+**Phase 8a — production server release complete.** The planned build order
+(Phases 1–7) and 6c operational hardening were already complete; this session
+shipped the server artifact spec §12.8 had deferred: the root `cadence` release,
+`Cadence.Server.Release.migrate/0`, `docker/Dockerfile`,
+`docker-compose.prod.yml`, and `docs/deploy.md`. One user-flagged UI defect is
+now the top of **Next** (the project-home DAG canvas does not scale to its
+panel; `docs/ui-notes.md`). **Phase 8b (daemon release)** follows it; the other
+items are optional.
 
 ## Done (summary)
 
@@ -700,6 +701,27 @@ active milestone; the remaining work is the optional list under **Next**.
   down, and the accessor covers default/`0`/negative/above-24 h. Spec
   §12.6/§13/§16, `.env.example`, `docs/phase-7-prep.md`, and the 7b notes
   updated. 6 new tests; 1107 total (312 shared + 207 daemon + 588 server).
+- **Phase 8a (production server release)** — the server artifact from §12.8
+  ships. Root `mix.exs` defines the `cadence` release (`cadence_server` +
+  `cadence_shared`, no daemon); `Cadence.Server.Release` provides `migrate/0`,
+  `repos/0`, and `migrations_path/1` (2 focused tests). `docker/Dockerfile` is a
+  multi-stage `MIX_ENV=prod` build (`elixir:1.20-otp-29` → `debian:trixie-slim`,
+  matching the build image's glibc) that rejects a `CAD_DEMO_AUTH` build arg,
+  runs as non-root uid 999, installs only runtime libs (OpenSSL, libstdc++,
+  ncurses, sctp, curl), and healthchecks `CAD_HTTP_PORT`.
+  `docker-compose.prod.yml` is the §12.4 stack plus a one-shot `migrate`
+  service (`service_completed_successfully`), project `cadence-prod`, image
+  `cadence-server:prod`, pinned `CAD_ACTIONS_VOLUME` name, no source
+  bind-mounts, socket only through the proxy. `docs/deploy.md` covers secrets,
+  first boot, upgrades, volumes/ownership, actions, TLS, image publishing, and
+  troubleshooting. Verified on fresh volumes: migrate exited 0 (second run
+  "Migrations already up"), `/health` + `/` + `/sign-in` 200, healthcheck
+  `healthy`, uid 999, demo strategy `:error`, 10 migrations, `/data/*` writable,
+  and `down -v` left the demo stack running. Full suite 1109 (312 shared + 590
+  server + 207 daemon); format and dev/prod compile clean. Spec
+  §12.3/§12.4/§12.7/§12.8/§13/§16, `docs/README.md`, and `docs/demo.md` updated.
+  Lesson:
+  `.claude/solutions/docker/release-image-runtime-glibc-20261108.md`.
 - **4e gate:** 640 tests green (161 shared + 125 daemon + 354 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
@@ -713,15 +735,30 @@ active milestone; the remaining work is the optional list under **Next**.
 
 ## Next
 
-**Immediate step:** none — 6c M3 closed the last planned milestone. The
-planned build order (spec §13) and the 6c operational-hardening stage are both
-complete; every item below is optional and independent.
+**Immediate step:** fix the **project-home DAG scaling defect** flagged
+2026-11-08 (top item in `docs/ui-notes.md`). `DAGLayout.layout/2` sets the canvas
+width from the configured `max_columns` (default 10 → 444px) instead of the
+columns actually used, and `Components.DAG` hardcodes that width, so a small
+graph overflows the `minmax(16rem, 25%)` column and scrolls with dead space.
+Derive the width from the real maximum nodes-per-layer (or scale the SVG via
+`width: 100%` + viewBox), keep the tooltip/selection coordinates correct, and
+check 1440×1000 / 390×844 light+dark with 1–10 columns and a wrapped band.
+`@phx-quick` if it stays in `dag_layout.ex` + `dag.ex` + CSS; `@phx-investigate`
+if the tooltip/scaling behavior needs a deeper change.
+
+**After that:** **8b — daemon release.** Add a `cadence_daemon` release to the
+root `mix.exs` (release name `cadence_daemon`), a
+`Cadence.Daemon.Release.migrate/0` that runs the SQLite
+`priv/repo/migrations`, and install/upgrade docs. Verify with
+`MIX_ENV=prod mix release cadence_daemon` and a migration run against a temp
+state dir. Spin up with `@phx-full`. The planned build order (spec §13) is
+otherwise complete; every item below is optional and independent.
 
 Remaining optional work: the Phase 5 P5 docs live smoke with a real
-`CAD_LLM_API_KEY`, the two `docs/ui-notes.md` demo notes (header-nav spacing,
-unseeded run detail), and the 7b/7c residues below. If the run history ever
-needs stable paging, replace the offset with a `(created_at, id)` cursor
-(recorded in spec §16).
+`CAD_LLM_API_KEY`, the rest of `docs/ui-notes.md` (header-nav spacing, a seeded
+run for the demo, raw-log affordance), and the 7b/7c residues below. If the run
+history ever needs stable paging, replace the offset with a `(created_at, id)`
+cursor (recorded in spec §16).
 
 **Integration contract (6c, for anything that touches runs):**
 `Actions.Runs.prepare/4` returns `{:ok, %ActionRun{}}` or
@@ -760,14 +797,46 @@ dependency is expected.
 ## Blocked
 
 - (none). Phase 7 (7a–7d), the daemon boot guard, the demo-stack visual pass,
-  `:CadProposals`, and 6c M1 (run queue) / M2 (retention) / M3 (paging) are
-  complete, and every review's must-fix item is applied and verified.
-  Pre-existing follow-ups (unreadable-object isolation, re-push of an existing
-  row whose objects were later lost, the 8 MB retry ceiling, pack consolidation)
-  remain recorded below and in spec §16.
+  `:CadProposals`, 6c M1 (run queue) / M2 (retention) / M3 (paging), and Phase
+  8a (production server release) are complete, and every review's must-fix item
+  is applied and verified. Pre-existing follow-ups (unreadable-object
+  isolation, re-push of an existing row whose objects were later lost, the 8 MB
+  retry ceiling, pack consolidation) remain recorded below and in spec §16.
 
 ## Spec Deltas / Open Items
 
+- **DAG canvas width is not responsive (2026-11-08, user-flagged)** — the
+  project-home DAG renders its SVG at a fixed `width` derived from the
+  **configured** `max_columns` (`DAGLayout.layout/2`: `24*2 + (max_columns-1)*44`
+  = 444px at defaults), not from the columns the graph actually uses. A small
+  graph therefore overflows the `minmax(16rem, 25%)` panel: dead space on the
+  right plus a horizontal scrollbar (screenshots in `docs/ui-notes.md`). Spec
+  §7.3/§7.5 requires a bounded, legible graph but does not say whether the
+  panel fits-to-width or scrolls, so the fix should choose and record the rule
+  (fit-to-panel with a minimum, or scroll only above the real column count).
+- **8a release notes (2026-11-08)** — (a) the runtime image distro must match
+  the `elixir` build image's glibc: `docker/Dockerfile` builds on
+  `elixir:1.20-otp-29` (Debian trixie) and runs on `debian:trixie-slim`; bump
+  `DEBIAN_VERSION` with the Elixir image, or the release's `beam.smp` fails
+  with `GLIBC_2.38 not found`. (b) `Cadence.Server.Release.migrate/0` is
+  verified by the compose smoke rather than a unit test: the test repo runs in
+  `Ecto.Adapters.SQL.Sandbox` manual mode, so a migration test would have to
+  toggle global sandbox state. `repos/0` and `migrations_path/1` are unit-tested.
+  (c) Migrations stay explicit: the one-shot `migrate` compose service runs
+  `bin/cadence eval`, and `docker compose up` recreates it; there is no
+  entrypoint migration hook. (d) The production compose project is
+  `cadence-prod` and the default tag `cadence-server:prod`, distinct from the
+  demo project (`cadence`) and image (`cadence-server:latest`), so `down -v`
+  and `build` cannot cross-contaminate. (e) The pinned `cadence_actions` volume
+  is shared with the host Docker daemon; data/artifacts/Postgres volumes are
+  prefixed by the compose project.
+- **8a deployment prerequisites (2026-11-08)** — the production image has no
+  password strategy (OAuth only); `CAD_HTTP_PORT` is the host publish port in
+  compose and the container stays on 4000, while a direct `docker run` follows
+  `CAD_HTTP_PORT` in both the listener and healthcheck. Actions remain opt-in
+  and require a size-limited `CAD_ACTIONS_VOLUME_PATH` and the root-equivalent
+  socket proxy (§8.4). Image publishing/CI and the daemon release are recorded
+  in spec §16.
 - **Retention removes paths, not history (2026-11-07)** — a swept terminal run
   keeps its row, status, exit code, and `artifact_error`; only `log_path` and
   `artifact_path` become nil, so the history page still lists it and the detail
@@ -1901,3 +1970,37 @@ also closed (the clamp is asserted, spec §12.6 states the clamp, and the
 end-to-end test uses a 300 ms bound so a slow host cannot kill the healthy
 project's pack write). Next: optional work in **Next**; committed with this
 slice's feature commit.
+
+2026-11-08 — **Phase 8a (production server release)** shipped from
+`.claude/plans/release-8a/plan.md` under `@phx-full`. Root `mix.exs` defines the
+`cadence` release (`cadence_server` + `cadence_shared`); `Cadence.Server.Release`
+adds `migrate/0`, `repos/0`, `migrations_path/1` (2 tests). `docker/Dockerfile`
+is a multi-stage prod build (`elixir:1.20-otp-29` → `debian:trixie-slim`, so the
+release ERTS glibc matches) that rejects `CAD_DEMO_AUTH`, installs the runtime
+libs (OpenSSL, libstdc++, ncurses, sctp, curl), runs as non-root, and
+healthchecks `/health` on `CAD_HTTP_PORT`. `docker-compose.prod.yml` is the
+§12.4 stack with a one-shot `migrate` service, project `cadence-prod`, image
+`cadence-server:prod`, a pinned `CAD_ACTIONS_VOLUME` name, and no source
+bind-mounts; `docs/deploy.md` is the operator walkthrough. Verified on fresh
+volumes: migrate exit 0 and idempotent, `/health` + `/` + `/sign-in` 200,
+healthcheck `healthy`, uid 999, demo strategy `:error`, 10 migrations, `/data/*`
+writable, and `down -v` left the demo stack untouched. Gate: format clean,
+dev+prod compile clean, 1109 tests green (312 shared + 590 server + 207 daemon).
+Read-only review found no remaining blocker/high; the glibc mismatch and the
+demo/prod project+image collision were found and fixed before verification.
+Lesson: `.claude/solutions/docker/release-image-runtime-glibc-20261108.md`.
+Spec §12.3/§12.4/§12.7/§12.8/§13/§16, `docs/README.md`, and `docs/demo.md`
+updated. Next: **8b — daemon release**; tree is formatted and compiled, changes
+are uncommitted.
+
+2026-11-08 (handoff note) — **DAG scaling defect flagged as the biggest current
+UI error.** On `/p/:slug`, the left DAG panel overflows horizontally with dead
+space because `DAGLayout.layout/2` computes the canvas width from the configured
+`max_columns` (444px at defaults) instead of the graph's actual column count,
+and `Components.DAG` hardcodes that width on the SVG/canvas. Reproduced on the
+demo stack at 1440×1000 (scrollbar visible) and 390×844 (same dead space;
+overlay scrollbar hidden until scroll); screenshots saved under
+`docs/images/dag-width-overflow-*-20261108.png`. No code changed in this
+follow-up; `docs/ui-notes.md` carries the root cause, expected behavior, and
+verification checklist, and **Next** now leads with the fix, then 8b. Tree is
+still formatted/compiled from 8a; all changes remain uncommitted.

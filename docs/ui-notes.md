@@ -13,6 +13,27 @@ styling pass is planned after 4c-3 (incident panel) unless a demo is imminent.
 
 ## Open
 
+- **BIGGEST CURRENT UI DEFECT — the project-home DAG canvas does not scale to
+  its panel (user-flagged 2026-11-08).** On `/p/:slug` the left DAG panel shows
+  a horizontal scrollbar with a large empty area to the right; the graph itself
+  stays at its natural size in the top-left instead of scaling to the panel.
+  Cause: `DAGLayout.layout/2` computes `width` from the **configured**
+  `max_columns` (default 10), not the columns actually used:
+  `24 * 2 + (10 - 1) * 44 = 444px` for every graph with ≤10 columns.
+  `Components.DAG` then hardcodes `width={@layout.width}` on the `<svg>` and
+  `style="width: …px"` on `.dag-canvas`. The left grid column is
+  `minmax(16rem, 25%)` — about 334px of content at 1440px — so a 2-column graph
+  overflows by ~110px, giving the ~75%-wide scrollbar thumb in the screenshot.
+  Expected: derive the width from the actual maximum nodes-per-layer (plus a
+  sensible minimum), or make the SVG scale (`width: 100%` + `viewBox` /
+  `preserveAspectRatio`) under a `max-width`; scroll only when the real graph is
+  wider than the panel. If the SVG scales, re-check `tooltip_x/2`, the 240px
+  `foreignObject`, and the selection ring — viewBox coordinates scale, so the
+  tooltip can shrink or drift. Verify 1440×1000 and 390×844, light/dark, with
+  1–10 columns and a wrapped band (>10 nodes in one layer).
+  Screenshots: `docs/images/dag-width-overflow-1440-20261108.png` (scrollbar
+  visible) and `docs/images/dag-width-overflow-390-20261108.png` (same dead
+  space; the overlay scrollbar is hidden until scrolled).
 - **6c action logs:** the run page renders captured logs as escaped text in a
   `<pre>` (ANSI/control sequences stripped). A "download raw log" or "copy"
   affordance is still missing; add it only if needed, keeping the same escaping
