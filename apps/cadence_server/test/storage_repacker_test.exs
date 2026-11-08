@@ -113,6 +113,44 @@ defmodule Cadence.Server.StorageRepackerTest do
       assert length(GitStore.packs(store)) == 1
     end
 
+    test "a run after a sweep packs only new loose objects", %{project: project, store: store} do
+      {[old_sha], [old_content]} = write_blobs(store, 1)
+
+      assert {:ok, first} = Storage.run(project.id)
+      assert first.packed_objects == 1
+      assert {:ok, swept} = Storage.run(project.id)
+      assert swept.swept_loose == 1
+      assert GitStore.loose_objects(store) == []
+
+      [old_pack] = GitStore.packs(store)
+      old_pack_bytes = File.read!(old_pack.pack_path)
+      old_idx_bytes = File.read!(old_pack.idx_path)
+
+      {new_shas, new_contents} = write_blobs(store, 3, 64)
+
+      assert {:ok, third} = Storage.run(project.id)
+      assert third.packed_objects == 3
+      assert third.swept_loose == 0
+      assert length(third.packs) == 1
+      assert length(GitStore.packs(store)) == 2
+
+      # The already-packed store is untouched: only the new blobs form a pack.
+      assert File.read!(old_pack.pack_path) == old_pack_bytes
+      assert File.read!(old_pack.idx_path) == old_idx_bytes
+      assert length(GitStore.loose_objects(store)) == 3
+
+      assert {:ok, fourth} = Storage.run(project.id)
+      assert fourth.swept_loose == 3
+      assert fourth.packed_objects == 0
+      assert GitStore.loose_objects(store) == []
+      assert length(GitStore.packs(store)) == 2
+
+      assert GitStore.read_blob(store, old_sha) == old_content
+
+      Enum.zip(new_shas, new_contents)
+      |> Enum.each(fn {sha, content} -> assert GitStore.read_blob(store, sha) == content end)
+    end
+
     test "stale temporary pack pairs and orphan packs are removed", %{
       project: project,
       store: store

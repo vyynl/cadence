@@ -39,6 +39,45 @@ defmodule Cadence.Shared.GitStore.Pack.IndexTest do
       end
     end
 
+    test "fanout grows across every bucket and lookups survive growth" do
+      first_wave =
+        for byte <- 0..255 do
+          raw = <<byte>> <> binary_part(:crypto.hash(:sha, <<byte>>), 0, 19)
+          Base.encode16(raw, case: :lower)
+        end
+        |> Enum.with_index()
+        |> Enum.map(fn {sha, i} -> %{sha: sha, offset: i * 17 + 12, crc: i} end)
+
+      encoded = Index.encode(first_wave, @checksum)
+      assert {:ok, index} = Index.decode(encoded)
+      fanout = fanout(encoded)
+      assert length(fanout) == 256
+      assert fanout == Enum.to_list(1..256)
+      assert List.last(fanout) == length(first_wave)
+
+      for entry <- first_wave, do: assert(Index.offset(index, entry.sha) == entry.offset)
+
+      # A second wave adds 64 entries to the zero bucket: the index must grow
+      # without disturbing earlier lookups.
+      second_wave =
+        for i <- 0..63 do
+          raw = <<0, i>> <> binary_part(:crypto.hash(:sha, <<0, i>>), 0, 18)
+          %{sha: Base.encode16(raw, case: :lower), offset: 10_000 + i, crc: 1_000 + i}
+        end
+
+      grown = Index.encode(first_wave ++ second_wave, @checksum)
+      assert {:ok, grown_index} = Index.decode(grown)
+      grown_fanout = fanout(grown)
+
+      assert hd(grown_fanout) == 65
+      assert List.last(grown_fanout) == 320
+      assert grown_fanout == Enum.sort(grown_fanout)
+
+      for entry <- first_wave ++ second_wave do
+        assert Index.offset(grown_index, entry.sha) == entry.offset
+      end
+    end
+
     test "64-bit offsets use the large-offset table" do
       [a, b, c] = shas(3)
 
@@ -115,6 +154,11 @@ defmodule Cadence.Shared.GitStore.Pack.IndexTest do
   defp resign(bin) do
     body = binary_part(bin, 0, byte_size(bin) - 20)
     body <> :crypto.hash(:sha, body)
+  end
+
+  # Fanout table: 256 big-endian counts after the 8-byte magic/version header.
+  defp fanout(<<0xFF, "tOc", 2::32-big, rest::binary>>) do
+    for <<count::32-big <- binary_part(rest, 0, 1024)>>, do: count
   end
 
   defp shas(n) do

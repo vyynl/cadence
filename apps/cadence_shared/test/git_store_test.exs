@@ -741,6 +741,65 @@ defmodule Cadence.Shared.GitStoreTest do
       assert pack_files(repo) == [info.pack_path]
     end
 
+    test "reads resolve across two packs plus loose objects", %{dir: dir, repo: repo} do
+      work = Path.join(dir, "work")
+
+      tree_a = build_file_tree(repo, work, %{"a.txt" => "alpha\n"})
+      commit_a = GitStore.write_commit(repo, tree_a, [], %{name: "a", email: "a@b"}, "first")
+
+      {:ok, objects_a} = GitStore.objects_from(repo, commit_a)
+      {:ok, pack_a} = GitStore.pack_objects(repo, objects_a)
+
+      # Warm the index cache with the first pack before a second pack exists.
+      assert GitStore.has_object?(repo, commit_a)
+
+      tree_b = build_file_tree(repo, work, %{"b.txt" => "beta\n"})
+
+      commit_b =
+        GitStore.write_commit(repo, tree_b, [commit_a], %{name: "a", email: "a@b"}, "second")
+
+      {:ok, objects_b} = GitStore.objects_from(repo, commit_b)
+      packed_a = MapSet.new(objects_a, & &1.sha)
+      new_objects = Enum.reject(objects_b, &MapSet.member?(packed_a, &1.sha))
+
+      {:ok, pack_b} = GitStore.pack_objects(repo, new_objects)
+      assert pack_a.name != pack_b.name
+
+      # A third object stays loose while the other two generations live in
+      # separate packs.
+      loose = GitStore.write_blob(repo, "gamma\n")
+      Enum.each(objects_a ++ objects_b, &remove_loose!(repo, &1.sha))
+
+      GitStore.invalidate_cache(repo)
+
+      assert length(GitStore.packs(repo)) == 2
+      assert GitStore.read_blob(repo, loose) == "gamma\n"
+
+      for sha <- Enum.map(objects_a ++ objects_b, & &1.sha) do
+        assert GitStore.has_object?(repo, sha)
+      end
+
+      # Pack A serves the first generation, pack B the second, loose the third.
+      assert %{tree: ^tree_a} = GitStore.read_commit(repo, commit_a)
+      assert %{tree: ^tree_b} = GitStore.read_commit(repo, commit_b)
+      assert GitStore.read_tree(repo, tree_a) != nil
+      assert GitStore.read_tree(repo, tree_b) != nil
+
+      assert {:ok, "alpha\n"} = GitStore.read_path(repo, commit_b, "a.txt")
+      assert {:ok, "beta\n"} = GitStore.read_path(repo, commit_b, "b.txt")
+
+      assert {:ok, blobs} = GitStore.walk_blobs(repo, commit_b)
+      assert Enum.map(blobs, & &1.path) == ["a.txt", "b.txt"]
+
+      assert {:ok, repacked} = GitStore.objects_from(repo, commit_b)
+
+      assert Enum.map(repacked, & &1.sha) |> Enum.sort() ==
+               objects_b |> Enum.map(& &1.sha) |> Enum.sort()
+
+      changes = GitStore.diff_trees(repo, nil, tree_b)
+      assert Enum.map(changes, & &1.path) == ["a.txt", "b.txt"]
+    end
+
     test "pack_objects/3 rejects an empty list and invalid objects", %{repo: repo} do
       assert GitStore.pack_objects(repo, []) == {:error, :no_objects}
 

@@ -120,6 +120,17 @@ defmodule Cadence.Shared.GitStore.PackTest do
       end
     end
 
+    test "enforces the delta depth cap at the exact boundary", %{dir: dir} do
+      base = Enum.map_join(1..20, fn i -> "line #{i}\n" end)
+      {path, offsets, last_sha} = write_delta_chain(dir, base, 50)
+
+      assert {:ok, {:blob, data}} = Pack.read_object(path, offsets, last_sha, max_depth: 50)
+      assert data =~ "revision 50\n"
+
+      assert {:error, :delta_chain_too_deep} =
+               Pack.read_object(path, offsets, last_sha, max_depth: 49)
+    end
+
     test "an empty pack is a valid header and trailer" do
       assert {:ok, encoded} = Pack.encode([])
       assert binary_part(encoded.pack, 0, 4) == "PACK"
@@ -214,6 +225,51 @@ defmodule Cadence.Shared.GitStore.PackTest do
     path = Path.join(dir, "test-#{System.unique_integer([:positive])}.pack")
     File.write!(path, encoded.pack)
     {path, idx.offsets, encoded}
+  end
+
+  # A deterministic chain: one full blob followed by `count` ref-deltas, each
+  # built on the previous blob. The returned SHA is `count` deltas deep.
+  defp write_delta_chain(dir, base, count) do
+    base_sha = git_sha(:blob, base)
+    base_entry = Pack.entry_header(:blob, byte_size(base)) <> :zlib.compress(base)
+    first_offset = 12 + byte_size(base_entry)
+
+    {chain, _last} =
+      Enum.map_reduce(1..count, {base_sha, base, first_offset}, fn i,
+                                                                   {prev_sha, prev_data, offset} ->
+        data = prev_data <> "revision #{i}\n"
+        {:ok, delta} = Delta.build(prev_data, data)
+
+        entry =
+          Pack.entry_header(7, byte_size(delta)) <>
+            Base.decode16!(prev_sha, case: :lower) <> :zlib.compress(delta)
+
+        sha = git_sha(:blob, data)
+        {{sha, entry, offset}, {sha, data, offset + byte_size(entry)}}
+      end)
+
+    entries =
+      Enum.map(chain, fn {sha, entry, offset} ->
+        %{sha: sha, offset: offset, crc: :erlang.crc32(entry)}
+      end)
+
+    base_meta = %{sha: base_sha, offset: 12, crc: :erlang.crc32(base_entry)}
+
+    body =
+      IO.iodata_to_binary([
+        "PACK",
+        <<2::32>>,
+        <<count + 1::32>>,
+        base_entry,
+        Enum.map(chain, &elem(&1, 1))
+      ])
+
+    pack = body <> sha1(body)
+    idx = index([base_meta | entries], sha1(body))
+    path = Path.join(dir, "chain-#{count}.pack")
+    File.write!(path, pack)
+    last_sha = chain |> List.last() |> elem(0)
+    {path, idx.offsets, last_sha}
   end
 
   defp index(entries, pack_checksum) do
