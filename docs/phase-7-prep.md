@@ -2,8 +2,7 @@
 
 **Spec:** §13 Phase 7, §15 (principles 1/5/7), §10.2/§10.6 (push + wire
 format), §12.6 (env contract), §16 ("Storage repack trigger").
-**Status:** 7a, 7b, and 7c are complete (2026-11-07). 7d
-(verification/closeout) remains.
+**Status:** 7a, 7b, 7c, and 7d are complete (2026-11-07). Phase 7 is closed.
 
 ## Goal
 
@@ -140,11 +139,29 @@ server independently refuses over-cap requests. Tests:
 `sync_client_test.exs` / `sync_test.exs` cases and the `TestSyncServer`
 existence route. `CAD_SYNC_EXISTS_LIMIT` is recorded in §12.6.
 
-### 7d — verification / closeout (fold into 7b/7c if small)
+### 7d — verification / closeout (shipped 2026-11-07)
 
-- Multi-pack reads, index growth, delta-chain depth cap, repack of an already
-  packed store (new loose objects only), and a real-store smoke on the demo
-  stack.
+- Multi-pack reads: `git_store_test.exs` now packs two generations into two
+  packs, writes a third loose object, invalidates the cache between writes, and
+  reads every object through `read_blob/read_commit/read_tree/read_path/
+  walk_blobs/objects_from/diff_trees/has_object?`.
+- Index growth: `pack_index_test.exs` covers every fanout bucket (256 entries),
+  asserts the cumulative fanout table, then grows the zero bucket by 64 entries
+  and re-asserts all lookups.
+- Delta-chain depth cap: `pack_test.exs` hand-builds a 50-delta chain and pins
+  the boundary (reads at `max_depth: 50`, `:delta_chain_too_deep` at 49).
+- Repack of an already-packed store: `storage_repacker_test.exs` proves a third
+  run packs only the new loose objects, leaves the existing pack bytes
+  untouched, and a fourth run sweeps only those new copies.
+- Real-store smoke (`docker compose up --build`, 2026-11-07): `mix
+  cadence.repack` run 1 packed 29 + 36 loose objects into one pack per project
+  (0 swept); run 2 verified and swept 29 + 36 loose copies; run 3 was a no-op.
+  `Storage.stats/1` then reported `loose=0`, `packed=29/36`, `packs=1` per
+  project. Reading the seeded snapshots through `GitStore` in a fresh VM
+  returned the same commits, trees, 5 + 3 blobs, and object closures as the
+  loose baseline, and the live server served `/`, `/p/cadence-demo`,
+  `/p/meld-review`, `/sign-in`, and all five seeded proposal pages with the
+  expected 200s and rendered diff paths after the sweep.
 
 ## Decisions to confirm before implementation
 

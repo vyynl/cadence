@@ -24,7 +24,7 @@ history, not current instructions.
 | UI styling & freshness pass (4e) | Complete |
 | Phase 5 — doc automation | Code complete (5a shared primitives, 5b daemon worker, 5c daemon API + Neovim, P4 deferred/pushed docs + docs badge); P5 release verification pending |
 | Phase 6 — Docker actions | Complete (6a manifest foundation, 6b runner, 6c web run experience); action log streaming and retention remain §16 deltas |
-| Phase 7 — Storage engineering | In progress: 7a shipped (pack v2 + idx v2, delta reads, transparent `GitStore`, shared index cache); 7b shipped (threshold + 6 h backstop + `mix cadence.repack`, verified deferred loose sweep); 7c shipped (existence handshake with full-push fallback); 7d verification/closeout pending |
+| Phase 7 — Storage engineering | Complete (7a pack layer, 7b repacker, 7c existence handshake, 7d multi-pack/index/delta-depth/repack verification + demo-stack smoke); pack consolidation remains a §16 delta |
 
 ## Current docs
 

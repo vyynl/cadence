@@ -1966,6 +1966,12 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   failure, and retries once with every object if a filtered push 422s. Over-cap
   requests are refused by the server and skipped by the daemon
   (§10.2, §10.6, §12.6).
+- 7d — verification/closeout (shipped): multi-pack plus loose reads with cache
+  invalidation, fanout/index growth across every bucket, the delta-chain depth
+  boundary, and a repack of an already-packed store (new loose objects only) are
+  pinned by tests; a demo-stack smoke repacks two seeded projects, sweeps the
+  loose copies, and serves the project and proposal pages from pack-only
+  storage.
 
 ---
 

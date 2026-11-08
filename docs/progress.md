@@ -1,11 +1,9 @@
 # Cadence — Progress
 
 ## Current Phase
-**Phase 7 — storage engineering is nearly complete.** 7a (shared pack layer),
-7b (server repacker), and 7c (sync existence handshake) are complete. Next is
-**7d (verification/closeout)**: multi-pack reads, index growth, delta-chain
-depth, repacking an already-packed store, and a real-store smoke on the demo
-stack. Phase 5 P5 and the union/UI live checks remain as optional carry-over.
+**Phase 7 — storage engineering is complete (7a–7d).** The git build order in
+spec §13 ends here. The next session picks up the carry-over list in **Next**
+(open review suggestions, optional live smokes, §16 deltas).
 
 ## Done (summary)
 
@@ -509,6 +507,22 @@ stack. Phase 5 P5 and the union/UI live checks remain as optional carry-over.
   fixed the cap-skip design (now chunked), a `<= 0` chunk-size footgun, raw-cap
   ordering, daemon config docs, and stronger tests. Lesson:
   `.claude/solutions/data-integrity/sync-existence-chunking-20261107.md`.
+- **Phase 7d (verification/closeout)** — the remaining 7d claims are pinned by
+  tests: `git_store_test.exs` reads across two packs plus a loose object after
+  `invalidate_cache/1` between writes (`read_blob/read_commit/read_tree/
+  read_path/walk_blobs/objects_from/diff_trees/has_object?`); `pack_index_test.exs`
+  covers all 256 fanout buckets and grows the zero bucket by 64 entries;
+  `pack_test.exs` pins the delta-depth boundary (a 50-delta chain reads at
+  `max_depth: 50` and fails at 49); `storage_repacker_test.exs` proves a run
+  after a sweep packs only new loose objects and leaves the existing pack bytes
+  untouched. Demo-stack smoke: run 1 packed 29 + 36 loose objects into one pack
+  per project, run 2 swept 29 + 36 verified loose copies, run 3 was a no-op;
+  `Storage.stats/1` reported `loose=0`, `packed=29/36`, `packs=1`; a fresh VM
+  and the live server both read the same commits/trees/blobs from packs, and
+  `/`, both project pages, `/sign-in`, and all five seeded proposal pages
+  returned 200 with rendered diff paths. Spec §13 Phase 7, `docs/README.md`, and
+  `docs/phase-7-prep.md` closed. 1046 tests green (312 shared + 198 daemon + 536
+  server); format and dev/prod compile clean.
 - **4e gate:** 640 tests green (161 shared + 125 daemon + 354 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
@@ -522,15 +536,22 @@ stack. Phase 5 P5 and the union/UI live checks remain as optional carry-over.
 
 ## Next
 
-**Immediate step:** start **Phase 7d (verification/closeout)** (spec §13;
-`docs/phase-7-prep.md` §7d). Prove multi-pack reads (two packs plus loose
-objects, with the cache invalidated between writes), index growth, the
-delta-chain depth cap, and a repack of an already-packed store (only new loose
-objects are packed); then run a real-store smoke on the demo stack
-(`docker compose up`, push a project past the threshold, run
-`mix cadence.repack`, verify `read_*`/`objects_from` and the web pages after
-loose copies are swept). 7d is verification only unless it finds a defect; no
-new dependency is expected.
+**Immediate step:** close the two open freshness-review suggestions (small,
+self-contained code fixes; no new dependency):
+
+1. `ReviewLive.Show` — an incident on the decision node that arrives while the
+   review payload is still loading is dropped (`decision_node_ids/1` returns
+   `[]` before the async completes) and Approve stays enabled until the next
+   reload. Buffer the event (or reload once) and re-derive `node_blocked?` when
+   the payload lands; the click already fails closed, so this is defence in
+   depth.
+2. `ProjectLive` — the quarantine cache reuses a `:quarantined` answer derived
+   from a failed `walk_blobs`; reuse only `:ok` and re-derive a failure-derived
+   answer.
+
+Both have plan notes in `.claude/plans/ui-styling-freshness/` and a regression
+test is expected for each. After that, the optional live smokes below and the
+§16 deltas are the remaining backlog.
 
 **Integration contract (6c, for anything that touches runs):**
 `Actions.Runs.prepare/4` returns `{:ok, %ActionRun{}}` or
@@ -547,46 +568,51 @@ Docker client is injected via `:actions_docker` (`FakeDocker` in tests).
 `Runs.list/get` now return `:disabled` when `CAD_ACTIONS_ENABLED=false`; run
 pages redirect, the nav link hides, and artifact downloads 404.
 
-Carry-over (small, not blocking Phase 7):
+Carry-over (post-Phase-7):
 
 1. **Phase 5 P5 docs live smoke** — optional, with a real `CAD_LLM_API_KEY`.
 2. **Union live smoke** — drive `:CadUnion` against the demo stack once
    (`docker compose up`, `docs/demo.md`) and record the result; the Neovim
    submit is the one 4d-3 surface without a live run.
-3. **Two open review suggestions from the freshness review:**
-   - `ReviewLive.Show`: an incident on the decision node that arrives while the
-     review payload is still loading is dropped (`decision_node_ids/1` returns
-     `[]` before the async completes) and Approve stays enabled until reload
-     (it still fails closed on click).
-   - `ProjectLive`: the quarantine cache is reused for a `:quarantined` answer
-     derived from a failed `walk_blobs`; reuse only `:ok` and re-derive a
-     failure-derived answer.
-4. **Optional `:CadProposals` surface** for the union token returned to Neovim.
-5. **Manual styling check** (optional): `docker compose up`, then `/`,
+3. **Optional `:CadProposals` surface** for the union token returned to Neovim.
+4. **Manual styling check** (optional): `docker compose up`, then `/`,
    `/p/cadence-demo`, `/p/cadence-demo/reviews`, a run page, one pending
    proposal, and `/proposals/<token>` at wide and narrow widths in light and
    dark. There are no browser tests; 4e and 6c verified server-rendered markup
    and CSS only.
-6. **6c residues** (spec §16): run history pages at 50 rows and the detail at
+5. **6c residues** (spec §16): run history pages at 50 rows and the detail at
    the first 100 artifacts (no paging); no per-project run concurrency cap; no
    artifact/image retention; action log streaming remains post-exit.
+6. **7b/7c residues** (spec §16): pack consolidation / multi-pack index; no
+   run timeout (a hung repack wedges the single-worker queue until restart);
+   the repack threshold path was not exercised on the demo seed (its stores are
+   below 1,000 objects — the manual two-run path was used, and the threshold is
+   unit-tested).
 
-**Spin-up:** `@phx-full` (or `@phx-plan` → `@phx-work`) at Phase 7d. No new
-dependency is expected; the pack layer is hand-written and the spec §11 table
-already records it.
+**Spin-up:** `@phx-full` (or `@phx-quick` for the two review suggestions). The
+planned build order in spec §13 is complete; no new dependency is expected.
 
 ## Blocked
 
-- (none). Phase 7c is complete and both review passes' must-fix items are
-  applied and verified. Follow-ups recorded below (unreadable-object isolation,
-  re-push of an existing row whose objects were later lost, the 8 MB retry
-  ceiling) are pre-existing and do not block 7d. Open deltas
-  (artifact/image retention, run-history paging, per-project run concurrency,
-  the `/out` quota prerequisite, the Engine API floor, `Project.docker_image`
-  having no writer, userns) remain recorded below and in spec §16.
+- (none). Phase 7 is complete (7a–7d) and every review's must-fix item is
+  applied and verified. The two remaining freshness-review suggestions are
+  recorded in **Next**, not blockers (both fail closed today). Pre-existing
+  follow-ups (unreadable-object isolation, re-push of an existing row whose
+  objects were later lost, the 8 MB retry ceiling, pack consolidation, the
+  missing repack timeout) remain recorded below and in spec §16.
 
 ## Spec Deltas / Open Items
 
+- **7d verification notes (2026-11-07)** — the demo seed's stores are 29 and 36
+  loose objects, far below the 1,000-object / 64 MiB default threshold, so the
+  smoke exercised the **manual** `mix cadence.repack` path (two runs: pack, then
+  verified sweep). The threshold and push-trigger paths stay covered by
+  `storage_repacker_test.exs`, but a real over-threshold push was not driven.
+  The repack ran in a second VM while the server was live: the server served
+  every page correctly because a packed-only read misses loose, reloads the
+  index once, and retries (7a), which is now exercised end to end. Two packs
+  were observed only in the test suite (split batches); the smoke produced one
+  pack per project. Pack consolidation/multi-pack-index remains open (§16).
 - **7c handshake notes (2026-11-07)** — `objects_from/2` returns the **full
   reachable closure** for every node, so a push batch's unique SHA set is
   roughly the project's whole history, not the new delta. That is why the
@@ -1428,3 +1454,26 @@ and complete-retry assertions. Lesson:
 at `a9a649d` (`feat: Phase 7c — sync existence handshake`), with this handoff
 note as the follow-up docs commit; working tree clean. Next: 7d
 (multi-pack/index/delta-depth verification and a demo-stack smoke).
+
+2026-11-07 — **Phase 7d (verification/closeout)** shipped from
+`.claude/plans/phase-7d-verification/plan.md` (`@phx-full`). Four verification
+tests close the remaining 7d claims: (1) `git_store_test.exs` reads across two
+packs plus a loose object with `invalidate_cache/1` between writes, exercising
+every read primitive; (2) `pack_index_test.exs` covers all 256 fanout buckets,
+asserts cumulative counts, grows the zero bucket by 64 entries, and re-asserts
+lookups; (3) `pack_test.exs` hand-builds a 50-delta chain and pins the boundary
+(reads at `max_depth: 50`, `:delta_chain_too_deep` at 49); (4)
+`storage_repacker_test.exs` proves a run after a sweep packs only the new loose
+objects and leaves the existing pack bytes untouched. Demo-stack smoke
+(`docker compose up --build`): run 1 packed 29 + 36 loose objects into one pack
+per project with 0 swept; run 2 verified and swept 29 + 36 loose copies; run 3
+was a no-op. `Storage.stats/1` then reported `loose=0`, `packed=29/36`,
+`packs=1`. A fresh VM read the same commits, trees, 5 + 3 blobs, and object
+closures as the loose baseline, and the live server served `/`,
+`/p/cadence-demo`, `/p/meld-review`, `/sign-in`, and all five seeded proposal
+pages with the expected 200s and rendered diff paths from pack-only storage.
+Spec §13 Phase 7, `docs/phase-7-prep.md`, `docs/README.md`, and this handoff
+updated. Verification: `mix format --check-formatted`, dev +
+`MIX_ENV=prod mix compile --warnings-as-errors`, 1046 tests green (312 shared +
+198 daemon + 536 server; +4). Phase 7 is complete; the spec §13 build order
+ends here. Next: the two open freshness-review suggestions in **Next**.
