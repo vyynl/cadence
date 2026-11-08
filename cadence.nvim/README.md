@@ -8,7 +8,8 @@ Neovim front-end for the Cadence daemon (spec §13 Phase 1e). Provides `:CadOpen
 - Neovim 0.9+
 - [plenary.nvim](https://github.com/nvim-lua/plenary.nvim)
 - `curl` on `PATH`
-- A running Cadence daemon (`mix run --no-halt` from the repo root)
+- A running Cadence daemon — see `../docs/daemon-setup.md` (token, migration,
+  boot command, project registration)
 
 ## Install (lazy.nvim)
 
@@ -73,8 +74,8 @@ require("cadence").setup({
 ## Manual smoke test
 
 ```bash
-# terminal A — daemon
-mix run --no-halt
+# terminal A — daemon (see docs/daemon-setup.md for token + migration)
+mix run --no-start --no-halt -e 'Application.ensure_all_started(:cadence_daemon)'
 
 # terminal B — register a project (work_dir must be an existing directory)
 mix cad.register MyProject my-project ~/code/my-project

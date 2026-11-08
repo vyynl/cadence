@@ -1,10 +1,11 @@
 # Cadence — Progress
 
 ## Current Phase
-**Phase 7 — storage engineering is complete (7a–7d).** The planned build order
-in spec §13 ends here. The post-7d freshness follow-ups and the union live smoke
-are also done; the next stage is the daemon boot guard + setup docs (**Next**),
-then the optional live checks and §16 deltas.
+**Post-Phase 7 — build order complete.** Phase 7 (7a–7d) shipped, the union
+live smoke is recorded, and the post-7 startup gap is closed: a fresh daemon
+state dir with sync configured now boots instead of crashing, and the operator
+setup is documented in `docs/daemon-setup.md`. The next stage is the optional
+carry-over checks (**Next**), not new build-order work.
 
 ## Done (summary)
 
@@ -558,6 +559,22 @@ then the optional live checks and §16 deltas.
   (`mix ecto.migrate -r Cadence.Daemon.Repo`) and started with
   `mix run --no-start --no-halt -e 'Application.ensure_all_started(:cadence_daemon)'`
   plus `CAD_SERVER_URL`/`CAD_AUTH_TOKEN`/`CAD_SYNC_ENABLED=true`.
+- **Daemon boot guard + setup docs (2026-11-08)** — a fresh state dir with sync
+  configured boots instead of crashing: `SyncLedger.backfill/1` and
+  `SyncWorker.project_ids/0` tolerate "no such table" (skip; other errors
+  re-raise), and `SyncLedger.state_value/1` returns `nil` so the notification
+  socket's `server_user_id` read cannot crash the ledger. New
+  `boot_guard_test.exs` stops the `:memory:` app, reboots with sync configured,
+  and asserts the ledger, worker, and `server_user_id` path survive; `on_exit`
+  restores the config and re-runs migrations. New `docs/daemon-setup.md` (token
+  minting, env-file sourcing, one-time migration, `--no-start` boot,
+  `mix cad.register`, troubleshooting), linked from `docs/README.md` and
+  `cadence.nvim/README.md`. Spec §5.6/§12.2/§13 updated. Also fixed a latent
+  test-boot bug: `ensure_repo_dir!/0` chmod'ed the repo root to 0700 because
+  `:memory:` was treated as a path. 1 new test; 1050 total (312 shared + 199
+  daemon + 539 server). Read-only review found one BLOCKER (the socket read
+  path) and one HIGH (the cast-based wake was not pinned); both fixed and
+  covered by the test.
 - **4e gate:** 640 tests green (161 shared + 125 daemon + 354 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
@@ -571,16 +588,15 @@ then the optional live checks and §16 deltas.
 
 ## Next
 
-**Immediate step:** fix the daemon boot guard found during the union smoke.
-`Cadence.Daemon.Application.maybe_start_sync/0` calls
-`SyncLedger.rehydrate/0` without the "no such table" rescue that
-`Projects.rehydrate`, `MessageQueue.rehydrate`, and `DocQueue.rehydrate` use, so
-a fresh state dir + configured sync crashes the app instead of logging a
-warning (the smoke hit this before migrations). Guard it in the
-`SyncLedger` rehydrate path, add a regression test (boot an empty DB with sync
-configured), and document the daemon setup
-(`mix ecto.migrate -r Cadence.Daemon.Repo`, token minting, the
-`--no-start` daemon command) in `cadence.nvim/README.md` or `docs/`.
+**Immediate step:** the manual browser/styling check of the demo stack —
+`docker compose up`, then `/`, `/p/cadence-demo`, `/p/cadence-demo/reviews`, a
+run page, one pending proposal, and `/proposals/<token>` at wide and narrow
+widths in light and dark. There are no browser tests; 4e and 6c verified
+server-rendered markup and CSS only. Capture layout/contrast observations in
+`docs/ui-notes.md`.
+
+The daemon boot guard and its setup docs are done; the rest of the carry-over
+list below is optional and independent.
 
 **Integration contract (6c, for anything that touches runs):**
 `Actions.Runs.prepare/4` returns `{:ok, %ActionRun{}}` or
@@ -615,9 +631,10 @@ Carry-over (post-Phase-7, optional):
    below 1,000 objects — the manual two-run path was used, and the threshold is
    unit-tested).
 
-**Spin-up:** `@phx-quick` for the boot guard + setup docs (one code path plus a
-regression test), or `@phx-full` if the fresh-DB test needs a harness. The
-planned build order in spec §13 is complete; no new dependency is expected.
+**Spin-up:** the immediate check is manual/browser only. For the optional
+carry-overs, use `@phx-quick` for the `:CadProposals` surface and `@phx-full`
+for a docs live smoke (needs `CAD_LLM_API_KEY`). The planned build order in spec
+§13 is complete; no new dependency is expected.
 
 ## Blocked
 
@@ -629,12 +646,6 @@ planned build order in spec §13 is complete; no new dependency is expected.
 
 ## Spec Deltas / Open Items
 
-- **Daemon boot on an unmigrated DB (2026-11-08, found in the union smoke)** —
-  with sync configured, `maybe_start_sync/0` calls `SyncLedger.rehydrate/0`,
-  which raises `Exqlite.Error` when `sync_state`/`sync_pending` do not exist;
-  the other rehydrates rescue "no such table" and log. A fresh state dir must be
-  migrated first (`mix ecto.migrate -r Cadence.Daemon.Repo`). The guard (and a
-  setup-docs note) is the next stage.
 - **Union smoke result shape (2026-11-08)** — the two parents had identical
   trees (`branch-b` was spawned from the first node), so the approved meld
   reports "No file changes" despite `file_count: 1`; a divergent branch would
@@ -1555,3 +1566,22 @@ Cleanup: `docker compose down` (named volumes kept), stale daemon socket
 removed, scratch files deleted; the migrated daemon DB and `~/cadence-union-demo`
 remain. Next: the unmigrated-DB boot guard + daemon setup docs (recorded in
 **Next** and Spec Deltas).
+
+2026-11-08 — **Daemon boot guard + setup docs** (post-Phase 7) shipped from
+`.claude/plans/daemon-boot-guard/plan.md`. `SyncLedger.backfill/1` and
+`SyncWorker.project_ids/0` skip "no such table" (other errors re-raise), and
+`SyncLedger.state_value/1` returns `nil` so the notification socket's
+`server_user_id` read cannot take down the ledger; `ensure_repo_dir!/0` no
+longer chmods the repo root for `:memory:`. New `boot_guard_test.exs` boots an
+empty `:memory:` DB with sync configured, asserts the ledger/worker/
+`server_user_id` paths survive, and restores the app + migrations in `on_exit`.
+New `docs/daemon-setup.md` covers token minting, env sourcing, one-time
+migration, the `--no-start` boot command, and registration; `docs/README.md`
+and `cadence.nvim/README.md` link it. Spec §5.6/§12.2/§13 updated; the
+unmigrated-boot delta is resolved. Read-only review: 1 BLOCKER (socket read
+path), 1 HIGH (cast-based wake not pinned), 3 MEDIUM, 6 LOW — all fixed
+(the `:memory:` chmod bug was one of them). Verification:
+`mix format --check-formatted`, dev + `MIX_ENV=prod mix compile
+--warnings-as-errors`, 1050 tests green (312 shared + 199 daemon + 539 server;
++1 daemon). The planned build order is complete; next is the optional manual
+styling check (see **Next**).

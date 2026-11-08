@@ -580,6 +580,18 @@ defmodule Cadence.Daemon.SyncLedger do
       put_state(@backfill_key, "done")
       :ok
     end
+  rescue
+    e in Exqlite.Error ->
+      if missing_table?(e) do
+        Logger.warning("sync ledger rehydrate skipped before migrations: #{Exception.message(e)}")
+        :ok
+      else
+        reraise e, __STACKTRACE__
+      end
+  end
+
+  defp missing_table?(error) do
+    String.contains?(Exception.message(error), "no such table")
   end
 
   defp put_preferences(project_id, attrs) do
@@ -616,6 +628,11 @@ defmodule Cadence.Daemon.SyncLedger do
       %SyncState{value: value} -> value
       nil -> nil
     end
+  rescue
+    # The notification socket reads this before the first migration; a missing
+    # state table means "nothing set", not a fatal boot error.
+    e in Exqlite.Error ->
+      if missing_table?(e), do: nil, else: reraise(e, __STACKTRACE__)
   end
 
   defp put_state(key, value) do

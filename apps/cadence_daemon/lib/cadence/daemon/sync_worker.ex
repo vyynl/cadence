@@ -67,6 +67,15 @@ defmodule Cadence.Daemon.SyncWorker do
 
   defp project_ids do
     if sync_ready?(), do: Projects.list_project_ids(), else: []
+  rescue
+    # Before the first migration there are no projects; every tick would log
+    # the same warning, so stay silent (the boot rehydrate already warned).
+    e in Exqlite.Error ->
+      if missing_table?(e), do: [], else: reraise(e, __STACKTRACE__)
+  end
+
+  defp missing_table?(error) do
+    String.contains?(Exception.message(error), "no such table")
   end
 
   defp start_projects(project_ids, state) do

@@ -58,7 +58,7 @@ defmodule Cadence.Daemon.Application do
     case Application.fetch_env(:cadence_daemon, Cadence.Daemon.Repo) do
       {:ok, config} ->
         case Keyword.get(config, :database) do
-          path when is_binary(path) ->
+          path when is_binary(path) and path != ":memory:" ->
             path |> Path.dirname() |> Cadence.Daemon.Dirs.ensure!()
 
           _ ->

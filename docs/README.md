@@ -32,6 +32,7 @@ history, not current instructions.
 |---|---|
 | `spec.md` | Canonical product/technical contract |
 | `progress.md` | Current handoff and session summary |
+| `daemon-setup.md` | Local daemon setup: token, env file, migration, boot, registration |
 | `demo.md` | Local demo stack: compose, seed accounts, guided tour |
 | `phase-7-prep.md` | Phase 7 storage engineering: pack layer, repacker, existence handshake |
 | `phase-6-prep.md` | Phase 6 Docker actions: scope, slices, decisions, risks (historical) |

@@ -380,7 +380,8 @@ Diff:
 ### 5.6 Configuration
 
 - Daemon configuration is environment variables only (see §12.6), supplied via
-  a `.env` file or exported directly into the process environment.
+  the process environment — for example by sourcing an env file — or exported
+  directly.
 - Secrets live in `~/.config/cadence/env` (chmod 600), never in source or
   `config/`.
 
@@ -1483,8 +1484,15 @@ schemas, with different adapters (SQLite vs Postgres). Name them explicitly:
 - No Phoenix, no Postgres, no LiveView.
 - SQLite via `ecto_sqlite3` for local metadata.
 - Unix socket API at `~/.local/state/cadence/daemon.sock`.
-- Configuration: environment variables only (see §12.6), supplied via `.env`
-  or the process environment; secrets in `~/.config/cadence/env` (chmod 600).
+- Configuration: environment variables only (see §12.6), supplied via the
+  process environment; the `~/.config/cadence/env` file is sourced into it
+  (chmod 600) — the daemon does not parse env files itself.
+- A new state dir is created with owner-only (`0700`) permissions. The SQLite
+  database is migrated once with `mix ecto.migrate -r Cadence.Daemon.Repo`.
+  Booting before that migration is safe: rehydration logs a
+  `… skipped before migrations: no such table: <table>` warning per queue and
+  the daemon idles; sync rehydration runs after a restart against the migrated
+  database. (`docs/daemon-setup.md` is the operator walkthrough.)
 - Communicates with the server via the HTTP sync protocol (§10) plus an optional
   notification-only Phoenix Channels connection (Phase 2b-4). The socket never
   carries DAG or preference state.
@@ -1972,6 +1980,13 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   pinned by tests; a demo-stack smoke repacks two seeded projects, sweeps the
   loose copies, and serves the project and proposal pages from pack-only
   storage.
+- 7 post-close — daemon boot guard (shipped): a fresh state dir with sync
+  configured boots instead of crashing (the ledger no longer raises on
+  `sync_state`, and its read path tolerates an unmigrated table for the
+  notification socket). The boot rehydrate logs a "skipped before migrations"
+  warning and idles; the sync wake returns no projects until
+  `mix ecto.migrate -r Cadence.Daemon.Repo` has run, and rehydration runs on the
+  next restart (§12.2). The operator walkthrough is `docs/daemon-setup.md`.
 
 ---
 
