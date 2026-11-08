@@ -523,6 +523,22 @@ spec §13 ends here. The next session picks up the carry-over list in **Next**
   returned 200 with rendered diff paths. Spec §13 Phase 7, `docs/README.md`, and
   `docs/phase-7-prep.md` closed. 1046 tests green (312 shared + 198 daemon + 536
   server); format and dev/prod compile clean.
+- **Post-7d freshness follow-ups** — both open review suggestions are fixed.
+  `Portfolio.quarantine_status_with_source/3` now distinguishes a completed scan
+  (`{:ok, :ok | :quarantined}`) from a failed walk (`{:error, :unverifiable}`);
+  `quarantine_status/3` keeps its old `:ok | :quarantined` contract. `ProjectLive`
+  gained `quarantine_cacheable?`: it reuses an answer only when it was
+  authoritative, so a same-key incident event retries a failure-derived
+  quarantine (regression test lowers `scan_max_files` to 0, restores it, opens a
+  high non-blocking incident, and expects the pane to recover; it fails against
+  the old cache). `ReviewLive.Show.incident_relevant?/5` treats any incident as
+  relevant before the first successful payload load, forcing one reload so a
+  decision-node incident that arrives mid-load cannot be dropped; the pure
+  predicate has a unit test. 3 new tests; 1049 total (312 shared + 198 daemon +
+  539 server). Format and dev/prod compile clean. Residual: a Run click still
+  reuses the rendered answer, so an owner needs an event/navigation to run
+  against a snapshot whose previous scan failed (staging remains the authority
+  and the refusal is fail-closed).
 - **4e gate:** 640 tests green (161 shared + 125 daemon + 354 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
@@ -536,22 +552,12 @@ spec §13 ends here. The next session picks up the carry-over list in **Next**
 
 ## Next
 
-**Immediate step:** close the two open freshness-review suggestions (small,
-self-contained code fixes; no new dependency):
-
-1. `ReviewLive.Show` — an incident on the decision node that arrives while the
-   review payload is still loading is dropped (`decision_node_ids/1` returns
-   `[]` before the async completes) and Approve stays enabled until the next
-   reload. Buffer the event (or reload once) and re-derive `node_blocked?` when
-   the payload lands; the click already fails closed, so this is defence in
-   depth.
-2. `ProjectLive` — the quarantine cache reuses a `:quarantined` answer derived
-   from a failed `walk_blobs`; reuse only `:ok` and re-derive a failure-derived
-   answer.
-
-Both have plan notes in `.claude/plans/ui-styling-freshness/` and a regression
-test is expected for each. After that, the optional live smokes below and the
-§16 deltas are the remaining backlog.
+**Immediate step:** run the **union live smoke** — the one shipped trigger
+surface with no live run. `docker compose up --build -d`, start the daemon
+against the demo server, select two nodes in Neovim, run `:CadUnion`, and
+confirm the proposal token/URL notification plus the review page. Record the
+result in this file. This exercises `POST /union` → `POST /sync/union` →
+`Melds.propose/3` end to end; the plan is in `docs/demo.md`.
 
 **Integration contract (6c, for anything that touches runs):**
 `Actions.Runs.prepare/4` returns `{:ok, %ActionRun{}}` or
@@ -568,22 +574,19 @@ Docker client is injected via `:actions_docker` (`FakeDocker` in tests).
 `Runs.list/get` now return `:disabled` when `CAD_ACTIONS_ENABLED=false`; run
 pages redirect, the nav link hides, and artifact downloads 404.
 
-Carry-over (post-Phase-7):
+Carry-over (post-Phase-7, optional):
 
-1. **Phase 5 P5 docs live smoke** — optional, with a real `CAD_LLM_API_KEY`.
-2. **Union live smoke** — drive `:CadUnion` against the demo stack once
-   (`docker compose up`, `docs/demo.md`) and record the result; the Neovim
-   submit is the one 4d-3 surface without a live run.
-3. **Optional `:CadProposals` surface** for the union token returned to Neovim.
-4. **Manual styling check** (optional): `docker compose up`, then `/`,
+1. **Phase 5 P5 docs live smoke** — with a real `CAD_LLM_API_KEY`.
+2. **Optional `:CadProposals` surface** for the union token returned to Neovim.
+3. **Manual styling check**: `docker compose up`, then `/`,
    `/p/cadence-demo`, `/p/cadence-demo/reviews`, a run page, one pending
    proposal, and `/proposals/<token>` at wide and narrow widths in light and
    dark. There are no browser tests; 4e and 6c verified server-rendered markup
    and CSS only.
-5. **6c residues** (spec §16): run history pages at 50 rows and the detail at
+4. **6c residues** (spec §16): run history pages at 50 rows and the detail at
    the first 100 artifacts (no paging); no per-project run concurrency cap; no
    artifact/image retention; action log streaming remains post-exit.
-6. **7b/7c residues** (spec §16): pack consolidation / multi-pack index; no
+5. **7b/7c residues** (spec §16): pack consolidation / multi-pack index; no
    run timeout (a hung repack wedges the single-worker queue until restart);
    the repack threshold path was not exercised on the demo seed (its stores are
    below 1,000 objects — the manual two-run path was used, and the threshold is
@@ -594,15 +597,21 @@ planned build order in spec §13 is complete; no new dependency is expected.
 
 ## Blocked
 
-- (none). Phase 7 is complete (7a–7d) and every review's must-fix item is
-  applied and verified. The two remaining freshness-review suggestions are
-  recorded in **Next**, not blockers (both fail closed today). Pre-existing
+- (none). Phase 7 is complete (7a–7d), every review's must-fix item is applied
+  and verified, and both freshness-review suggestions are fixed. Pre-existing
   follow-ups (unreadable-object isolation, re-push of an existing row whose
   objects were later lost, the 8 MB retry ceiling, pack consolidation, the
   missing repack timeout) remain recorded below and in spec §16.
 
 ## Spec Deltas / Open Items
 
+- **Post-7d quarantine retry scope (2026-11-07)** — `ProjectLive` now caches
+  only authoritative quarantine answers and retries a failed scan on the next
+  navigation or incident event. A Run click still reuses the rendered answer, so
+  an owner needs one event/navigation before running against a snapshot whose
+  earlier scan failed; staging remains the authority and the refusal is
+  fail-closed, so wiring the click to re-derive is a refinement, not a safety
+  gap.
 - **7d verification notes (2026-11-07)** — the demo seed's stores are 29 and 36
   loose objects, far below the 1,000-object / 64 MiB default threshold, so the
   smoke exercised the **manual** `mix cadence.repack` path (two runs: pack, then
@@ -1477,3 +1486,20 @@ updated. Verification: `mix format --check-formatted`, dev +
 `MIX_ENV=prod mix compile --warnings-as-errors`, 1046 tests green (312 shared +
 198 daemon + 536 server; +4). Phase 7 is complete; the spec §13 build order
 ends here. Next: the two open freshness-review suggestions in **Next**.
+
+2026-11-07 — **Post-7d freshness follow-ups** shipped from
+`.claude/plans/review-suggestions/plan.md`. `Portfolio.quarantine_status_with_source/3`
+adds provenance to the quarantine answer (`{:ok, :ok | :quarantined}` for an
+incident or a completed scan, `{:error, :unverifiable}` for a failed walk);
+`quarantine_status/3` keeps its `:ok | :quarantined` contract. `ProjectLive`
+gained `quarantine_cacheable?` and reuses a cached answer only when it is
+authoritative, so a same-key incident event retries a failure-derived scan; the
+regression test sets `scan_max_files` to 0, restores it, opens a high
+non-blocking incident, and expects the pane to recover (verified to fail against
+the old cache). `ReviewLive.Show.incident_relevant?/5` now treats any incident as
+relevant before the first successful payload load, forcing one reload so a
+decision-node incident arriving mid-load cannot be dropped; the pure predicate
+is unit-tested. Verification: `mix format --check-formatted`, dev +
+`MIX_ENV=prod mix compile --warnings-as-errors`, 1049 tests green (312 shared +
+198 daemon + 539 server; +3). Review: PASS, no findings requiring a change; the
+Run-click retry scope is recorded in Spec Deltas. Next: the union live smoke.
