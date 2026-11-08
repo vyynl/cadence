@@ -2,6 +2,7 @@ local cadence = require("cadence")
 local client = require("cadence.client")
 local doc = require("cadence.doc")
 local graph = require("cadence.graph")
+local proposal = require("cadence.proposal")
 local ui = require("cadence.ui")
 
 local LEVELS = {
@@ -214,6 +215,48 @@ vim.api.nvim_create_user_command("CadUnion", function()
         return true
       end,
     })
+  end)
+end, {})
+
+vim.api.nvim_create_user_command("CadProposals", function()
+  with_project(function(project)
+    local res = client.get("/proposals?project_id=" .. project.id, socket())
+    if not res or res.status ~= 200 or type(res.body) ~= "table" then
+      vim.notify("failed to load proposals", vim.log.levels.ERROR)
+      return
+    end
+
+    local proposals = res.body.proposals or {}
+    if #proposals == 0 then
+      vim.notify("no union proposals yet; use :CadUnion", vim.log.levels.INFO)
+      return
+    end
+
+    vim.ui.select(proposals, {
+      prompt = "Cadence proposals",
+      format_item = function(item)
+        return proposal.format_item(item)
+      end,
+    }, function(choice)
+      if not choice then
+        return
+      end
+
+      local target = proposal.target(choice)
+      local result = proposal.copy_result(target)
+
+      if not target.value or target.value == "" then
+        vim.notify(result.message, LEVELS[result.level] or vim.log.levels.WARN)
+        return
+      end
+
+      -- `+` needs a clipboard provider; fall back to the unnamed register.
+      if not pcall(vim.fn.setreg, "+", target.value) then
+        pcall(vim.fn.setreg, '"', target.value)
+      end
+
+      vim.notify(result.message, LEVELS[result.level] or vim.log.levels.INFO)
+    end)
   end)
 end, {})
 

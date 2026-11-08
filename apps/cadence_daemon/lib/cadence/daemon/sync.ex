@@ -20,7 +20,8 @@ defmodule Cadence.Daemon.Sync do
     Projects,
     Repo,
     SyncClient,
-    SyncLedger
+    SyncLedger,
+    Unions
   }
 
   alias Cadence.Shared.{GitStore, Membership, Node, Project, UUID}
@@ -82,8 +83,9 @@ defmodule Cadence.Daemon.Sync do
 
   Ensures the server user and project exist, then posts synchronously — a
   conflicted union may wait on the meld model, so `SyncClient.union/3` applies
-  `Env.sync_union_timeout_ms/0`. No local state changes: the pending proposal
-  is reviewed on the server/web.
+  `Env.sync_union_timeout_ms/0`. On success the proposal reference is recorded
+  in the local `:CadProposals` journal (best-effort); the server remains the
+  review source of truth.
   """
   @spec propose_union(Ecto.UUID.t() | String.t(), [Ecto.UUID.t() | String.t()], keyword()) ::
           {:ok, map()} | {:error, term()}
@@ -94,11 +96,32 @@ defmodule Cadence.Daemon.Sync do
       # Selected parents may still be queued locally ("commit then union").
       # Push due nodes first; a remaining gap surfaces as a 422 from the server.
       _ = push_pending(project_id)
-      SyncClient.union(project_id, parent_node_ids, opts)
+
+      case SyncClient.union(project_id, parent_node_ids, opts) do
+        {:ok, proposal} ->
+          record_union(project_id, proposal, parent_node_ids)
+          {:ok, proposal}
+
+        {:error, _reason} = error ->
+          error
+      end
     else
       :error -> {:error, :invalid_uuid}
       {:error, _reason} = error -> error
     end
+  end
+
+  # The local journal is a convenience for `:CadProposals`; it must never fail
+  # the union or change its response. Log only that recording was skipped.
+  defp record_union(project_id, proposal, parent_node_ids) do
+    case Unions.record(project_id, proposal, parent_node_ids) do
+      {:ok, _row} -> :ok
+      {:error, _reason} -> Logger.warning("union proposal was not recorded locally")
+    end
+  rescue
+    _error -> Logger.warning("union proposal was not recorded locally")
+  catch
+    _kind, _reason -> Logger.warning("union proposal was not recorded locally")
   end
 
   @doc "Resolves and caches the authenticated server user ID."

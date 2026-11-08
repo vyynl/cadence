@@ -97,6 +97,10 @@ owner-only first so there is no permissive window:
 mkdir -m 700 -p "${CAD_STATE_DIR:-$HOME/.local/state/cadence}"
 ```
 
+Re-run the migration after upgrading the daemon: migrations are additive and a
+new one (for example the `:CadProposals` journal) is not applied by a plain
+boot.
+
 A daemon booted before migrating is safe: rehydration logs a
 `… skipped before migrations: no such table: <table>` warning for each queue,
 skips the sync backfill, and keeps idling. Nothing syncs until the database is

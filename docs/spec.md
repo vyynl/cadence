@@ -273,6 +273,8 @@ and how credit is displayed.
 - Serve a Unix socket / local HTTP API to the Neovim plugin.
 - Maintain a sync ledger for pending pushes, per-project pull cursors, and
   small sync metadata (server user ID, provisioning/backfill markers).
+- Keep a small recent-union journal (proposal id/token/kind/parents) so the
+  Neovim `:CadProposals` list can recover a proposal's public link (§6.1).
 
 ### 5.2 Supervision tree
 
@@ -397,6 +399,7 @@ Diff:
 | `:CadSpawn <name>` | Spawn a sandbox child from the current node. **Session pointer moves to the new node.** Parent stays in active heads. |
 | `:CadSwitch <label>` | Move the session pointer to another node in the project (active heads are the usual targets) without creating a node. |
 | `:CadUnion` | Enter picker in union mode. CR toggles `✓` (2–8 nodes). `<C-s>` submits to the server and reports the proposal token/URL. |
+| `:CadProposals` | List the last 20 union proposals created from this daemon; choosing one copies its public URL (or the bare token when the server URL is not configured). |
 | `:CadDocDiff` | Show the doc diff attached to the current node. |
 | `:CadDocSync` | Manually trigger doc automation. |
 
@@ -472,6 +475,13 @@ No node is created and no flag is promoted at this stage. `intended_flag` is
 always `in-progress`; `functioning` remains validator-owned (§3.1). Approval
 (4c) attaches/creates the node and moves the line. The proposing user's session
 pointer does not move.
+
+The daemon records each successful union response in a small local journal
+(newest 20 per project: proposal id, token, kind, status, parent ids,
+created-at) so `:CadProposals` can recover the public token after the one-shot
+notification or an editor/daemon restart. The journal stores the status **at
+creation** only; the server review hub and public proposal page remain the live
+source of truth.
 
 **Meld agent prompt contract (initial, `meld-v1`):**
 
@@ -1987,6 +1997,12 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   warning and idles; the sync wake returns no projects until
   `mix ecto.migrate -r Cadence.Daemon.Repo` has run, and rehydration runs on the
   next restart (§12.2). The operator walkthrough is `docs/daemon-setup.md`.
+- 7 post-close — `:CadProposals` (shipped): the daemon records the last 20 union
+  proposals per project (proposal id/token/kind/parents/created-at) and serves
+  `GET /proposals` on the local socket; the plugin lists them and copies the
+  public URL (or the bare token when the server URL is unset). Status is
+  creation-time only — the server review hub/public page remains authoritative
+  (§5.1, §6.1, §6.5).
 
 ---
 
@@ -2145,6 +2161,12 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       column (§4.2), but 6a reads the manifest from the selected node snapshot.
       Repurpose it as a cache or remove it in a schema slice so the model and
       the implementation agree.
+- [ ] **Proposal links assume `CAD_SERVER_URL` is public:** `:CadUnion` and
+      `:CadProposals` build the public link from the daemon's API base
+      (`proposal_url/1`). A deployment that points the daemon at an
+      internal/docker URL while `CAD_PUBLIC_URL` differs produces an unreachable
+      copied/notified link. Return the server's `public_url` in the union
+      response to remove the assumption.
 - [ ] **Public preview auth:** fully anonymous, or require a lightweight
       signed-URL / API key to avoid scraping.
 - [ ] **Backup strategy for the cloud server:** Postgres WAL archiving +

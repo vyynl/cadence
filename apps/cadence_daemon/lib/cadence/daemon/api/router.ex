@@ -15,7 +15,9 @@ defmodule Cadence.Daemon.API.Router do
     ProjectRegistry,
     Projects,
     Session,
-    Sync
+    Sync,
+    UnionProposal,
+    Unions
   }
 
   alias Cadence.Shared.{DAG, UUID}
@@ -172,6 +174,19 @@ defmodule Cadence.Daemon.API.Router do
     end
   end
 
+  get "/proposals" do
+    case list_proposals(conn.query_params["project_id"]) do
+      {:ok, proposals} ->
+        send_json(conn, 200, %{proposals: proposals})
+
+      {:error, :missing} ->
+        send_json(conn, 400, %{error: "project_id is required"})
+
+      {:error, :not_found} ->
+        send_json(conn, 404, %{error: "project not found"})
+    end
+  end
+
   match _ do
     send_json(conn, 404, %{error: "not found"})
   end
@@ -300,6 +315,40 @@ defmodule Cadence.Daemon.API.Router do
       kind: proposal.kind
     }
   end
+
+  defp list_proposals(nil), do: {:error, :missing}
+
+  defp list_proposals(project_id) do
+    case fetch_project(project_id) do
+      {:ok, project_id} ->
+        {:ok, project_id |> Unions.list() |> Enum.map(&proposal_json/1)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp proposal_json(%UnionProposal{} = proposal) do
+    %{
+      id: proposal.id,
+      token: proposal.token,
+      url: proposal_url(proposal.token),
+      kind: proposal.kind,
+      status: proposal.status,
+      parent_node_ids: proposal.parent_node_ids,
+      created_at: iso8601(proposal.created_at),
+      age_seconds: age_seconds(proposal.created_at)
+    }
+  end
+
+  defp iso8601(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp iso8601(_value), do: nil
+
+  defp age_seconds(%DateTime{} = created_at) do
+    max(DateTime.diff(DateTime.utc_now(), created_at, :second), 0)
+  end
+
+  defp age_seconds(_created_at), do: 0
 
   defp proposal_url(token) when is_binary(token) do
     case Env.server_url() do

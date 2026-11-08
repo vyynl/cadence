@@ -2,7 +2,7 @@ defmodule Cadence.Daemon.API.RouterTest do
   use ExUnit.Case, async: false
 
   alias Cadence.Daemon.API.Router
-  alias Cadence.Daemon.{DocQueue, ProjectLocation, Repo, SyncLedger, SyncPending}
+  alias Cadence.Daemon.{DocQueue, ProjectLocation, Repo, SyncLedger, SyncPending, Unions}
   alias Cadence.Shared.{GitStore, Membership, Node, Project}
 
   @schema """
@@ -131,6 +131,7 @@ defmodule Cadence.Daemon.API.RouterTest do
     configure_sync!(project)
     Req.Test.verify_on_exit!()
 
+    proposal_id = Ecto.UUID.generate()
     parent_ids = [Ecto.UUID.generate(), Ecto.UUID.generate()]
 
     Req.Test.expect(__MODULE__, fn conn ->
@@ -140,7 +141,7 @@ defmodule Cadence.Daemon.API.RouterTest do
       assert conn.body_params["parent_node_ids"] == parent_ids
 
       Req.Test.json(conn, %{
-        proposal_id: "p1",
+        proposal_id: proposal_id,
         proposal_token: "tok",
         status: "pending",
         kind: "meld"
@@ -152,10 +153,86 @@ defmodule Cadence.Daemon.API.RouterTest do
 
     assert conn.status == 201
     body = Jason.decode!(conn.resp_body)
-    assert body["proposal_id"] == "p1"
+    assert body["proposal_id"] == proposal_id
     assert body["proposal_token"] == "tok"
     assert body["proposal_url"] == "http://server.test/proposals/tok"
     assert body["status"] == "pending"
+
+    proposals_conn = get_conn("/proposals?project_id=#{project.id}")
+    assert proposals_conn.status == 200
+
+    assert [proposal] = Jason.decode!(proposals_conn.resp_body)["proposals"]
+    assert proposal["id"] == proposal_id
+    assert proposal["token"] == "tok"
+    assert proposal["url"] == "http://server.test/proposals/tok"
+    assert proposal["kind"] == "meld"
+    assert proposal["status"] == "pending"
+    assert proposal["parent_node_ids"] == parent_ids
+    assert proposal["age_seconds"] >= 0
+    assert is_binary(proposal["created_at"])
+  end
+
+  test "GET /proposals validates the project and returns an empty list" do
+    assert get_conn("/proposals").status == 400
+    assert get_conn("/proposals?project_id=not-a-uuid").status == 404
+    assert get_conn("/proposals?project_id=#{Ecto.UUID.generate()}").status == 404
+
+    project = insert_local_project()
+    conn = get_conn("/proposals?project_id=#{project.id}")
+    assert conn.status == 200
+    assert Jason.decode!(conn.resp_body) == %{"proposals" => []}
+  end
+
+  test "POST /union still succeeds when the local journal cannot record" do
+    project = insert_local_project()
+    configure_sync!(project)
+    Req.Test.verify_on_exit!()
+
+    parent_ids = [Ecto.UUID.generate(), Ecto.UUID.generate()]
+
+    Req.Test.expect(__MODULE__, fn conn ->
+      Req.Test.json(conn, %{
+        proposal_id: "not-a-uuid",
+        proposal_token: "tok-unrecorded",
+        status: "pending",
+        kind: "meld"
+      })
+    end)
+
+    conn =
+      post_json("/union", %{"project_id" => project.id, "parent_node_ids" => parent_ids})
+
+    assert conn.status == 201
+    assert Jason.decode!(conn.resp_body)["proposal_token"] == "tok-unrecorded"
+
+    proposals_conn = get_conn("/proposals?project_id=#{project.id}")
+    assert proposals_conn.status == 200
+    assert Jason.decode!(proposals_conn.resp_body)["proposals"] == []
+  end
+
+  test "GET /proposals returns a nil URL when sync is not configured" do
+    project = insert_local_project()
+
+    {:ok, _row} =
+      Unions.record(
+        project.id,
+        %{
+          proposal_id: Ecto.UUID.generate(),
+          proposal_token: "tok-offline",
+          status: "pending",
+          kind: "meld"
+        },
+        []
+      )
+
+    Application.delete_env(:cadence_daemon, :server_url)
+
+    conn = get_conn("/proposals?project_id=#{project.id}")
+    assert conn.status == 200
+
+    assert [proposal] = Jason.decode!(conn.resp_body)["proposals"]
+    assert proposal["url"] == nil
+    assert proposal["token"] == "tok-offline"
   end
 
   test "POST /union passes through server statuses and improves actionable errors" do

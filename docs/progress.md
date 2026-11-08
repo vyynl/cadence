@@ -5,8 +5,9 @@
 live smoke is recorded, and the post-7 startup gap is closed: a fresh daemon
 state dir with sync configured now boots instead of crashing, and the operator
 setup is documented in `docs/daemon-setup.md`. The demo-stack visual pass
-(wide/narrow, light/dark) is also done and fixed one CSS overflow; the
-remaining optional carry-overs are listed in **Next**.
+(wide/narrow, light/dark) is also done and fixed one CSS overflow, and the
+`:CadProposals` recovery surface shipped; the remaining optional carry-overs
+are listed in **Next**.
 
 ## Done (summary)
 
@@ -585,6 +586,20 @@ remaining optional carry-overs are listed in **Next**.
   label overflowing the fixed `.file-kind` column into the title
   (`min-width` + `nowrap`). Header-nav spacing and the unseeded run-detail page
   are recorded as open notes in `docs/ui-notes.md`.
+- **`:CadProposals` (2026-11-08)** — the daemon now keeps a local journal of the
+  last 20 union proposals per project (`union_proposals`: proposal id, token,
+  kind, status-at-creation, parent ids, created-at) so the token survives the
+  one-shot notification and editor/daemon restarts. `Sync.propose_union/3`
+  records best-effort (a journal failure never changes the union response; the
+  insert is `log: false` so the token never reaches the dev SQL log), upserts by
+  proposal id (keeps the earliest created-at), and prunes the oldest rows.
+  New `GET /proposals?project_id=…` on the socket returns the list with a
+  derived URL (nil offline) and `age_seconds`; `:CadProposals` uses
+  `vim.ui.select` and copies the URL (or the token with a warning) via `+` with
+  a register fallback. Pure `cadence.proposal` helpers + `proposal_spec.lua`.
+  Spec §5.1/§6.1/§6.5/§13/§16, the plugin README, and the daemon-upgrade
+  migration note updated. 7 new daemon tests (+2 router scenarios) and the Lua
+  spec; 1058 total (312 shared + 207 daemon + 539 server).
 - **4e gate:** 640 tests green (161 shared + 125 daemon + 354 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
@@ -598,11 +613,11 @@ remaining optional carry-overs are listed in **Next**.
 
 ## Next
 
-**Immediate step:** the optional `:CadProposals` Neovim surface for the union
-proposal token/URL (no server dependency), or the Phase 5 P5 docs live smoke
-with a real `CAD_LLM_API_KEY`. The demo-stack visual check is done; its two open
-notes (header-nav spacing, unseeded run detail) are in `docs/ui-notes.md`.
-Everything below is optional and independent.
+**Immediate step:** the Phase 5 P5 docs live smoke with a real
+`CAD_LLM_API_KEY`, or a 6c/7b residue from the list below. `:CadProposals` is
+done; the demo-stack visual check's two open notes (header-nav spacing,
+unseeded run detail) are in `docs/ui-notes.md`. Everything below is optional
+and independent.
 
 **Integration contract (6c, for anything that touches runs):**
 `Actions.Runs.prepare/4` returns `{:ok, %ActionRun{}}` or
@@ -622,31 +637,36 @@ pages redirect, the nav link hides, and artifact downloads 404.
 Carry-over (post-Phase-7, optional):
 
 1. **Phase 5 P5 docs live smoke** — with a real `CAD_LLM_API_KEY`.
-2. **Optional `:CadProposals` surface** for the union token returned to Neovim.
-3. **6c residues** (spec §16): run history pages at 50 rows and the detail at
+2. **6c residues** (spec §16): run history pages at 50 rows and the detail at
    the first 100 artifacts (no paging); no per-project run concurrency cap; no
    artifact/image retention; action log streaming remains post-exit.
-4. **7b/7c residues** (spec §16): pack consolidation / multi-pack index; no
+3. **7b/7c residues** (spec §16): pack consolidation / multi-pack index; no
    run timeout (a hung repack wedges the single-worker queue until restart);
    the repack threshold path was not exercised on the demo seed (its stores are
    below 1,000 objects — the manual two-run path was used, and the threshold is
    unit-tested).
 
-**Spin-up:** `@phx-quick` for the `:CadProposals` surface; `@phx-full` for the
-docs live smoke (needs `CAD_LLM_API_KEY`) or if a `docs/ui-notes.md` item turns
-into a multi-file fix. The planned build order in spec §13 is complete; no new
+**Spin-up:** `@phx-full` for the docs live smoke (needs `CAD_LLM_API_KEY`) or if
+a `docs/ui-notes.md` item turns into a multi-file fix; `@phx-quick` for a
+single-file residue. The planned build order in spec §13 is complete; no new
 dependency is expected.
 
 ## Blocked
 
-- (none). Phase 7 is complete (7a–7d), every review's must-fix item is applied
-  and verified, and both freshness-review suggestions are fixed. Pre-existing
-  follow-ups (unreadable-object isolation, re-push of an existing row whose
-  objects were later lost, the 8 MB retry ceiling, pack consolidation, the
-  missing repack timeout) remain recorded below and in spec §16.
+- (none). Phase 7 (7a–7d), the daemon boot guard, the demo-stack visual pass,
+  and `:CadProposals` are complete, and every review's must-fix item is applied
+  and verified. Pre-existing follow-ups (unreadable-object isolation, re-push of
+  an existing row whose objects were later lost, the 8 MB retry ceiling, pack
+  consolidation, the missing repack timeout) remain recorded below and in spec
+  §16.
 
 ## Spec Deltas / Open Items
 
+- **`:CadProposals` journal scope (2026-11-08)** — the local journal only records
+  unions submitted from that daemon/state dir, and `status` is the creation-time
+  value (never refreshed). The review hub/public page remains the complete,
+  live list. Copied URLs inherit the `CAD_SERVER_URL`-must-be-public assumption
+  recorded in spec §16.
 - **Union smoke result shape (2026-11-08)** — the two parents had identical
   trees (`branch-b` was spawned from the first node), so the approved meld
   reports "No file changes" despite `file_count: 1`; a divergent branch would
@@ -1597,3 +1617,22 @@ the title (`min-width` + `white-space: nowrap`). Open notes in
 `docs/ui-notes.md`: header-nav spacing and the unseeded run-detail page. CSS-only
 change; no Elixir behavior affected. Next: the optional `:CadProposals` surface
 or the docs live smoke (needs `CAD_LLM_API_KEY`).
+
+2026-11-08 — **`:CadProposals`** shipped from
+`.claude/plans/cad-proposals/plan.md` (approved as written). The daemon keeps a
+local `union_proposals` journal (last 20 per project; proposal id, token, kind,
+status-at-creation, parent ids, created-at) written best-effort from
+`Sync.propose_union/3`; the insert is `log: false` so the capability token never
+reaches the dev SQL log. Upsert-by-id keeps the earliest created-at and a
+transactional prune drops the oldest rows; the row is read before pruning so a
+re-submitted old proposal cannot raise. New
+`GET /proposals?project_id=…` returns the journal with a derived URL (nil
+offline) and `age_seconds`; `:CadProposals` uses `vim.ui.select` and copies the
+URL (or the token with a warning) via `+`/register fallback. Pure
+`cadence.proposal` helpers + `proposal_spec.lua`. Spec
+§5.1/§6.1/§6.5/§13/§16, the plugin README, and the daemon-upgrade migration note
+updated. Read-only review: 1 MEDIUM (read-after-prune) + 6 LOWs (exit/throw
+rescue, dev SQL token log, weak cap test, missing best-effort test, stale doc,
+README/spec wording) — all fixed. Verification: format, dev/prod compile,
+1058 tests (312 shared + 207 daemon + 539 server), `luac -p`, and both headless
+Lua specs. Next: the optional docs live smoke or a 6c/7b residue.

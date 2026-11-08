@@ -35,6 +35,7 @@ The socket path is resolved as: `setup({socket_path})` → `$CAD_STATE_DIR/daemo
 | `:CadOpen`       | Open the DAG picker for the current project.                    |
 | `:CadSwitch`     | Same picker (Enter moves the session pointer to the node).      |
 | `:CadUnion`      | Open the picker in union mode (`CR` toggles `✓`; submission needs the server). |
+| `:CadProposals`  | List recent union proposals and copy the chosen public URL (or token when the server URL is unset). |
 | `:CadSpawn [name]` | Spawn a `sandbox` child from the current node (prompts if no name). |
 
 ## Picker
@@ -86,13 +87,16 @@ nvim
 #   :CadSpawn      -> spawns a sandbox child, then :CadOpen shows it branched
 #   :CadSwitch     -> same picker, titled "switch"
 #   :CadUnion      -> picker in union mode (CR toggles ✓)
+#   :CadProposals  -> list recent unions; choose one to copy its public URL
 ```
 
-Run the layout and diff unit tests (pure Lua, no daemon needed):
+Run the pure-Lua unit tests (no daemon needed):
 
 ```bash
 nvim --headless -l cadence.nvim/spec/graph_spec.lua
 nvim --headless -l cadence.nvim/spec/diff_spec.lua
+nvim --headless -l cadence.nvim/spec/doc_spec.lua
+nvim --headless -l cadence.nvim/spec/proposal_spec.lua
 ```
 
 Note: a normal commit advances the session pointer automatically (spec §5.3), so
