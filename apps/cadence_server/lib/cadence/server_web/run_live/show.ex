@@ -11,8 +11,17 @@ defmodule Cadence.ServerWeb.RunLive.Show do
   Output is rendered as text inside a `<pre>`: ANSI/control sequences are
   stripped and HTML is escaped by HEEx. `raw/1` is never used.
 
-  Once connected, a `{:action_run_updated, …}` for this run reloads the page;
-  the status events are ids-only and logs arrive only after the container exits.
+  ## Artifact paging
+
+  The collector produces at most 1,000 files and the page loads that whole list
+  (it is how the links are built), then slices 100 per page under
+  `?artifacts_page=N`. Because the list is already in memory, an out-of-range
+  page is clamped to the last one instead of rendering an empty page. Paging is
+  presentational: it bounds the DOM, not the directory read.
+
+  Once connected, a `{:action_run_updated, …}` for this run reloads the page at
+  the current artifact page; the status events are ids-only and logs arrive only
+  after the container exits.
   """
 
   use Cadence.ServerWeb, :live_view
@@ -22,7 +31,7 @@ defmodule Cadence.ServerWeb.RunLive.Show do
   alias Cadence.Server.ActionRun
   alias Cadence.ServerWeb.{Presentation, ReviewAccess}
 
-  @artifact_page 100
+  @artifact_page_size 100
 
   @impl true
   def mount(_params, _session, socket) do
@@ -32,7 +41,7 @@ defmodule Cadence.ServerWeb.RunLive.Show do
        project: nil,
        run_id: nil,
        not_found: false,
-       artifact_page: @artifact_page,
+       artifacts_page: 1,
        subscribed_project_id: nil
      )}
   end
@@ -44,6 +53,7 @@ defmodule Cadence.ServerWeb.RunLive.Show do
         if Actions.enabled?() do
           run_id = params["run_id"]
           user_id = socket.assigns.current_user.id
+          artifacts_page = Presentation.page_number(params["artifacts_page"])
 
           socket =
             socket
@@ -52,6 +62,7 @@ defmodule Cadence.ServerWeb.RunLive.Show do
               page_title: "Run · #{project.name}",
               project: project,
               run_id: run_id,
+              artifacts_page: artifacts_page,
               not_found: false
             )
 
@@ -127,6 +138,9 @@ defmodule Cadence.ServerWeb.RunLive.Show do
           </:failed>
 
           <section class="run-detail">
+            <% {shown_artifacts, artifact_page, artifact_pages} =
+              artifact_slice(payload.artifacts, @artifacts_page) %>
+
             <div class="run-detail-heading">
               <h2>{payload.run.action_name}</h2>
               <span class={Presentation.run_status_class(payload.run.status)}>
@@ -224,8 +238,8 @@ defmodule Cadence.ServerWeb.RunLive.Show do
                 Artifacts will appear when the run finishes.
               </p>
 
-              <ul :if={payload.artifacts != []} class="artifact-list">
-                <li :for={artifact <- Enum.take(payload.artifacts, @artifact_page)} class="artifact-row">
+              <ul :if={shown_artifacts != []} class="artifact-list">
+                <li :for={artifact <- shown_artifacts} class="artifact-row">
                   <a
                     href={artifact_href(@project.slug, payload.run.id, artifact.path)}
                     download
@@ -236,9 +250,35 @@ defmodule Cadence.ServerWeb.RunLive.Show do
                 </li>
               </ul>
 
-              <p :if={length(payload.artifacts) > @artifact_page} class="note">
-                Showing the first {@artifact_page} of {length(payload.artifacts)} artifacts.
+              <p :if={artifact_pages > 1} class="note">
+                Page {artifact_page} of {artifact_pages} · {length(payload.artifacts)} artifacts
               </p>
+
+              <nav
+                :if={artifact_pages > 1}
+                class="run-pager"
+                aria-label="Artifact pages"
+              >
+                <.link
+                  :if={artifact_page > 1}
+                  class="pager-link"
+                  patch={
+                    ~p"/p/#{@project.slug}/runs/#{payload.run.id}?#{[artifacts_page: artifact_page - 1]}"
+                  }
+                >
+                  ← Previous artifacts
+                </.link>
+
+                <.link
+                  :if={artifact_page < artifact_pages}
+                  class="pager-link"
+                  patch={
+                    ~p"/p/#{@project.slug}/runs/#{payload.run.id}?#{[artifacts_page: artifact_page + 1]}"
+                  }
+                >
+                  More artifacts →
+                </.link>
+              </nav>
             </section>
           </section>
         </.async_result>
@@ -267,6 +307,16 @@ defmodule Cadence.ServerWeb.RunLive.Show do
       {:ok, content} -> Presentation.terminal_text(content)
       {:error, :not_found} -> nil
     end
+  end
+
+  # The whole collected set is already loaded, so a requested page past the end
+  # is corrected here rather than rendered as an empty artifact list.
+  defp artifact_slice(artifacts, requested) do
+    pages = max(div(length(artifacts) + @artifact_page_size - 1, @artifact_page_size), 1)
+    current = min(max(requested, 1), pages)
+    start = (current - 1) * @artifact_page_size
+
+    {Enum.slice(artifacts, start, @artifact_page_size), current, pages}
   end
 
   # Artifact relative paths can contain spaces or `#`; encode each segment so

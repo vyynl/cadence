@@ -6,13 +6,27 @@ defmodule Cadence.ServerWeb.RunLive.Index do
   from a run back to the immutable snapshot it executed: every row links the
   node that triggered it and the run detail page.
 
+  ## Paging
+
+  Rows are offset-paged 50 at a time under `?page=N` (≥ 1; junk means page 1),
+  with newer/older `patch` links. `has_next` comes from the context's
+  `limit + 1` read, so an empty page can only come from a hand-edited URL and
+  links back to the newest runs.
+
+  The rendered page number is derived from the **loaded** offset, never from the
+  requested `?page`: an async reload keeps the previous result renderable until
+  the new one arrives, so a synchronous page label would briefly disagree with
+  the rows and could link to page N+1 twice. The `page` assign only drives the
+  next reload.
+
   ## Freshness
 
   Authorization runs in `handle_params/3` because a refused visitor must be
   redirected, and an `assign_async` failure cannot navigate. `mount/3` stays
   database-free. Once connected, the socket subscribes to `project:<id>` and a
-  `{:action_run_updated, …}` reloads the list. Events are ids only; logs and
-  commands never travel over PubSub.
+  `{:action_run_updated, …}` reloads the list **at the current offset**, so a
+  viewer reading older history is never yanked back to page 1. Events are ids
+  only; logs and commands never travel over PubSub.
   """
 
   use Cadence.ServerWeb, :live_view
@@ -21,8 +35,6 @@ defmodule Cadence.ServerWeb.RunLive.Index do
   alias Cadence.Server.Actions.Runs
   alias Cadence.ServerWeb.{Presentation, ReviewAccess}
 
-  @limit 50
-
   @impl true
   def mount(_params, _session, socket) do
     {:ok,
@@ -30,7 +42,7 @@ defmodule Cadence.ServerWeb.RunLive.Index do
        page_title: "Runs",
        project: nil,
        not_found: false,
-       limit: @limit,
+       page: 1,
        subscribed_project_id: nil
      )}
   end
@@ -41,6 +53,7 @@ defmodule Cadence.ServerWeb.RunLive.Index do
       {:ok, project, _membership} ->
         if Actions.enabled?() do
           user_id = socket.assigns.current_user.id
+          page = Presentation.page_number(params["page"])
 
           socket =
             socket
@@ -48,10 +61,11 @@ defmodule Cadence.ServerWeb.RunLive.Index do
             |> assign(
               page_title: "Runs · #{project.name}",
               project: project,
+              page: page,
               not_found: false
             )
 
-          {:noreply, assign_async(socket, :runs, fn -> load_runs(project, user_id) end)}
+          {:noreply, assign_async(socket, :run_page, fn -> load_runs(project, user_id, page) end)}
         else
           {:noreply,
            socket
@@ -81,7 +95,9 @@ defmodule Cadence.ServerWeb.RunLive.Index do
     case socket.assigns.project do
       %{id: ^project_id} = project ->
         user_id = socket.assigns.current_user.id
-        {:noreply, assign_async(socket, :runs, fn -> load_runs(project, user_id) end)}
+        page = socket.assigns.page
+
+        {:noreply, assign_async(socket, :run_page, fn -> load_runs(project, user_id, page) end)}
 
       _other ->
         {:noreply, socket}
@@ -115,7 +131,7 @@ defmodule Cadence.ServerWeb.RunLive.Index do
             <h2>Runs</h2>
           </div>
 
-          <.async_result :let={runs} assign={@runs}>
+          <.async_result :let={page_data} assign={@run_page}>
             <:loading>
               <p class="note">Loading runs…</p>
             </:loading>
@@ -124,10 +140,21 @@ defmodule Cadence.ServerWeb.RunLive.Index do
               <p class="note">The run list could not be loaded.</p>
             </:failed>
 
-            <p :if={runs == []} class="empty">No action runs yet.</p>
+            <% current_page = Presentation.page_for(page_data.offset, page_data.limit) %>
 
-            <ul :if={runs != []} class="run-list">
-              <li :for={run <- runs} id={"run-#{run.id}"} class="run-row">
+            <p :if={page_data.runs == [] and current_page == 1} class="empty">
+              No action runs yet.
+            </p>
+
+            <p :if={page_data.runs == [] and current_page > 1} class="empty">
+              No runs on this page.
+              <.link patch={~p"/p/#{@project.slug}/runs?#{[page: 1]}"}>
+                Back to the newest runs
+              </.link>
+            </p>
+
+            <ul :if={page_data.runs != []} class="run-list">
+              <li :for={run <- page_data.runs} id={"run-#{run.id}"} class="run-row">
                 <span class={Presentation.run_status_class(run.status)}>
                   {Presentation.run_status_label(run.status)}
                 </span>
@@ -154,9 +181,29 @@ defmodule Cadence.ServerWeb.RunLive.Index do
               </li>
             </ul>
 
-            <p :if={length(runs) >= @limit} class="note">
-              Showing the {@limit} newest runs.
-            </p>
+            <nav
+              :if={page_data.runs != [] and (page_data.has_prev or page_data.has_next)}
+              class="run-pager"
+              aria-label="Run history pages"
+            >
+              <span class="note">Page {current_page}</span>
+
+              <.link
+                :if={page_data.has_prev}
+                class="pager-link"
+                patch={~p"/p/#{@project.slug}/runs?#{[page: current_page - 1]}"}
+              >
+                ← Newer runs
+              </.link>
+
+              <.link
+                :if={page_data.has_next}
+                class="pager-link"
+                patch={~p"/p/#{@project.slug}/runs?#{[page: current_page + 1]}"}
+              >
+                Older runs →
+              </.link>
+            </nav>
           </.async_result>
         </section>
       <% end %>
@@ -164,9 +211,15 @@ defmodule Cadence.ServerWeb.RunLive.Index do
     """
   end
 
-  defp load_runs(project, user_id) do
-    case Runs.list(%{id: user_id}, project.id, limit: @limit) do
-      {:ok, runs} -> {:ok, %{runs: runs}}
+  defp load_runs(project, user_id, page) do
+    size = Runs.page_size()
+    opts = [limit: size, offset: (page - 1) * size]
+
+    # The async result carries one nested map: `assign_async/3` turns every key
+    # in the returned map into an AsyncResult, so the page fields must live
+    # under the single assigned key.
+    case Runs.page(%{id: user_id}, project.id, opts) do
+      {:ok, page_data} -> {:ok, %{run_page: page_data}}
       {:error, _reason} -> {:error, :not_loaded}
     end
   end

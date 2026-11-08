@@ -75,6 +75,8 @@ defmodule Cadence.Server.Actions.Runs do
   @terminal_statuses [:succeeded, :failed, :timed_out, :interrupted]
 
   @default_list_limit 50
+  @max_list_limit 200
+  @max_offset 1_000_000
   @stale_margin_ms 60_000
 
   # Two-int form so a project id never has to fit in an int4; `hashtext` is
@@ -329,30 +331,93 @@ defmodule Cadence.Server.Actions.Runs do
   @doc """
   A project's runs, newest first (member-scoped; used by 6c).
 
-  Returns `{:error, :disabled}` when the action layer is off for this
-  deployment, matching the run boundary.
+  `:limit` is clamped to 1..#{@max_list_limit} (default #{@default_list_limit})
+  and `:offset` to 0..#{@max_offset}. Returns `{:error, :disabled}` when the
+  action layer is off for this deployment, matching the run boundary.
+
+  `page/3` is the paged read: it also reports whether newer/older rows exist.
   """
   @spec list(map(), String.t(), keyword()) ::
           {:ok, [ActionRun.t()]} | {:error, :not_found | :forbidden | :disabled}
   def list(actor, project_id, opts \\ []) do
+    scope_reads(actor, project_id, fn project_id ->
+      limit = opts |> Keyword.get(:limit, @default_list_limit) |> clamp_limit()
+      offset = opts |> Keyword.get(:offset, 0) |> clamp_offset()
+
+      {:ok, fetch_runs(project_id, limit, offset)}
+    end)
+  end
+
+  @doc """
+  Default page size for the run history (`page/3`, spec §8.3).
+
+  The LiveView derives its offset from this value, so the UI page size and the
+  context default cannot drift apart.
+  """
+  @spec page_size() :: pos_integer()
+  def page_size, do: @default_list_limit
+
+  @doc """
+  One page of a project's runs, newest first (member-scoped; used by 6c).
+
+  Same scoping as `list/3`. `has_next` comes from one `limit + 1` read instead
+  of a `COUNT(*)`; `has_prev` is `offset > 0`. An offset past the end returns an
+  empty page with `has_prev: true`, so an out-of-range URL page can always
+  navigate back.
+
+  Offset paging is not a stable cursor: a run inserted between two reads shifts
+  the window. That is acceptable for a newest-first history at 50 rows.
+  """
+  @spec page(map(), String.t(), keyword()) ::
+          {:ok,
+           %{
+             runs: [ActionRun.t()],
+             offset: non_neg_integer(),
+             limit: pos_integer(),
+             has_prev: boolean(),
+             has_next: boolean()
+           }}
+          | {:error, :not_found | :forbidden | :disabled}
+  def page(actor, project_id, opts \\ []) do
+    scope_reads(actor, project_id, fn project_id ->
+      limit = opts |> Keyword.get(:limit, @default_list_limit) |> clamp_limit()
+      offset = opts |> Keyword.get(:offset, 0) |> clamp_offset()
+      rows = fetch_runs(project_id, limit + 1, offset)
+
+      {:ok,
+       %{
+         runs: Enum.take(rows, limit),
+         offset: offset,
+         limit: limit,
+         has_prev: offset > 0,
+         # The next page must still start inside the offset bound, otherwise a
+         # clamp at @max_offset would keep offering the same window forever.
+         has_next: length(rows) > limit and offset + limit <= @max_offset
+       }}
+    end)
+  end
+
+  # Shared member scope for the run reads. A read page refreshes abandoned
+  # running rows first (DB only), so a dead row never looks live; the read
+  # itself must not block on the Docker proxy.
+  defp scope_reads(actor, project_id, fun) do
     with :ok <- check_enabled(),
          {:ok, project_id} <- uuid(project_id),
          {:ok, _membership} <- authorize_viewer(actor, project_id) do
-      # Keep a read page honest without blocking it on the Docker proxy: mark
-      # abandoned rows here, leave container removal to a manager-triggered
-      # recovery or recover_all/0.
       _ = recover_stale(project_id, remove_containers: false)
-      limit = opts |> Keyword.get(:limit, @default_list_limit) |> clamp_limit()
-
-      {:ok,
-       Repo.all(
-         from(r in ActionRun,
-           where: r.project_id == ^project_id,
-           order_by: [desc: r.created_at, desc: r.id],
-           limit: ^limit
-         )
-       )}
+      fun.(project_id)
     end
+  end
+
+  defp fetch_runs(project_id, limit, offset) do
+    Repo.all(
+      from(r in ActionRun,
+        where: r.project_id == ^project_id,
+        order_by: [desc: r.created_at, desc: r.id],
+        limit: ^limit,
+        offset: ^offset
+      )
+    )
   end
 
   @doc """
@@ -1046,8 +1111,11 @@ defmodule Cadence.Server.Actions.Runs do
   defp max_log_bytes, do: config_int(:actions_max_log_bytes, 1_048_576)
   defp max_artifact_bytes, do: config_int(:actions_max_artifact_bytes, 33_554_432)
 
-  defp clamp_limit(value) when is_integer(value) and value >= 1, do: min(value, 200)
+  defp clamp_limit(value) when is_integer(value) and value >= 1, do: min(value, @max_list_limit)
   defp clamp_limit(_value), do: @default_list_limit
+
+  defp clamp_offset(value) when is_integer(value) and value >= 0, do: min(value, @max_offset)
+  defp clamp_offset(_value), do: 0
 
   defp stale_after_ms do
     config_int(:actions_build_timeout_ms, 300_000) + config_int(:actions_timeout_ms, 120_000) +

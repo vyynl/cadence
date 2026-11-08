@@ -276,6 +276,116 @@ defmodule Cadence.ServerWeb.RunLiveTest do
     end
   end
 
+  describe "run list paging" do
+    test "pages runs 50 at a time with newer/older links", %{
+      conn: conn,
+      project: project,
+      owner: owner,
+      viewer: viewer,
+      node: node
+    } do
+      runs = insert_runs(project, node, owner, 51)
+      newest = hd(runs)
+      oldest = List.last(runs)
+
+      {:ok, view, _html} = live(signed_conn(conn, viewer), "/p/#{project.slug}/runs")
+      html = render_async(view)
+
+      assert html =~ "Page 1"
+      assert has_element?(view, "#run-#{newest.id}")
+      refute has_element?(view, "#run-#{oldest.id}")
+      assert has_element?(view, "a[href='/p/run-live/runs?page=2']")
+      refute has_element?(view, "a[href='/p/run-live/runs?page=0']")
+
+      {:ok, view, _html} =
+        live(signed_conn(conn, viewer), "/p/#{project.slug}/runs?page=2")
+
+      html = render_async(view)
+
+      assert html =~ "Page 2"
+      assert has_element?(view, "#run-#{oldest.id}")
+      refute has_element?(view, "#run-#{newest.id}")
+      assert has_element?(view, "a[href='/p/run-live/runs?page=1']")
+      refute has_element?(view, "a[href='/p/run-live/runs?page=3']")
+    end
+
+    test "junk page params fall back to the first page", %{
+      conn: conn,
+      project: project,
+      owner: owner,
+      viewer: viewer,
+      node: node
+    } do
+      newest = project |> insert_runs(node, owner, 51) |> hd()
+
+      for query <- ["page=abc", "page=0", "page=-3"] do
+        {:ok, view, _html} =
+          live(signed_conn(conn, viewer), "/p/#{project.slug}/runs?#{query}")
+
+        render_async(view)
+
+        assert has_element?(view, "#run-#{newest.id}")
+        assert has_element?(view, "a[href='/p/run-live/runs?page=2']")
+      end
+    end
+
+    test "an out-of-range page is empty and links to the newest runs", %{
+      conn: conn,
+      project: project,
+      owner: owner,
+      viewer: viewer,
+      node: node
+    } do
+      newest = project |> insert_runs(node, owner, 3) |> hd()
+
+      {:ok, view, _html} =
+        live(signed_conn(conn, viewer), "/p/#{project.slug}/runs?page=99")
+
+      render_async(view)
+
+      assert render(view) =~ "No runs on this page."
+      refute has_element?(view, ".run-list")
+      refute has_element?(view, "#run-#{newest.id}")
+      assert has_element?(view, "a[href='/p/run-live/runs?page=1']")
+    end
+
+    test "a live event reloads the current page, not the first", %{
+      conn: conn,
+      project: project,
+      owner: owner,
+      viewer: viewer,
+      node: node
+    } do
+      runs = insert_runs(project, node, owner, 51)
+      newest = hd(runs)
+      oldest = List.last(runs)
+
+      {:ok, view, _html} =
+        live(signed_conn(conn, viewer), "/p/#{project.slug}/runs?page=2")
+
+      render_async(view)
+
+      # A broadcast alone would leave the page unchanged, so mutate the row:
+      # only a reload at the current offset picks up the new status without
+      # moving to page 1.
+      Repo.get!(ActionRun, oldest.id)
+      |> Ecto.Changeset.change(status: :failed)
+      |> Repo.update!()
+
+      Phoenix.PubSub.broadcast(
+        Cadence.Server.PubSub,
+        "project:#{project.id}",
+        {:action_run_updated, project.id, oldest.id, :failed}
+      )
+
+      html = render_async(view)
+
+      assert has_element?(view, "#run-#{oldest.id}", "failed")
+      assert html =~ "Page 2"
+      refute has_element?(view, "#run-#{newest.id}")
+    end
+  end
+
   describe "run detail" do
     test "shows status, provenance, escaped output, and artifacts", %{
       conn: conn,
@@ -520,6 +630,83 @@ defmodule Cadence.ServerWeb.RunLiveTest do
     end
   end
 
+  describe "artifact paging" do
+    test "pages collected artifacts 100 at a time", %{
+      conn: conn,
+      project: project,
+      owner: owner,
+      viewer: viewer,
+      node: node
+    } do
+      run = finished_run(project, owner, node, artifact_count: 150)
+      path = "/p/#{project.slug}/runs/#{run.id}"
+
+      {:ok, view, _html} = live(signed_conn(conn, viewer), path)
+      html = render_async(view)
+
+      assert html =~ "file-001.txt"
+      assert html =~ "file-100.txt"
+      refute html =~ "file-101.txt"
+      assert html =~ "Page 1 of 2"
+      assert has_element?(view, "a[href='#{path}?artifacts_page=2']")
+      refute has_element?(view, "a[href='#{path}?artifacts_page=0']")
+
+      {:ok, view, _html} =
+        live(signed_conn(conn, viewer), path <> "?artifacts_page=2")
+
+      html = render_async(view)
+
+      assert html =~ "file-101.txt"
+      assert html =~ "file-150.txt"
+      refute html =~ "file-001.txt"
+      assert html =~ "Page 2 of 2"
+      assert has_element?(view, "a[href='#{path}?artifacts_page=1']")
+      refute has_element?(view, "a[href='#{path}?artifacts_page=3']")
+
+      # The whole set is in memory, so an out-of-range page clamps to the last.
+      {:ok, view, _html} =
+        live(signed_conn(conn, viewer), path <> "?artifacts_page=99")
+
+      html = render_async(view)
+
+      assert html =~ "file-150.txt"
+      assert html =~ "Page 2 of 2"
+    end
+
+    test "a live refresh keeps the artifact page", %{
+      conn: conn,
+      project: project,
+      owner: owner,
+      viewer: viewer,
+      node: node
+    } do
+      run = finished_run(project, owner, node, artifact_count: 150)
+      path = "/p/#{project.slug}/runs/#{run.id}?artifacts_page=2"
+
+      {:ok, view, _html} = live(signed_conn(conn, viewer), path)
+      assert render_async(view) =~ "file-101.txt"
+
+      # Mutate the row so the reload's effect is observable, not just the page
+      # number it happened to keep.
+      Repo.get!(ActionRun, run.id)
+      |> Ecto.Changeset.change(status: :failed)
+      |> Repo.update!()
+
+      Phoenix.PubSub.broadcast(
+        Cadence.Server.PubSub,
+        "project:#{project.id}",
+        {:action_run_updated, project.id, run.id, :failed}
+      )
+
+      html = render_async(view)
+
+      assert has_element?(view, ".run-detail-heading .status-rejected", "failed")
+      assert html =~ "Page 2 of 2"
+      assert html =~ "file-101.txt"
+      refute html =~ "file-001.txt"
+    end
+  end
+
   ## Helpers
 
   defp finished_run(project, owner, node, opts \\ []) do
@@ -534,6 +721,7 @@ defmodule Cadence.ServerWeb.RunLiveTest do
 
     File.mkdir_p!(out_dir)
     artifact = Keyword.get(opts, :artifact)
+    artifact_count = Keyword.get(opts, :artifact_count, 0)
 
     FakeDocker.script(
       Map.merge(
@@ -550,6 +738,8 @@ defmodule Cadence.ServerWeb.RunLiveTest do
               nil ->
                 :ok
             end
+
+            write_artifacts(out_dir, artifact_count)
           end
         },
         Keyword.get(opts, :script, %{})
@@ -558,6 +748,36 @@ defmodule Cadence.ServerWeb.RunLiveTest do
 
     {:ok, finished} = Runs.execute(run)
     finished
+  end
+
+  defp write_artifacts(_out_dir, 0), do: :ok
+
+  defp write_artifacts(out_dir, count) do
+    for index <- 1..count do
+      name = "file-#{String.pad_leading(Integer.to_string(index), 3, "0")}.txt"
+      File.write!(Path.join(out_dir, name), "x")
+    end
+
+    :ok
+  end
+
+  # Queued rows with explicit, strictly decreasing timestamps, newest first, so
+  # page order is deterministic without depending on insert speed.
+  defp insert_runs(project, node, user, count) do
+    base = DateTime.utc_now()
+
+    for step <- 1..count do
+      %ActionRun{}
+      |> ActionRun.changeset(%{
+        project_id: project.id,
+        node_id: node.id,
+        user_id: user.id,
+        action_name: "run_analysis",
+        command: "python actions/run.py"
+      })
+      |> Ecto.Changeset.put_change(:created_at, DateTime.add(base, -step, :second))
+      |> Repo.insert!()
+    end
   end
 
   defp signed_conn(conn, user) do

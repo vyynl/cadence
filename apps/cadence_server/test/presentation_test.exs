@@ -171,6 +171,35 @@ defmodule Cadence.ServerWeb.PresentationTest do
     end
   end
 
+  describe "page_number/1" do
+    test "parses a positive integer page" do
+      assert Presentation.page_number("3") == 3
+      assert Presentation.page_number("+2") == 2
+    end
+
+    test "falls back to page 1 for anything else" do
+      assert Presentation.page_number(nil) == 1
+      assert Presentation.page_number("") == 1
+      assert Presentation.page_number("0") == 1
+      assert Presentation.page_number("-3") == 1
+      assert Presentation.page_number("2x") == 1
+      assert Presentation.page_number("nope") == 1
+      assert Presentation.page_number(2) == 1
+    end
+  end
+
+  describe "page_for/2" do
+    test "derives the page from the offset that was read" do
+      assert Presentation.page_for(0, 50) == 1
+      assert Presentation.page_for(50, 50) == 2
+      assert Presentation.page_for(100, 50) == 3
+    end
+
+    test "reports the clamped window honestly" do
+      assert Presentation.page_for(1_000_000, 50) == 20_001
+    end
+  end
+
   describe "run_duration/2" do
     test "formats sub-minute, minute, and hour durations" do
       started = ~U[2026-11-06 09:00:00.000Z]

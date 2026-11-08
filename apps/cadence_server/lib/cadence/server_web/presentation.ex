@@ -152,6 +152,38 @@ defmodule Cadence.ServerWeb.Presentation do
   def run_error_label(_reason), do: "The action failed to run."
 
   @doc """
+  Parse a `?page=`-style query param into a 1-based page number.
+
+  Absent, non-numeric, zero, and negative values all mean page 1. The upper
+  bound belongs to the data layer, which clamps the derived offset, so a
+  hand-edited page number can never overflow a database bind.
+  """
+  @spec page_number(term()) :: pos_integer()
+  def page_number(nil), do: 1
+
+  def page_number(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {page, ""} when page > 0 -> page
+      _other -> 1
+    end
+  end
+
+  def page_number(_value), do: 1
+
+  @doc """
+  The 1-based page number a loaded run page represents.
+
+  Derived from the offset that was actually read, never from the requested
+  `?page`: an async reload keeps its previous successful result renderable (and
+  `async_result` renders `ok?` first), so a page label computed from the request
+  would briefly disagree with the rows and could offer the next page twice.
+  """
+  @spec page_for(non_neg_integer(), pos_integer()) :: pos_integer()
+  def page_for(offset, limit) when is_integer(offset) and is_integer(limit) and limit > 0 do
+    div(offset, limit) + 1
+  end
+
+  @doc """
   Wall-clock duration between a run's start and finish, or `nil` when the run
   has not finished. Kept coarse because the value is informational.
   """

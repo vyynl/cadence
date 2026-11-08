@@ -633,17 +633,110 @@ defmodule Cadence.Server.Actions.RunsTest do
       assert fetched.id == run.id
 
       assert Runs.list(%{id: Ecto.UUID.generate()}, project.id) == {:error, :forbidden}
+      assert Runs.page(%{id: Ecto.UUID.generate()}, project.id) == {:error, :forbidden}
       assert Runs.get(%{id: viewer.id}, project.id, Ecto.UUID.generate()) == {:error, :not_found}
 
       # A caller-supplied limit is clamped, never passed straight into Ecto.
       assert {:ok, _runs} = Runs.list(%{id: viewer.id}, project.id, limit: 0)
       assert {:ok, _runs} = Runs.list(%{id: viewer.id}, project.id, limit: "nope")
+
+      # The LiveView derives its offset from this value; keep it pinned.
+      assert Runs.page_size() == 50
+    end
+
+    test "list/3 and page/3 paginate newest first", %{
+      project: project,
+      owner: owner,
+      viewer: viewer,
+      node: node
+    } do
+      newest_ids = seed_runs(project, node, owner, 5)
+
+      assert {:ok, all} = Runs.list(%{id: viewer.id}, project.id)
+      assert Enum.map(all, & &1.id) == newest_ids
+
+      assert {:ok, first} = Runs.list(%{id: viewer.id}, project.id, limit: 2)
+      assert Enum.map(first, & &1.id) == Enum.take(newest_ids, 2)
+
+      assert {:ok, second} = Runs.list(%{id: viewer.id}, project.id, limit: 2, offset: 2)
+      assert Enum.map(second, & &1.id) == Enum.slice(newest_ids, 2, 2)
+
+      assert {:ok, []} = Runs.list(%{id: viewer.id}, project.id, offset: 99)
+    end
+
+    test "page/3 reports the page boundaries", %{
+      project: project,
+      owner: owner,
+      viewer: viewer,
+      node: node
+    } do
+      newest_ids = seed_runs(project, node, owner, 5)
+
+      assert {:ok, first} = Runs.page(%{id: viewer.id}, project.id, limit: 2)
+      assert Enum.map(first.runs, & &1.id) == Enum.take(newest_ids, 2)
+      assert first.offset == 0
+      assert first.limit == 2
+      refute first.has_prev
+      assert first.has_next
+
+      assert {:ok, last} = Runs.page(%{id: viewer.id}, project.id, limit: 2, offset: 4)
+      assert Enum.map(last.runs, & &1.id) == [List.last(newest_ids)]
+      assert last.has_prev
+      refute last.has_next
+
+      # Exactly one full page with nothing after it: the `limit + 1` fetch
+      # returns exactly `limit` rows, so `has_next` must stay false.
+      assert {:ok, exact} = Runs.page(%{id: viewer.id}, project.id, limit: 2, offset: 3)
+      assert Enum.map(exact.runs, & &1.id) == Enum.slice(newest_ids, 3, 2)
+      assert exact.has_prev
+      refute exact.has_next
+
+      assert {:ok, past} = Runs.page(%{id: viewer.id}, project.id, limit: 2, offset: 99)
+      assert past.runs == []
+      assert past.has_prev
+      refute past.has_next
+    end
+
+    test "page/3 on an empty project reports one empty page", %{
+      project: project,
+      viewer: viewer
+    } do
+      assert {:ok, page} = Runs.page(%{id: viewer.id}, project.id)
+
+      assert page.runs == []
+      assert page.offset == 0
+      assert page.limit == 50
+      refute page.has_prev
+      refute page.has_next
+    end
+
+    test "page/3 clamps junk limits and offsets", %{
+      project: project,
+      owner: owner,
+      viewer: viewer,
+      node: node
+    } do
+      seed_runs(project, node, owner, 1)
+
+      assert {:ok, page} = Runs.page(%{id: viewer.id}, project.id, limit: 0, offset: "nope")
+      assert page.limit == 50
+      assert page.offset == 0
+
+      assert {:ok, page} = Runs.page(%{id: viewer.id}, project.id, limit: 10_000, offset: -1)
+      assert page.limit == 200
+      assert page.offset == 0
+
+      # A hand-edited page number can never produce an out-of-range DB bind.
+      assert {:ok, page} = Runs.page(%{id: viewer.id}, project.id, offset: 5_000_000)
+      assert page.offset == 1_000_000
+      assert page.runs == []
     end
 
     test "read APIs are disabled with the action layer", %{project: project, owner: owner} do
       Application.put_env(:cadence_server, :actions_enabled, false)
 
       assert Runs.list(%{id: owner.id}, project.id) == {:error, :disabled}
+      assert Runs.page(%{id: owner.id}, project.id) == {:error, :disabled}
 
       assert Runs.get(%{id: owner.id}, project.id, Ecto.UUID.generate()) ==
                {:error, :disabled}
@@ -854,6 +947,26 @@ defmodule Cadence.Server.Actions.RunsTest do
       command: "python actions/run.py"
     })
     |> Repo.insert!()
+  end
+
+  # Rows with explicit, strictly decreasing timestamps, newest first, so the
+  # page order is deterministic without depending on insert speed.
+  defp seed_runs(project, node, user, count) do
+    base = DateTime.utc_now()
+
+    for step <- 1..count do
+      %ActionRun{}
+      |> ActionRun.changeset(%{
+        project_id: project.id,
+        node_id: node.id,
+        user_id: user.id,
+        action_name: "run_analysis",
+        command: "python actions/run.py"
+      })
+      |> Ecto.Changeset.put_change(:created_at, DateTime.add(base, -step, :second))
+      |> Repo.insert!()
+    end
+    |> Enum.map(& &1.id)
   end
 
   defp tag(project, node) do

@@ -1155,6 +1155,26 @@ code {
   text-decoration: underline;
 }
 
+/* Offset paging for run history and artifacts (spec §7.2). */
+.run-pager {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: baseline;
+  margin: 0.75rem 0 0;
+  font-size: 0.9rem;
+}
+
+.run-pager .pager-link {
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.run-pager .pager-link:hover,
+.run-pager .pager-link:focus-visible {
+  text-decoration: underline;
+}
+
 .run-detail-heading {
   display: flex;
   flex-wrap: wrap;

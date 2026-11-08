@@ -1,13 +1,13 @@
 # Cadence — Progress
 
 ## Current Phase
-**Post-Phase 7 — build order complete; 6c operational hardening in progress.**
+**Post-Phase 7 — build order complete; 6c operational hardening complete.**
 Phase 7 (7a–7d) shipped, the union live smoke is recorded, and the post-7
 startup gap is closed (`docs/daemon-setup.md`). The demo-stack visual pass and
-`:CadProposals` shipped. The 6c operational-hardening stage has begun: **M1
-(durable per-project run queue) and M2 (artifact/image retention) are done**;
-**M3 (run/artifact paging)** remains, with its design in
-`.claude/plans/actions-6c-hardening/plan.md`.
+`:CadProposals` shipped. 6c operational hardening is finished: **M1 (durable
+per-project run queue), M2 (artifact/image retention), and M3 (run/artifact
+paging)** are shipped. No active milestone; the remaining work is the optional
+list under **Next**.
 
 ## Done (summary)
 
@@ -656,6 +656,26 @@ startup gap is closed (`docs/daemon-setup.md`). The demo-stack visual pass and
   mix tasks booting the run dispatcher (boot dispatch disabled in the task
   process), and a test connection leak. Lesson:
   `.claude/solutions/data-integrity/action-retention-prefixes-20261107.md`.
+- **6c hardening M3 (run/artifact paging)** — `Runs.list/3` gained a clamped
+  `:offset` (1..200 limit, 0..1,000,000 offset) and `Runs.page/3` returns
+  `%{runs, offset, limit, has_prev, has_next}` from one `limit + 1` read (no
+  `COUNT`); both share one authorized-scope/query path and keep the DB-only
+  stale-run refresh. `RunLive.Index` pages 50 rows under `?page=N` with
+  newer/older `patch` links, falls back to page 1 for junk values, renders a
+  distinct empty state per cause, and a `{:action_run_updated, …}` reloads the
+  **current** page (the page struct is nested under `:run_page`, because
+  `assign_async/3` wraps every returned key; the page label/links are derived
+  from the loaded offset, so a reload's retained previous result can never pair
+  a new page number with old rows). `RunLive.Show` slices the already
+  loaded artifacts 100 per page under `?artifacts_page=N`, clamps an
+  out-of-range page to the last one, and keeps its page across a live refresh.
+  `Presentation.page_number/1` is the shared param parser and
+  `Presentation.page_for/2` derives the rendered page from the loaded offset
+  (pinned by a unit test); `Runs.page_size/0` is the single page-size source
+  and the next-page flag also stops at the offset clamp, so "Older" can never
+  re-fetch the same window. `.run-pager` CSS is one small token-only block.
+  Spec §7.2/§8.3/§13/§16 and `docs/README.md` updated. 14 new tests; 1101 total
+  (312 shared + 207 daemon + 582 server).
 - **4e gate:** 640 tests green (161 shared + 125 daemon + 354 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
@@ -669,19 +689,15 @@ startup gap is closed (`docs/daemon-setup.md`). The demo-stack visual pass and
 
 ## Next
 
-**Immediate step:** 6c hardening **M3 — run/artifact paging**. Add an `:offset`
-(or `:before`) option to `Runs.list/3` next to the clamped `:limit`, and prev/
-next links on `RunLive.Index` (50 rows/page) that keep the existing live
-refresh (decide whether a `{:action_run_updated, …}` event resets to page 1 or
-reloads the current offset). Page `RunLive.Show` artifacts by 100 (the
-collection cap stays 1,000) with prev/next links, and cover offset boundaries,
-an empty page, artifact page links, and a project with more than 50 runs. The
-design is in `.claude/plans/actions-6c-hardening/plan.md` (M3).
+**Immediate step:** none — 6c M3 closed the last planned milestone. The
+planned build order (spec §13) and the 6c operational-hardening stage are both
+complete; every item below is optional and independent.
 
 Remaining optional work: the Phase 5 P5 docs live smoke with a real
 `CAD_LLM_API_KEY`, the two `docs/ui-notes.md` demo notes (header-nav spacing,
-unseeded run detail), and the 7b/7c residues below. Everything below is
-optional and independent.
+unseeded run detail), and the 7b/7c residues below. If the run history ever
+needs stable paging, replace the offset with a `(created_at, id)` cursor
+(recorded in spec §16).
 
 **Integration contract (6c, for anything that touches runs):**
 `Actions.Runs.prepare/4` returns `{:ok, %ActionRun{}}` or
@@ -696,15 +712,17 @@ failures carry a closed `error_reason` (`quarantined`, `staging_failed`,
 collection skip is `artifact_error: "collect_skipped"`, not a status change. The
 Docker client is injected via `:actions_docker` (`FakeDocker` in tests).
 `Runs.list/get` now return `:disabled` when `CAD_ACTIONS_ENABLED=false`; run
-pages redirect, the nav link hides, and artifact downloads 404.
+pages redirect, the nav link hides, and artifact downloads 404. `Runs.list/3`
+takes `:limit`/`:offset`; `Runs.page/3` returns
+`%{runs, offset, limit, has_prev, has_next}` for the paged list.
 
 Carry-over (post-Phase-7, optional):
 
 1. **Phase 5 P5 docs live smoke** — with a real `CAD_LLM_API_KEY`.
-2. **6c residues** (spec §16): run history pages at 50 rows and the detail at
-   the first 100 artifacts (no paging — M3); an unbounded queue depth; action
-   log streaming remains post-exit. Per-project run concurrency and
-   artifact/image retention are resolved by M1/M2.
+2. **6c residues** (spec §16): an unbounded queue depth; action log streaming
+   remains post-exit; run paging is offset-based (a cursor is the fix if the
+   window shift ever matters). Per-project run concurrency, artifact/image
+   retention, and run/artifact paging are resolved by M1/M2/M3.
 3. **7b/7c residues** (spec §16): pack consolidation / multi-pack index; no
    run timeout (a hung repack wedges the single-worker queue until restart);
    the repack threshold path was not exercised on the demo seed (its stores are
@@ -719,9 +737,8 @@ dependency is expected.
 ## Blocked
 
 - (none). Phase 7 (7a–7d), the daemon boot guard, the demo-stack visual pass,
-  `:CadProposals`, and 6c M1 (run queue) / M2 (artifact/image retention) are
-  complete, and every review's must-fix item is applied and verified. 6c M3
-  (paging) is next, not blocked.
+  `:CadProposals`, and 6c M1 (run queue) / M2 (retention) / M3 (paging) are
+  complete, and every review's must-fix item is applied and verified.
   Pre-existing follow-ups (unreadable-object isolation, re-push of an existing
   row whose objects were later lost, the 8 MB retry ceiling, pack consolidation,
   the missing repack timeout) remain recorded below and in spec §16.
@@ -883,8 +900,8 @@ dependency is expected.
   UTF-8 replaced) in an escaped `<pre>`. Artifact downloads accept only an exact
   path from `Artifacts.list/1` (controller wildcard params arrive as a list and
   are joined first), serve `application/octet-stream` + `attachment` +
-  `private, no-store`, and map a vanished file to 404. The run list shows 50
-  rows and the detail renders the first 100 artifacts (no paging yet, §16).
+  `private, no-store`, and map a vanished file to 404. The run list pages 50
+  rows and the detail pages its artifacts 100 at a time (6c M3).
 - **Phase 5b implementation notes (2026-11-06)** — every commit gets a
   `SyncPending` row written in the same transaction as the node (and spawn);
   `pushable/3` keeps a doc-held parent in the parent set and gates only
@@ -1786,4 +1803,32 @@ PASS WITH WARNINGS; four findings fixed (ambiguous slug prefixes, pooled
 connection held across Docker calls, mix-task dispatch side effect, test
 connection leak). Lesson:
 `.claude/solutions/data-integrity/action-retention-prefixes-20261107.md`. Next:
-M3 (run/artifact paging). Not committed.
+M3 (run/artifact paging). Committed with the 6c hardening commit.
+
+2026-11-08 — **6c hardening M3 (run/artifact paging)** shipped from
+`.claude/plans/actions-6c-hardening/plan.md` (approved as written). The run
+history is offset-paged 50 rows under `?page=N` (junk → page 1) with
+newer/older `patch` links; `Runs.page/3` derives `has_next` from one
+`limit + 1` read and clamps limit/offset, so a hand-edited page can only render
+an empty page with a link back to the newest runs. A `{:action_run_updated, …}`
+reloads the current offset, and the rendered page number/links come from the
+**loaded** offset (an async reload keeps its previous result renderable, so a
+synchronous label could link forward twice). `RunLive.Show` slices the already
+loaded artifact list 100 per page under `?artifacts_page=N`, clamps an
+out-of-range page to the last one (the list is in memory), and keeps its page
+across a live refresh; the collection cap stays 1,000. `Presentation.page_number/1`
+is the shared parser, `Presentation.page_for/2` derives the rendered page from
+the loaded offset, and `Runs.page_size/0` is the single page-size source; the
+next-page flag also stops at the offset clamp so "Older" cannot loop.
+Spec §7.2/§8.3/§13/§16, `docs/README.md`, and the stale "no paging" notes
+updated. Verification: format clean, dev + `MIX_ENV=prod` compile clean, 1101
+tests green (312 shared + 207 daemon + 582 server; +14). Read-only review PASS
+WITH WARNINGS; fixed the one MEDIUM (page label/links now derive from the
+loaded offset, behind a unit-tested `Presentation.page_for/2`), the stale
+spec/progress text, the "Older" loop at the offset clamp, and the weak test
+gaps (exact page-size boundary, empty project, `page/3` scoping/disabled,
+`page_size/0`, and live-event tests that mutate the row so they cannot pass
+vacuously). Lesson:
+`.claude/solutions/liveview-issues/async-result-renders-stale-ok-while-loading-20261108.md`.
+Next: no planned milestone; optional work in **Next**. Committed with this
+slice's feature commit.

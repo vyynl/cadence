@@ -644,9 +644,12 @@ never public. `/auth`, `/sync`, `/health`, and static paths are reserved.
   (owner/trusted only; runner in 6b, UI in 6c).
 - See the project's action run history and one run's status, provenance, and
   artifacts (any member); start a run from the node action panel
-  (owner/trusted only). `/p/:slug/runs` lists runs newest first and
-  `/p/:slug/runs/:run_id` shows the run. Both are member-only and subscribe to
-  `project:<id>`: a run status change refreshes the page live. Captured output
+  (owner/trusted only). `/p/:slug/runs` lists runs newest first, 50 per page
+  with newer/older links (`?page=N`), and `/p/:slug/runs/:run_id` shows the run,
+  paging its collected artifacts 100 at a time (`?artifacts_page=N`). Both are
+  member-only and subscribe to
+  `project:<id>`: a run status change refreshes the page live (the run list
+  keeps its current page). Captured output
   is rendered as escaped text with ANSI/control sequences stripped (never
   `raw/1`); output is available after the container exits. Artifacts download
   only through the recorded collection (`application/octet-stream`,
@@ -1030,6 +1033,13 @@ Rust, etc. These live in `cadence_server/priv/templates/`.
   (`CAD_ACTIONS_IMAGE_RETENTION_PER_PROJECT`, default 5; `0` disables); a
   pruned image is rebuilt on demand the next time its snapshot runs. Docker
   being unavailable skips only the image half.
+- **History paging:** `/p/:slug/runs` is offset-paged 50 rows at a time
+  (`?page=N`, 1-based; junk means page 1) with newer/older links, and a live
+  status event reloads the current page rather than resetting to page 1. The
+  run page slices the collected artifacts 100 at a time (`?artifacts_page=N`);
+  the collection cap remains 1,000. Offset paging is not a stable cursor — a
+  run inserted between two page reads can shift the window — which is
+  acceptable for a newest-first history at these sizes.
 
 ### 8.4 Security
 
@@ -2011,6 +2021,12 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   to the newest 5 per project. Both halves are configurable and disable-able
   and capped per pass; the artifact sweep is elected by a global advisory lock
   and the image half follows it (§8.3, §12.6, §16).
+- 6 post-close — paging (shipped): the run history is offset-paged 50 rows at a
+  time (`?page=N`) with newer/older links, and the run page slices its
+  collected artifacts 100 at a time, both keeping live refresh on the current
+  page. `Runs.page/3` derives `has_next` from one `limit + 1` read (no count)
+  and clamps offsets, so a hand-edited page can only render an empty page with
+  a way back (§7.2, §8.3, §16).
 
 **Phase 7 — Storage engineering (week 18+)**
 - 7a — shared pack layer (shipped): `GitStore.Pack` writes and reads Git pack
@@ -2173,17 +2189,22 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       (`CAD_ACTIONS_RETENTION_INTERVAL_MS`), capped by
       `CAD_ACTIONS_RETENTION_BATCH`. The run row keeps its status/exit code with
       `log_path`/`artifact_path` nulled; a failed removal is retried.
-- [ ] **Run history/artifact paging:** the project run list shows the newest 50
-      rows and the run page renders at most the first 100 collected artifacts
-      (the collection itself caps at 1,000). Add paging or streams if a project
-      accumulates deep history or large artifact sets.
+- [x] **Run history/artifact paging:** resolved in the 6 post-close paging
+      slice. `/p/:slug/runs` is offset-paged 50 rows at a time (`?page=N`) and
+      the run page pages collected artifacts 100 at a time
+      (`?artifacts_page=N`), both with newer/older links and a live refresh that
+      stays on the current page. `Runs.page/3` derives `has_next` from a
+      `limit + 1` read and clamps offsets, so no page request can overflow a
+      database bind. Offset paging is not a stable cursor (a run inserted
+      mid-browse can shift the window); a cursor is the fix if that ever
+      matters. The collection cap remains 1,000 and artifact paging is
+      presentational. No new settings.
 - [x] **Action run concurrency:** resolved in the 6 post-close queue slice —
       `CAD_ACTIONS_MAX_CONCURRENT_RUNS` bounds `:running` rows per project
       (default 1, `0` = unlimited). The oldest queued run is claimed atomically
       under a per-project advisory lock; dispatch runs on submit, every terminal
       transition, and one boot pass; `:queued` is waiting work and is never
-      interrupted by stale-run recovery. Artifact/image retention and run
-      history paging remain open below.
+      interrupted by stale-run recovery.
 - [ ] **Run queue depth:** the per-project queue is unbounded and only managers
       can add to it (§8.3). Add a maximum-queued-runs setting (with a refusal
       message) if a burst of submissions ever needs bounding.
