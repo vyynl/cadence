@@ -732,7 +732,9 @@ becomes a product requirement; it is not part of Phase 3.
 1. Depth = longest path from any root.
 2. Order within layer by parent's horizontal position.
 3. Enforce max layer width; wrap into sub-rows with a visual break marker.
-4. Force left-align.
+4. Force left-align. The SVG is only as wide as the columns actually occupied
+   (capped by the max), so a small graph never overflows the rail; horizontal
+   scrolling appears only when the graph is wider than it (§7.3).
 
 **Interactivity:** LiveView owns selection state. Hover shows a CSS tooltip
 with the commit message and node status (flags/pinned) and highlights the node;

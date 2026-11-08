@@ -224,6 +224,9 @@ code {
 
 .dag-canvas {
   min-height: 12rem;
+  /* Fill the rail so a graph narrower than it never scrolls; the inline width
+     from the layout still wins when the graph is wider than the rail (§7.3). */
+  min-width: 100%;
 }
 
 .dag-panel svg {

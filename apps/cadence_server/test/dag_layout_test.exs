@@ -58,6 +58,21 @@ defmodule Cadence.ServerWeb.DAGLayoutTest do
       assert Enum.all?(layout.nodes, & &1.intro?)
     end
 
+    test "width follows the columns actually used, not max_columns" do
+      chain = [node("a", [], created_at: @t0), node("b", ["a"], created_at: @t0)]
+
+      # One column: the default max_columns (10) must not reserve 444px.
+      assert DAGLayout.layout(chain, intro_ms: 0).width == 24 * 2
+
+      branch = [
+        node("root", [], created_at: @t0),
+        node("left", ["root"], created_at: @t0),
+        node("right", ["root"], created_at: @t0)
+      ]
+
+      assert DAGLayout.layout(branch, intro_ms: 0).width == 24 * 2 + 44
+    end
+
     test "wraps a wide layer into bands with break lines" do
       nodes =
         for i <- 1..12 do

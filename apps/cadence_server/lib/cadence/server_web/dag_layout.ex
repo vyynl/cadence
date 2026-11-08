@@ -58,6 +58,15 @@ defmodule Cadence.ServerWeb.DAGLayout do
 
     {placed, break_lines, height} = place_layers(grouped, max_depth, max_columns)
 
+    # The rail is left-aligned (§7.3): the SVG is only as wide as the columns
+    # actually occupied, capped by max_columns. Using max_columns here would
+    # reserve 10 columns (444px) for every graph and overflow a narrow rail.
+    used_columns =
+      grouped
+      |> Map.values()
+      |> Enum.map(&min(length(&1), max_columns))
+      |> Enum.max(fn -> 1 end)
+
     by_id = Map.new(nodes, &{&1.id, &1})
     default_id = resolve_default(opts[:default_id], nodes, placed)
     lineage = lineage_ids(default_id, by_id)
@@ -109,7 +118,7 @@ defmodule Cadence.ServerWeb.DAGLayout do
       nodes: placed_nodes,
       edges: edges,
       break_lines: break_lines,
-      width: @margin_x * 2 + (max_columns - 1) * @x_spacing,
+      width: @margin_x * 2 + (used_columns - 1) * @x_spacing,
       height: height,
       default_id: default_id,
       intro_ms: intro_ms,

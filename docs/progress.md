@@ -1,14 +1,14 @@
 # Cadence — Progress
 
 ## Current Phase
-**Phase 8a — production server release complete.** The planned build order
-(Phases 1–7) and 6c operational hardening were already complete; this session
-shipped the server artifact spec §12.8 had deferred: the root `cadence` release,
-`Cadence.Server.Release.migrate/0`, `docker/Dockerfile`,
-`docker-compose.prod.yml`, and `docs/deploy.md`. One user-flagged UI defect is
-now the top of **Next** (the project-home DAG canvas does not scale to its
-panel; `docs/ui-notes.md`). **Phase 8b (daemon release)** follows it; the other
-items are optional.
+**Phase 8a — production server release complete; DAG width defect fixed.** The
+planned build order (Phases 1–7) and 6c operational hardening were already
+complete; this session shipped the server artifact spec §12.8 had deferred (root
+`cadence` release, `Cadence.Server.Release.migrate/0`, `docker/Dockerfile`,
+`docker-compose.prod.yml`, `docs/deploy.md`) and then fixed the user-flagged
+project-home DAG overflow (`DAGLayout` now sizes to the columns actually used;
+`.dag-canvas` fills the rail). **Phase 8b (daemon release)** is the next slice;
+the remaining items are optional.
 
 ## Done (summary)
 
@@ -722,6 +722,18 @@ items are optional.
   §12.3/§12.4/§12.7/§12.8/§13/§16, `docs/README.md`, and `docs/demo.md` updated.
   Lesson:
   `.claude/solutions/docker/release-image-runtime-glibc-20261108.md`.
+- **DAG width fix (2026-11-08, user-flagged)** — the project-home rail no longer
+  overflows. `DAGLayout.layout/2` derives the SVG width from the columns
+  actually occupied (capped by `max_columns`) instead of always reserving 10
+  columns (444px), and `.dag-canvas` gained `min-width: 100%`, so a small graph
+  fills the rail's scroll box without a horizontal scrollbar while a graph wider
+  than the rail still scrolls at natural size. Nodes stay left-aligned and
+  unscaled (§7.3), so tooltip/selection coordinates are unchanged. New tests:
+  a 1-column chain is 48px and a 2-column branch is 92px, plus a component
+  assertion on the rendered canvas/SVG width. Verified on the rebuilt demo at
+  1440×1000 and 390×844: `scrollWidth == clientWidth`, `overflowing == false`;
+  before/after screenshots in `docs/images/`. Spec §7.3 records the rule and
+  `docs/ui-notes.md` moved the item to Done.
 - **4e gate:** 640 tests green (161 shared + 125 daemon + 354 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
@@ -735,24 +747,14 @@ items are optional.
 
 ## Next
 
-**Immediate step:** fix the **project-home DAG scaling defect** flagged
-2026-11-08 (top item in `docs/ui-notes.md`). `DAGLayout.layout/2` sets the canvas
-width from the configured `max_columns` (default 10 → 444px) instead of the
-columns actually used, and `Components.DAG` hardcodes that width, so a small
-graph overflows the `minmax(16rem, 25%)` column and scrolls with dead space.
-Derive the width from the real maximum nodes-per-layer (or scale the SVG via
-`width: 100%` + viewBox), keep the tooltip/selection coordinates correct, and
-check 1440×1000 / 390×844 light+dark with 1–10 columns and a wrapped band.
-`@phx-quick` if it stays in `dag_layout.ex` + `dag.ex` + CSS; `@phx-investigate`
-if the tooltip/scaling behavior needs a deeper change.
-
-**After that:** **8b — daemon release.** Add a `cadence_daemon` release to the
-root `mix.exs` (release name `cadence_daemon`), a
+**Immediate step:** **8b — daemon release.** Add a `cadence_daemon` release to
+the root `mix.exs` (release name `cadence_daemon`), a
 `Cadence.Daemon.Release.migrate/0` that runs the SQLite
 `priv/repo/migrations`, and install/upgrade docs. Verify with
 `MIX_ENV=prod mix release cadence_daemon` and a migration run against a temp
-state dir. Spin up with `@phx-full`. The planned build order (spec §13) is
-otherwise complete; every item below is optional and independent.
+state dir. Spin up with `@phx-full`. The DAG width fix is complete; the planned
+build order (spec §13) is otherwise complete and every item below is optional
+and independent.
 
 Remaining optional work: the Phase 5 P5 docs live smoke with a real
 `CAD_LLM_API_KEY`, the rest of `docs/ui-notes.md` (header-nav spacing, a seeded
@@ -791,29 +793,20 @@ Carry-over (post-Phase-7, optional):
 
 **Spin-up:** `@phx-full` for the docs live smoke (needs `CAD_LLM_API_KEY`) or if
 a `docs/ui-notes.md` item turns into a multi-file fix; `@phx-quick` for a
-single-file residue. The planned build order in spec §13 is complete; no new
-dependency is expected.
+single-file residue. The planned build order in spec §13 is complete except 8b;
+no new dependency is expected.
 
 ## Blocked
 
 - (none). Phase 7 (7a–7d), the daemon boot guard, the demo-stack visual pass,
-  `:CadProposals`, 6c M1 (run queue) / M2 (retention) / M3 (paging), and Phase
-  8a (production server release) are complete, and every review's must-fix item
-  is applied and verified. Pre-existing follow-ups (unreadable-object
+  `:CadProposals`, 6c M1 (run queue) / M2 (retention) / M3 (paging), Phase
+  8a (production server release), and the DAG width fix are complete, and every
+  review's must-fix item is applied and verified. Pre-existing follow-ups (unreadable-object
   isolation, re-push of an existing row whose objects were later lost, the 8 MB
   retry ceiling, pack consolidation) remain recorded below and in spec §16.
 
 ## Spec Deltas / Open Items
 
-- **DAG canvas width is not responsive (2026-11-08, user-flagged)** — the
-  project-home DAG renders its SVG at a fixed `width` derived from the
-  **configured** `max_columns` (`DAGLayout.layout/2`: `24*2 + (max_columns-1)*44`
-  = 444px at defaults), not from the columns the graph actually uses. A small
-  graph therefore overflows the `minmax(16rem, 25%)` panel: dead space on the
-  right plus a horizontal scrollbar (screenshots in `docs/ui-notes.md`). Spec
-  §7.3/§7.5 requires a bounded, legible graph but does not say whether the
-  panel fits-to-width or scrolls, so the fix should choose and record the rule
-  (fit-to-panel with a minimum, or scroll only above the real column count).
 - **8a release notes (2026-11-08)** — (a) the runtime image distro must match
   the `elixir` build image's glibc: `docker/Dockerfile` builds on
   `elixir:1.20-otp-29` (Debian trixie) and runs on `debian:trixie-slim`; bump
@@ -2004,3 +1997,19 @@ overlay scrollbar hidden until scroll); screenshots saved under
 follow-up; `docs/ui-notes.md` carries the root cause, expected behavior, and
 verification checklist, and **Next** now leads with the fix, then 8b. Tree is
 still formatted/compiled from 8a; all changes remain uncommitted.
+
+2026-11-08 — **DAG width defect fixed** (the first item from the handoff).
+`DAGLayout.layout/2` now sizes the SVG from the columns actually occupied
+(capped by `max_columns`) instead of always reserving 10 columns (444px), and
+`.dag-canvas` gained `min-width: 100%`, so a small graph fills the rail's scroll
+box with no horizontal scrollbar while a graph wider than the rail still scrolls
+at natural size. Nodes stay left-aligned and unscaled (§7.3), so tooltip and
+selection coordinates are unchanged. Two new tests: a 1-column chain is 48px, a
+2-column branch is 92px, and the component renders the matching canvas/SVG
+width. Verification: format clean, dev + `MIX_ENV=prod` compile clean, 1111
+tests green (312 shared + 592 server + 207 daemon); the rebuilt demo at
+1440×1000 and 390×844 reports `scrollWidth == clientWidth` and
+`overflowing == false`; before/after screenshots under
+`docs/images/dag-width-{overflow,fixed}-*-20261108.png`. Spec §7.3 records the
+rule and `docs/ui-notes.md` moved the item to Done. Next: **8b — daemon
+release**; changes are uncommitted.
