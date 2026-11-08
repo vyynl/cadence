@@ -1,0 +1,104 @@
+# Production reference stack (spec §12.4, §12.7, §12.8).
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# The one-shot `migrate` service applies migrations with
+# `Cadence.Server.Release.migrate/0`; the app starts only after it exits 0.
+# The dev demo stack is `docker-compose.yml` (MIX_ENV=dev, demo auth). It uses
+# the default project name (`cadence`), so this stack gets its own: `down` here
+# must never touch the demo containers/volumes.
+name: cadence-prod
+
+x-cadence-env: &cadence-env
+  CAD_PHX_HOST: "${CAD_PHX_HOST:?set CAD_PHX_HOST}"
+  CAD_PUBLIC_URL: "${CAD_PUBLIC_URL:?set CAD_PUBLIC_URL}"
+  CAD_SECRET_KEY_BASE: "${CAD_SECRET_KEY_BASE:?set CAD_SECRET_KEY_BASE}"
+  CAD_DATABASE_URL: "${CAD_DATABASE_URL:?set CAD_DATABASE_URL}"
+  CAD_DB_POOL_SIZE: "${CAD_DB_POOL_SIZE:-10}"
+  CAD_GIT_STORE_PATH: "/data/git"
+  CAD_ARTIFACT_PATH: "/data/artifacts"
+  CAD_ACTIONS_ENABLED: "${CAD_ACTIONS_ENABLED:-true}"
+  CAD_ACTIONS_VOLUME: "${CAD_ACTIONS_VOLUME:-cadence_actions}"
+  CAD_ACTIONS_VOLUME_PATH: "/data/actions"
+  CAD_DOCKER_SOCKET: "http://docker-proxy:2375"
+  CAD_LLM_PROVIDER: "${CAD_LLM_PROVIDER:-deepseek}"
+  CAD_LLM_API_KEY: "${CAD_LLM_API_KEY:-}"
+  CAD_LLM_MODEL: "${CAD_LLM_MODEL:-deepseek-chat}"
+  CAD_LLM_BASE_URL: "${CAD_LLM_BASE_URL:-https://api.deepseek.com}"
+  CAD_OAUTH_GITHUB_CLIENT_ID: "${CAD_OAUTH_GITHUB_CLIENT_ID:-}"
+  CAD_OAUTH_GITHUB_CLIENT_SECRET: "${CAD_OAUTH_GITHUB_CLIENT_SECRET:-}"
+  CAD_OAUTH_GOOGLE_CLIENT_ID: "${CAD_OAUTH_GOOGLE_CLIENT_ID:-}"
+  CAD_OAUTH_GOOGLE_CLIENT_SECRET: "${CAD_OAUTH_GOOGLE_CLIENT_SECRET:-}"
+
+services:
+  # One-shot migration runner. `docker compose up` recreates it on every start;
+  # it is idempotent and only touches the database.
+  migrate:
+    image: "${CAD_SERVER_IMAGE:-cadence-server:prod}"
+    command: ["/app/bin/cadence", "eval", "Cadence.Server.Release.migrate()"]
+    environment: *cadence-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  cadence:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: "${CAD_SERVER_IMAGE:-cadence-server:prod}"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      docker-proxy:
+        condition: service_started
+    # The app always listens on 4000 inside the container.
+    ports:
+      - "${CAD_HTTP_PORT:-4000}:4000"
+    environment: *cadence-env
+    volumes:
+      - cadence_data:/data
+      - cadence_actions:/data/actions
+      - cadence_artifacts:/data/artifacts
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "${CAD_DB_USER:?set CAD_DB_USER}"
+      POSTGRES_PASSWORD: "${CAD_DB_PASS:?set CAD_DB_PASS}"
+      POSTGRES_DB: "${CAD_DB_NAME:-cadence}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${CAD_DB_USER} -d ${CAD_DB_NAME:-cadence}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  # Allowlisted Docker API proxy (spec §8.4). Never mount the raw socket into
+  # the app container; this proxy is still root-equivalent on the host.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      BUILD: 1
+      POST: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+volumes:
+  cadence_data:
+  # Pinned: the host daemon mounts this exact name into action containers
+  # (§8.3/§12.4). Compose would otherwise prefix it with the project name.
+  # Keep CAD_ACTIONS_VOLUME in sync; both read the same variable.
+  cadence_actions:
+    name: "${CAD_ACTIONS_VOLUME:-cadence_actions}"
+  cadence_artifacts:
+  postgres_data:

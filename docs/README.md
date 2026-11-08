@@ -6,7 +6,8 @@ there, resolve it in the spec (or add it to §16) before implementing.
 ## Read order
 
 1. `progress.md` — current phase, summary, next step, blockers.
-2. `phase-7-prep.md` — current phase brief.
+2. `deploy.md` for production/operator work, or the relevant phase brief for
+   historical context.
 3. `spec.md` — the relevant sections for the task.
 
 Completed-phase briefs and the full Phase 1–3 log live in `archive/`; they are
@@ -25,6 +26,7 @@ history, not current instructions.
 | Phase 5 — doc automation | Code complete (5a shared primitives, 5b daemon worker, 5c daemon API + Neovim, P4 deferred/pushed docs + docs badge); P5 release verification pending |
 | Phase 6 — Docker actions | Complete (6a manifest foundation, 6b runner, 6c web run experience, post-close run queue, retention and run/artifact paging); action log streaming remains a §16 delta |
 | Phase 7 — Storage engineering | Complete (7a pack layer, 7b repacker, 7c existence handshake, 7d multi-pack/index/delta-depth/repack verification + demo-stack smoke); pack consolidation remains a §16 delta |
+| Phase 8 — Release engineering | 8a complete (production server image, umbrella release, `Cadence.Server.Release.migrate/0`, prod compose, deploy docs); 8b daemon release pending |
 
 ## Current docs
 
@@ -33,6 +35,7 @@ history, not current instructions.
 | `spec.md` | Canonical product/technical contract |
 | `progress.md` | Current handoff and session summary |
 | `daemon-setup.md` | Local daemon setup: token, env file, migration, boot, registration |
+| `deploy.md` | Production server: release image, compose stack, migrations, volumes, actions |
 | `demo.md` | Local demo stack: compose, seed accounts, guided tour |
 | `phase-7-prep.md` | Phase 7 storage engineering: pack layer, repacker, existence handshake |
 | `phase-6-prep.md` | Phase 6 Docker actions: scope, slices, decisions, risks (historical) |

@@ -1554,15 +1554,18 @@ schemas, with different adapters (SQLite vs Postgres). Name them explicitly:
 
 ### 12.3 Server
 
-- Distributed as a Docker image.
+- Distributed as a Docker image (`docker/Dockerfile`, spec §12.8).
 - Targets TrueNAS SCALE or any Docker host.
-- Compose stack: app + Postgres + Docker socket proxy.
+- Compose stack: app + Postgres + Docker socket proxy; the reference file is
+  `docker-compose.prod.yml` (§12.4).
 - Phoenix endpoint uses `Bandit.PhoenixAdapter` explicitly (Phoenix otherwise
   defaults to Cowboy2, which is not a Cadence dependency).
 - All config via environment variables read in `config/runtime.exs`.
 - Persistent volumes:
   - `/data/git` — bare Git repos / packfiles
   - `/data/artifacts` — action outputs
+  - `/data/actions` — staged action snapshots (named volume shared with the
+    host Docker daemon; §8.3)
   - Postgres data
 - Docker socket mounted read-only, preferably through a socket proxy.
 - TLS terminated by the host's reverse proxy (TrueNAS built-in, Caddy, nginx).
@@ -1638,13 +1641,21 @@ volumes:
   postgres_data:
 ```
 
+The reference file is `docker-compose.prod.yml` (8a). It matches the stack
+above and adds a one-shot `migrate` service that runs
+`Cadence.Server.Release.migrate/0`; the `cadence` service starts only after it
+exits successfully. The action volume name and `CAD_ACTIONS_VOLUME` both read
+`CAD_ACTIONS_VOLUME` (default `cadence_actions`) so the host daemon can mount the
+same volume into action containers, and no source or `/app` tree is
+bind-mounted. See `docs/deploy.md`.
+
 The repository also ships a **local demo stack** (`docker-compose.yml` +
 `docker/Dockerfile.demo`): `postgres:16-alpine` plus a `MIX_ENV=dev` server that
 runs migrations, seeds demo data (`mix cadence.demo_seed`), and boots only
 `cadence_server` (no daemon). CSS is bind-mounted for style iteration and the
 demo password strategy is compiled in via `CAD_DEMO_AUTH` (§7.4). This is an
-exploration aid, not a production artifact; the release path in §12.8 remains
-authoritative. See `docs/demo.md`.
+exploration aid, not a production artifact; `docker/Dockerfile` (8a) is the
+production image. See `docs/demo.md`.
 
 ### 12.5 Configuration strategy
 
@@ -1822,25 +1833,42 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 
 1. Generate `CAD_SECRET_KEY_BASE` via `mix phx.gen.secret`.
 2. Create OAuth apps; set redirect URIs to
-   `https://<CAD_PHX_HOST>/auth/<provider>/callback`.
+   `https://<CAD_PHX_HOST>/auth/user/github/callback` and
+   `https://<CAD_PHX_HOST>/auth/user/google/callback` (the paths
+   `config/runtime.exs` passes to AshAuthentication).
 3. Create TrueNAS dataset for `/data/git` and `/data/artifacts`, or bind-mount
    host paths.
 4. Postgres volume initialized on first run.
-5. Run migrations:
+5. Run migrations (8a: `docker compose -f docker-compose.prod.yml up` runs this
+   automatically as the one-shot `migrate` service):
    ```
-   docker compose run --rm cadence /app/bin/cadence eval \
-     "Cadence.Server.Release.migrate()"
+   docker compose -f docker-compose.prod.yml run --rm migrate
+   # or, against a running container:
+   docker compose -f docker-compose.prod.yml exec cadence \
+     /app/bin/cadence eval "Cadence.Server.Release.migrate()"
    ```
 6. Configure reverse proxy for TLS.
 7. Confirm the Docker socket proxy is reachable.
 
 ### 12.8 Build & release
 
-- **Server image:** multi-stage Dockerfile. Build stage compiles the umbrella
-  with `MIX_ENV=prod`; release stage produces a minimal image (Debian slim or
-  Alpine + Erlang runtime, or a fully static build via `burrito` if feasible).
-- **Daemon release:** `mix release cadence_daemon` per target OS. Optionally
-  wrapped by `burrito` for a single-file binary.
+- **Server image (Phase 8a, shipped):** `docker/Dockerfile` is a multi-stage
+  build. The build stage uses `elixir:1.20-otp-29`, refuses a `CAD_DEMO_AUTH`
+  build arg, compiles the umbrella with `MIX_ENV=prod`, and runs
+  `mix release cadence` (release name configured in the root `mix.exs`, so the
+  entrypoint is `bin/cadence`; §12.7). The runtime stage is
+  `debian:trixie-slim` (matching the build image's glibc) with ERTS, OpenSSL,
+  libstdc++/ncurses for the NIFs,
+  and curl for the `/health` healthcheck; it runs as the non-root `cadence`
+  user and starts `bin/cadence start`. `Cadence.Server.Release.migrate/0` is
+  the migration entry point; the compose `migrate` service runs it before the
+  app starts, and the same command works by hand. Persistent paths are
+  `/data/git`, `/data/artifacts`, and `/data/actions`; the app listens on 4000
+  inside the container. The reference stack is `docker-compose.prod.yml`
+  (§12.4); operator steps are in `docs/deploy.md`.
+- **Daemon release (Phase 8b, pending):** `mix release cadence_daemon` per
+  target OS with its own SQLite migration entry point. Optionally wrapped by
+  `burrito` for a single-file binary.
 
 ### 12.9 Security notes
 
@@ -2078,6 +2106,18 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   public URL (or the bare token when the server URL is unset). Status is
   creation-time only — the server review hub/public page remains authoritative
   (§5.1, §6.1, §6.5).
+
+**Phase 8 — Release engineering (week 19+)**
+- 8a — production server artifact (shipped): root `mix.exs` defines the
+  `cadence` release (`cadence_server` + `cadence_shared`); `Cadence.Server.Release`
+  provides `migrate/0`; `docker/Dockerfile` is a multi-stage `MIX_ENV=prod`
+  build with a Debian-slim non-root runtime, `/health` healthcheck, and no demo
+  auth; `docker-compose.prod.yml` is the §12.4 stack plus a one-shot `migrate`
+  service; `docs/deploy.md` documents first boot, upgrades, volumes, actions,
+  and security (§12.3/§12.4/§12.7/§12.8).
+- 8b — daemon release (pending): `mix release cadence_daemon` per target OS,
+  a SQLite migration entry point, and install/upgrade docs. Optionally a
+  single-file `burrito` binary.
 
 ---
 
@@ -2328,6 +2368,16 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       `POST /sync/projects` endpoint (`Cadence.Server.Projects.provision/2`).
       The first caller becomes the owner; existing owners/trusted members can
       re-provision.
+- [ ] **Daemon release packaging (Phase 8b):** the production server image,
+      release config, migration entry point, and compose stack ship in 8a
+      (§12.3, §12.8). The daemon still runs from a source checkout (`mix
+      ecto.migrate -r Cadence.Daemon.Repo`, `mix run --no-start …`; §12.2). A
+      `mix release cadence_daemon` needs its own SQLite migration entry point and
+      install/upgrade docs; a single-file `burrito` artifact is optional.
+- [ ] **Image publishing / CI:** `docker-compose.prod.yml` builds
+      `cadence-server:prod` (or `CAD_SERVER_IMAGE`) locally and the image is
+      otherwise operator-managed. Registry publishing, version pinning, and a
+      build pipeline are deferred until a registry workflow exists.
 
 ---
 

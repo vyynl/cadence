@@ -6,7 +6,8 @@ poked at in a browser without setting up OAuth, a daemon, or real history.
 
 **This is not a production deployment.** The image builds with `MIX_ENV=dev`
 and compiles in a demo-only password strategy (`CAD_DEMO_AUTH`). The production
-release path is spec §12.8 and remains separate work.
+stack is `docker-compose.prod.yml` / `docker/Dockerfile`; see `docs/deploy.md`
+and spec §12.8.
 
 ## Prerequisites
 
