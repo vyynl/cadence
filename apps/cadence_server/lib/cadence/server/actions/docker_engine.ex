@@ -33,6 +33,7 @@ defmodule Cadence.Server.Actions.DockerEngine do
     HostConfig,
     HostConfigAllOfLogConfig,
     ImageInspect,
+    ImageSummary,
     Mount,
     MountVolumeOptions
   }
@@ -78,6 +79,29 @@ defmodule Cadence.Server.Actions.DockerEngine do
         {:ok, %ErrorResponse{}} -> {:error, :build_failed}
         {:error, _reason} -> {:error, :build_failed}
       end
+    end
+  end
+
+  @impl true
+  def list_images do
+    case Image.image_list(client(:cleanup)) do
+      {:ok, images} when is_list(images) -> {:ok, Enum.flat_map(images, &image_entries/1)}
+      {:ok, %ErrorResponse{}} -> {:error, :docker_unavailable}
+      {:ok, _other} -> {:ok, []}
+      {:error, _reason} -> {:error, :docker_unavailable}
+    end
+  end
+
+  @impl true
+  def remove_image(tag) do
+    # Raw request so a 404 (already gone) stays distinct from 409 (in use) and
+    # 500; only the former is success.
+    path = "/images/#{URI.encode_www_form(tag)}"
+
+    case Tesla.delete(client(:cleanup), path) do
+      {:ok, %Tesla.Env{status: status}} when status in [200, 204, 404] -> :ok
+      {:ok, %Tesla.Env{status: _status}} -> {:error, :remove_failed}
+      {:error, _reason} -> {:error, :docker_unavailable}
     end
   end
 
@@ -303,6 +327,15 @@ defmodule Cadence.Server.Actions.DockerEngine do
 
   defp timeout(:build), do: config_int(:actions_build_timeout_ms, 300_000)
   defp timeout(:run), do: config_int(:actions_timeout_ms, 120_000)
+  # Image list/remove can unwind many layers; give it the build budget.
+  defp timeout(:cleanup), do: config_int(:actions_build_timeout_ms, 300_000)
+
+  @doc false
+  def image_entries(%ImageSummary{RepoTags: tags, Created: created, Id: id}) do
+    Enum.map(tags || [], fn tag -> %{tags: [tag], created_at: created, id: id} end)
+  end
+
+  def image_entries(_other), do: []
 
   defp config_int(key, default) do
     case Application.get_env(:cadence_server, key, default) do

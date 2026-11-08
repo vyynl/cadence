@@ -42,6 +42,16 @@ config :cadence_server,
     Path.join(System.tmp_dir!(), "cadence_test_actions_#{System.unique_integer([:positive])}"),
   actions_timeout_ms: 5_000,
   actions_build_timeout_ms: 10_000,
+  # Keep the queue bound deterministic in tests; the boot dispatch would query
+  # the sandboxed Repo from a process that does not own a connection.
+  actions_max_concurrent_runs: 1,
+  actions_dispatch_on_boot: false,
+  # Retention is opt-in per test; the backstop must not sweep the shared
+  # artifact temp dir while other tests are running.
+  actions_artifact_retention_days: 30,
+  actions_retention_interval_ms: 0,
+  actions_retention_batch: 500,
+  actions_image_retention_per_project: 5,
   actions_max_cpus: 1,
   actions_memory_mb: 512,
   actions_pids_limit: 256,

@@ -996,6 +996,40 @@ Rust, etc. These live in `cadence_server/priv/templates/`.
   `running` by a restart are marked `interrupted` once they are older than the
   build + run budgets, so a dead run never looks live forever; the transition
   is broadcast like any other.
+- Runs are **queued per project**. At most `CAD_ACTIONS_MAX_CONCURRENT_RUNS`
+  may be `:running` for one project (default `1`; `0` disables the cap), so a
+  burst of manager clicks becomes waiting work instead of a burst of
+  containers. A claim is one transaction guarded by a per-project
+  `pg_try_advisory_xact_lock`: the running count is read and the oldest
+  `:queued` row (by `created_at, id`) is compare-and-set to `:running`; its
+  execution task is spawned after commit. The advisory lock is scoped to runs
+  and does not contend with proposal decisions, which lock the project row.
+  Dispatch runs on submission, after every committed terminal transition, and
+  once at boot (`CAD_ACTIONS_DISPATCH_ON_BOOT`, a one-shot process that leaves
+  no idle worker); all three are best-effort and shape-only logged.
+- A `:queued` row is **waiting work, not staleness**: `recover_stale/1` and
+  `recover_all/0` only interrupt abandoned `:running` rows, and a queued row
+  left by a crash is resumed by the boot pass or the next terminal transition.
+  A task that cannot be started fails its row (`run_failed`) and the next
+  queued run is dispatched, so a broken supervisor cannot wedge the queue. The
+  run list and detail page distinguish `queued` from `running`. The queue
+  itself is unbounded and only managers can add to it; a maximum queue depth is
+  left to §16 if abuse appears.
+- **Retention** runs on demand (`mix cadence.actions_sweep`) and as a backstop
+  every `CAD_ACTIONS_RETENTION_INTERVAL_MS` (default 6 h; `0` disables). One
+  `Actions.Cleanup` pass is elected with a global `pg_try_advisory_xact_lock`
+  (busy is a skip); the artifact sweep runs under it and the image half runs
+  after the transaction commits, so a slow Docker proxy never holds a Repo
+  connection. Terminal runs older than
+  `CAD_ACTIONS_ARTIFACT_RETENTION_DAYS` (default 30; `0` disables) lose
+  `<CAD_ARTIFACT_PATH>/<run_id>/` and have `log_path`/`artifact_path` nulled;
+  the row, status, exit code, and `artifact_error` survive, and a failed
+  removal keeps the paths for the next pass. At most
+  `CAD_ACTIONS_RETENTION_BATCH` runs are examined per pass. Images tagged
+  `cadence-action-<slug>-<sha12>` are kept newest-N per project
+  (`CAD_ACTIONS_IMAGE_RETENTION_PER_PROJECT`, default 5; `0` disables); a
+  pruned image is rebuilt on demand the next time its snapshot runs. Docker
+  being unavailable skips only the image half.
 
 ### 8.4 Security
 
@@ -1702,6 +1736,12 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_DOCKER_API_VERSION` | no | `v1.45` | Docker Engine API version (`v1.45` is the floor for `volume-subpath`) |
 | `CAD_ACTIONS_MAX_LOG_BYTES` | no | `1048576` | Max captured container log size |
 | `CAD_ACTIONS_MAX_ARTIFACT_BYTES` | no | `33554432` | Max total bytes collected from `/out` |
+| `CAD_ACTIONS_MAX_CONCURRENT_RUNS` | no | `1` | Per-project limit on `:running` action runs (`0` disables the cap) |
+| `CAD_ACTIONS_DISPATCH_ON_BOOT` | no | `true` | Drain queued runs once when the server boots |
+| `CAD_ACTIONS_ARTIFACT_RETENTION_DAYS` | no | `30` | Delete a terminal run's logs/artifacts after this age (`0` disables) |
+| `CAD_ACTIONS_RETENTION_INTERVAL_MS` | no | `21600000` | Retention backstop interval (`0` disables the periodic pass) |
+| `CAD_ACTIONS_RETENTION_BATCH` | no | `500` | Max runs examined per retention pass |
+| `CAD_ACTIONS_IMAGE_RETENTION_PER_PROJECT` | no | `5` | Keep the newest N `cadence-action-*` images per project (`0` disables) |
 | `CAD_OAUTH_GITHUB_CLIENT_ID` | no | — | GitHub OAuth |
 | `CAD_OAUTH_GITHUB_CLIENT_SECRET` | no | — | GitHub OAuth |
 | `CAD_OAUTH_GOOGLE_CLIENT_ID` | no | — | Google OAuth |
@@ -1958,6 +1998,19 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   (`/p/:slug/runs/:run_id`) with live status events, escaped post-exit output,
   artifact downloads through the recorded allowlist, and the `expose`
   resolution (members-only; the flag is reserved) (§7.2, §8.2, §8.3, §16).
+- 6 post-close — run queue (shipped): `:queued` is a real waiting state bounded
+  by `CAD_ACTIONS_MAX_CONCURRENT_RUNS` per project (default 1, `0` =
+  unlimited). Claims are atomic through a per-project
+  `pg_try_advisory_xact_lock`; dispatch runs on submission, every terminal
+  transition, and one boot pass (`CAD_ACTIONS_DISPATCH_ON_BOOT`); queued rows
+  are never treated as stale, a task that cannot start fails its row and frees
+  the slot, and the run page distinguishes queued from running (§8.3, §12.6).
+- 6 post-close — retention (shipped): `mix cadence.actions_sweep` and a 6 h
+  backstop remove logs/artifacts of terminal runs older than 30 days (the row
+  keeps its history with the paths nulled) and prune `cadence-action-*` images
+  to the newest 5 per project. Both halves are configurable and disable-able
+  and capped per pass; the artifact sweep is elected by a global advisory lock
+  and the image half follows it (§8.3, §12.6, §16).
 
 **Phase 7 — Storage engineering (week 18+)**
 - 7a — shared pack layer (shipped): `GitStore.Pack` writes and reads Git pack
@@ -2113,27 +2166,38 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       row is written before any container exists; a run interrupted by a
       restart stays `running` until `recover_stale/1` marks it `:interrupted`
       after the build + run budgets. Runs are not resumed.
-- [ ] **Action artifact retention:** 6b writes
-      `<CAD_ARTIFACT_PATH>/<run_id>/…` without pruning. Add age/size retention
-      (or a per-project quota) before artifact growth matters.
+- [x] **Action artifact retention:** resolved in the post-close retention slice
+      — logs and artifacts of terminal runs older than
+      `CAD_ACTIONS_ARTIFACT_RETENTION_DAYS` (default 30, `0` disables) are
+      removed by `mix cadence.actions_sweep` and a periodic backstop
+      (`CAD_ACTIONS_RETENTION_INTERVAL_MS`), capped by
+      `CAD_ACTIONS_RETENTION_BATCH`. The run row keeps its status/exit code with
+      `log_path`/`artifact_path` nulled; a failed removal is retried.
 - [ ] **Run history/artifact paging:** the project run list shows the newest 50
       rows and the run page renders at most the first 100 collected artifacts
       (the collection itself caps at 1,000). Add paging or streams if a project
       accumulates deep history or large artifact sets.
-- [ ] **Action run concurrency:** 6b does not cap concurrent runs per project.
-      Each run is a separate container, so a burst of manager clicks can consume
-      host resources up to the per-container limits. Add a per-project queue (or
-      a `max_concurrent_runs` setting) if that shows up.
+- [x] **Action run concurrency:** resolved in the 6 post-close queue slice —
+      `CAD_ACTIONS_MAX_CONCURRENT_RUNS` bounds `:running` rows per project
+      (default 1, `0` = unlimited). The oldest queued run is claimed atomically
+      under a per-project advisory lock; dispatch runs on submit, every terminal
+      transition, and one boot pass; `:queued` is waiting work and is never
+      interrupted by stale-run recovery. Artifact/image retention and run
+      history paging remain open below.
+- [ ] **Run queue depth:** the per-project queue is unbounded and only managers
+      can add to it (§8.3). Add a maximum-queued-runs setting (with a refusal
+      message) if a burst of submissions ever needs bounding.
 - [ ] **Docker Engine floor / API version:** action staging relies on
       `volume-subpath` (API 1.45, Docker 26+). `CAD_DOCKER_API_VERSION` defaults
       to `v1.45` because that is the compatible floor for Docker 26–29; there is
       no negotiation, so pointing it at a version the daemon does not support
       fails creates as `create_failed`. Add `GET /version` negotiation if a
       mixed fleet appears.
-- [ ] **Action image retention:** each snapshot with a `Dockerfile` builds
-      `cadence-action-<slug>-<sha12>` and nothing prunes those images or the
-      build cache. Add an image retention policy alongside artifact retention
-      before host disk growth matters.
+- [x] **Action image retention:** resolved in the same slice — the cleanup
+      sweep keeps the newest `CAD_ACTIONS_IMAGE_RETENTION_PER_PROJECT` (default
+      5, `0` disables) `cadence-action-<slug>-<sha12>` images per project and
+      removes older tags; a removed image is rebuilt on demand. The Docker
+      build cache is not pruned (still operator-managed).
 - [ ] **Action staging/output quota (deployment prerequisite):** `/out` is a
       per-run subpath on the shared volume with no quota while the action runs,
       so a hostile action can fill the host volume during its timeout. Before

@@ -8,21 +8,39 @@ defmodule Cadence.Server.Actions.Runs do
   1. `prepare/4` re-checks the run boundary — enabled deployment, project and
      node, manager membership, open critical incident — and snaps the action's
      command into a `:queued` run row.
-  2. `start/4` submits `execute/1` to `Cadence.Server.Actions.TaskSupervisor`.
-  3. `execute/1` moves the row to `:running`, stages the snapshot (one bounded
-     walk that also re-runs the content quarantine check), resolves the image,
-     creates and starts the container, waits for exit, captures the log, copies
-     artifacts, and records a terminal status.
+  2. `start/4` calls `dispatch/1`, which claims the project's oldest queued run
+     when a concurrency slot is free and submits `execute_claimed/1` to
+     `Cadence.Server.Actions.TaskSupervisor`.
+  3. `execute/1` moves the row to `:running` (the claim already did for a
+     dispatched run), stages the snapshot (one bounded walk that also re-runs
+     the content quarantine check), resolves the image, creates and starts the
+     container, waits for exit, captures the log, copies artifacts, and records
+     a terminal status.
 
   Every failure after `prepare/4` is a terminal run status with a shape-only
   `error_reason`; container output only ever reaches the artifact directory.
 
+  ## Queue and concurrency
+
+  `:queued` is waiting work, not staleness. At most
+  `CAD_ACTIONS_MAX_CONCURRENT_RUNS` runs per project may be `:running` (`0`
+  disables the cap). A claim is one transaction: a per-project
+  `pg_try_advisory_xact_lock` serializes claimers across processes and server
+  nodes, the running count is read, and the oldest queued row is
+  compare-and-set to `:running`. The spawned task then executes it.
+
+  Dispatch happens on `start/4`, after every committed terminal transition, and
+  once at boot (`Cadence.Server.Actions.Dispatcher`); each is best-effort. A
+  task that cannot be started fails its row (`run_failed`) and the next queued
+  run is dispatched.
+
   ## Durability
 
   A run row is written before any container exists. If the server dies mid-run,
-  the row stays `:running`; `recover_stale/1` (called before every new run for
-  that project) marks such rows `:interrupted` once they are older than the
-  build + run budgets. Two genuinely concurrent runs are untouched.
+  the row stays `:running`; `recover_stale/1` marks such rows `:interrupted`
+  once they are older than the build + run budgets. Queued rows are never
+  interrupted: they are resumed by the boot dispatch or the next terminal
+  transition.
 
   ## Broadcasting
 
@@ -59,13 +77,18 @@ defmodule Cadence.Server.Actions.Runs do
   @default_list_limit 50
   @stale_margin_ms 60_000
 
+  # Two-int form so a project id never has to fit in an int4; `hashtext` is
+  # evaluated by the database that holds the lock (multi-node safe). Scoped to
+  # action-run claims, so it never contends with proposal decisions, which lock
+  # the project row.
+  @claim_lock_sql "SELECT pg_try_advisory_xact_lock(hashtext('cadence.action_runs'), hashtext($1))"
+
   @type error ::
           :disabled
           | :forbidden
           | :not_found
           | :quarantined
           | :unknown_action
-          | :run_failed
           | Ecto.Changeset.t()
 
   @doc """
@@ -95,53 +118,47 @@ defmodule Cadence.Server.Actions.Runs do
   end
 
   @doc """
-  `prepare/4` plus an asynchronous execution task.
+  `prepare/4` plus a dispatch attempt.
 
-  Returns as soon as the run row exists; the caller (6c) follows progress on the
-  project PubSub topic. Stale-run recovery (including orphan container removal)
-  runs inside the task, before execution, so a manager's click never blocks on
-  the Docker proxy.
+  Returns as soon as the run row exists. The row starts only if a concurrency
+  slot is free; otherwise it stays `:queued` and starts when a slot frees (or at
+  boot). The caller (6c) follows progress on the project PubSub topic.
+
+  A dispatch is FIFO: this call may start an older queued run before the one it
+  just wrote. If the execution task cannot be started, that row is failed
+  (`run_failed`) and the next queued run is dispatched, so `{:ok, run}` can
+  refer to a row that has already failed; the run page shows the real state.
   """
   @spec start(map(), String.t(), String.t(), String.t()) ::
           {:ok, ActionRun.t()} | {:error, error()}
   def start(actor, project_id, node_id, action_name) do
     with {:ok, run} <- prepare(actor, project_id, node_id, action_name) do
-      case Task.Supervisor.start_child(TaskSupervisor, fn ->
-             # Recovery writes rows and may remove containers; both belong off
-             # the caller's process. The just-inserted row is fresh, so it is
-             # never selected as stale.
-             _ = recover_stale(run.project_id)
-             execute(run)
-           end) do
-        {:ok, _pid} ->
-          {:ok, run}
-
-        {:error, reason} ->
-          Logger.warning("action run task did not start: #{shape(reason)}")
-          _ = fail(run, "run_failed")
-          {:error, :run_failed}
-      end
+      :ok = dispatch(run.project_id)
+      {:ok, run}
     end
   end
 
   @doc """
-  Execute a queued run synchronously (the task body; tests call it directly).
+  Execute a queued run synchronously (tests and ops call it directly).
 
-  Idempotent against a stale row: if another process already moved the status,
-  the transition compare-and-set fails and this returns `{:error, :stale}`.
+  This path bypasses the per-project cap; user submissions go through
+  `start/4` → `dispatch/1`. Idempotent against a stale row: if another process
+  already moved the status, the transition compare-and-set fails and this
+  returns `{:error, :stale}`.
   """
   @spec execute(ActionRun.t()) :: {:ok, ActionRun.t()} | {:error, :stale}
   def execute(%ActionRun{} = run) do
     case transition(run, :running, %{started_at: now()}) do
       {:ok, running} ->
-        execute_running(running)
+        execute_claimed(running)
 
       {:error, :stale} ->
         {:error, :stale}
     end
   end
 
-  defp execute_running(running) do
+  # The row was already claimed to :running by `dispatch/1` (or by `execute/1`).
+  defp execute_claimed(%ActionRun{status: :running} = running) do
     case {fetch_project(running.project_id), fetch_node(running.project_id, running.node_id)} do
       {{:ok, project}, {:ok, node}} ->
         run_pipeline(running, project, node)
@@ -150,6 +167,162 @@ defmodule Cadence.Server.Actions.Runs do
         # The row is already :running; finish against the running struct so the
         # CAS matches instead of leaving a phantom running row.
         finish_failure(running, "run_failed")
+    end
+  end
+
+  @doc """
+  Claim and start queued runs for `project_id` up to the per-project cap.
+
+  Best-effort: every failure is logged by shape and returns `:ok`. Safe to call
+  from any process and from more than one server node: a per-project
+  transaction-scoped advisory lock serializes claimers, and the running count is
+  read under it.
+
+  Recovery runs first with `remove_containers: false` (a DB-only write), so a
+  dead `:running` row cannot hold a slot without blocking the caller on Docker.
+  """
+  @spec dispatch(String.t()) :: :ok
+  def dispatch(project_id) when is_binary(project_id) do
+    if Actions.enabled?() do
+      _ = recover_stale(project_id, remove_containers: false)
+      claim_until_full(project_id)
+    end
+
+    :ok
+  rescue
+    error ->
+      Logger.warning("action run dispatch skipped: #{shape(error)}")
+      :ok
+  catch
+    kind, reason ->
+      Logger.warning("action run dispatch exited: #{inspect(kind)}/#{shape(reason)}")
+      :ok
+  end
+
+  def dispatch(_project_id), do: :ok
+
+  @doc """
+  Dispatch every project that has a queued run (boot/ops; never routed).
+
+  Best-effort like `dispatch/1`; used by `Actions.Dispatcher` and recovery
+  tooling.
+  """
+  @spec dispatch_all() :: :ok
+  def dispatch_all do
+    if Actions.enabled?() do
+      from(r in ActionRun, where: r.status == :queued, distinct: true, select: r.project_id)
+      |> Repo.all()
+      |> Enum.each(&dispatch/1)
+    end
+
+    :ok
+  rescue
+    error ->
+      Logger.warning("action run dispatch (all) skipped: #{shape(error)}")
+      :ok
+  end
+
+  defp claim_until_full(project_id) do
+    case claim_next(project_id) do
+      {:ok, nil} ->
+        :ok
+
+      {:ok, run} ->
+        broadcast(run)
+        spawn_claimed(run)
+        claim_until_full(project_id)
+
+      {:error, reason} ->
+        Logger.warning("action run claim skipped: #{shape(reason)}")
+        :ok
+    end
+  end
+
+  # One short transaction per slot: the advisory lock serializes claimers, so
+  # the running count and the queued→running CAS cannot race another claim.
+  defp claim_next(project_id) do
+    Repo.transaction(fn ->
+      if claim_lock(project_id) do
+        if capacity?(project_id), do: claim_oldest(project_id), else: nil
+      else
+        nil
+      end
+    end)
+  end
+
+  defp claim_lock(project_id) do
+    case Repo.query!(@claim_lock_sql, [project_id]) do
+      %{rows: [[true]]} -> true
+      _other -> false
+    end
+  end
+
+  defp capacity?(project_id) do
+    case Actions.max_concurrent_runs() do
+      0 -> true
+      cap -> running_count(project_id) < cap
+    end
+  end
+
+  defp running_count(project_id) do
+    Repo.one(
+      from(r in ActionRun,
+        where: r.project_id == ^project_id and r.status == :running,
+        select: count(r.id)
+      )
+    )
+  end
+
+  defp claim_oldest(project_id) do
+    case Repo.one(
+           from(r in ActionRun,
+             where: r.project_id == ^project_id and r.status == :queued,
+             order_by: [asc: r.created_at, asc: r.id],
+             limit: 1
+           )
+         ) do
+      nil ->
+        nil
+
+      run ->
+        timestamp = now()
+
+        {count, _rows} =
+          from(r in ActionRun, where: r.id == ^run.id and r.status == :queued)
+          |> Repo.update_all(
+            set: [status: :running, started_at: timestamp, updated_at: timestamp]
+          )
+
+        if count == 1, do: Repo.get!(ActionRun, run.id), else: nil
+    end
+  end
+
+  defp spawn_claimed(run) do
+    # A missing supervisor exits the caller rather than returning an error, so
+    # the exit is caught here instead of crashing a manager's request.
+    result =
+      try do
+        Task.Supervisor.start_child(task_supervisor(), fn ->
+          # Container removal belongs off the caller's process. The claimed row
+          # is fresh, so it is never selected as stale.
+          _ = recover_stale(run.project_id)
+          execute_claimed(run)
+        end)
+      catch
+        :exit, reason -> {:error, reason}
+      end
+
+    case result do
+      {:ok, _pid} ->
+        :ok
+
+      {:ok, _pid, _info} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("action run task did not start: #{shape(reason)}")
+        _ = finish_failure(run, "run_failed")
+        :ok
     end
   end
 
@@ -260,8 +433,9 @@ defmodule Cadence.Server.Actions.Runs do
   def read_artifact(_run, _relative), do: {:error, :not_found}
 
   @doc """
-  Mark this project's abandoned `queued`/`running` rows `:interrupted`.
+  Mark this project's abandoned `:running` rows `:interrupted`.
 
+  A `:queued` row is waiting work, not abandoned, and is left for `dispatch/1`.
   "Abandoned" means older than the build + run budgets plus a margin; a live
   run refreshes `updated_at` after staging, image resolution, container
   creation, and exit, so a legitimate long build is not mistaken for a crash.
@@ -284,9 +458,7 @@ defmodule Cadence.Server.Actions.Runs do
       remove? = Keyword.get(opts, :remove_containers, true)
 
       from(r in ActionRun,
-        where:
-          r.project_id == ^project_id and r.status in [:queued, :running] and
-            r.updated_at < ^cutoff
+        where: r.project_id == ^project_id and r.status == :running and r.updated_at < ^cutoff
       )
       |> stale_rows()
       |> recover_rows(cutoff, remove?)
@@ -306,9 +478,7 @@ defmodule Cadence.Server.Actions.Runs do
   def recover_all do
     cutoff = DateTime.add(now(), -stale_after_ms(), :millisecond)
 
-    from(r in ActionRun,
-      where: r.status in [:queued, :running] and r.updated_at < ^cutoff
-    )
+    from(r in ActionRun, where: r.status == :running and r.updated_at < ^cutoff)
     |> stale_rows()
     |> recover_rows(cutoff, true)
 
@@ -344,7 +514,7 @@ defmodule Cadence.Server.Actions.Runs do
     # finished between selection and update is left alone.
     {count, _rows} =
       from(r in ActionRun,
-        where: r.id == ^row.id and r.status in [:queued, :running] and r.updated_at < ^cutoff
+        where: r.id == ^row.id and r.status == :running and r.updated_at < ^cutoff
       )
       |> Repo.update_all(set: interrupted_set())
 
@@ -675,10 +845,6 @@ defmodule Cadence.Server.Actions.Runs do
     transition(run, :failed, %{error_reason: reason, finished_at: now()})
   end
 
-  defp fail(run, reason) do
-    finish_failure(run, reason)
-  end
-
   defp transition(%ActionRun{} = run, status, attrs) do
     if status in Map.get(@allowed_transitions, run.status, []) do
       changes =
@@ -696,6 +862,9 @@ defmodule Cadence.Server.Actions.Runs do
         {1, _rows} ->
           updated = Repo.get!(ActionRun, run.id)
           broadcast(updated)
+          # A finished run frees its slot; the next queued run starts without
+          # another click. Best-effort and never changes the returned status.
+          if ActionRun.terminal?(updated.status), do: dispatch(updated.project_id)
           {:ok, updated}
 
         {0, _rows} ->
@@ -864,9 +1033,15 @@ defmodule Cadence.Server.Actions.Runs do
     end
   end
 
+  # Injectable so a test can force the "task did not start" branch without
+  # stopping the real supervisor.
+  defp task_supervisor do
+    Application.get_env(:cadence_server, :actions_task_supervisor, TaskSupervisor)
+  end
+
   defp volume, do: config_str(:actions_volume, "cadence_actions")
   defp volume_path, do: config_str(:actions_volume_path, "/data/actions")
-  defp artifact_root, do: config_str(:artifact_path, "/data/artifacts")
+  defp artifact_root, do: Actions.artifact_path()
 
   defp max_log_bytes, do: config_int(:actions_max_log_bytes, 1_048_576)
   defp max_artifact_bytes, do: config_int(:actions_max_artifact_bytes, 33_554_432)

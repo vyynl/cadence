@@ -25,6 +25,89 @@ defmodule Cadence.Server.ActionsTest do
     }
   end
 
+  describe "config accessors" do
+    test "max_concurrent_runs/0 uses a safe default and accepts zero" do
+      Application.delete_env(:cadence_server, :actions_max_concurrent_runs)
+      assert Actions.max_concurrent_runs() == 1
+
+      Application.put_env(:cadence_server, :actions_max_concurrent_runs, 4)
+      assert Actions.max_concurrent_runs() == 4
+
+      # Zero is the explicit "no cap" value, not "no runs".
+      Application.put_env(:cadence_server, :actions_max_concurrent_runs, 0)
+      assert Actions.max_concurrent_runs() == 0
+
+      # A bad value can never remove the bound by accident.
+      Application.put_env(:cadence_server, :actions_max_concurrent_runs, -1)
+      assert Actions.max_concurrent_runs() == 1
+
+      Application.put_env(:cadence_server, :actions_max_concurrent_runs, "nope")
+      assert Actions.max_concurrent_runs() == 1
+    end
+
+    test "dispatch_on_boot?/0 defaults on and can be disabled" do
+      Application.delete_env(:cadence_server, :actions_dispatch_on_boot)
+      assert Actions.dispatch_on_boot?()
+
+      Application.put_env(:cadence_server, :actions_dispatch_on_boot, false)
+      refute Actions.dispatch_on_boot?()
+    end
+
+    test "retention accessors use safe defaults and accept disabled values" do
+      keys = [
+        :artifact_path,
+        :actions_artifact_retention_days,
+        :actions_retention_interval_ms,
+        :actions_retention_batch,
+        :actions_image_retention_per_project
+      ]
+
+      previous =
+        Map.new(keys, fn key -> {key, Application.get_env(:cadence_server, key)} end)
+
+      on_exit(fn ->
+        Enum.each(previous, fn
+          {key, nil} -> Application.delete_env(:cadence_server, key)
+          {key, value} -> Application.put_env(:cadence_server, key, value)
+        end)
+      end)
+
+      Application.delete_env(:cadence_server, :artifact_path)
+      assert Actions.artifact_path() == "/data/artifacts"
+
+      Application.delete_env(:cadence_server, :actions_artifact_retention_days)
+      assert Actions.artifact_retention_days() == 30
+
+      Application.put_env(:cadence_server, :actions_artifact_retention_days, 0)
+      assert Actions.artifact_retention_days() == 0
+
+      Application.put_env(:cadence_server, :actions_artifact_retention_days, -1)
+      assert Actions.artifact_retention_days() == 30
+
+      Application.delete_env(:cadence_server, :actions_retention_interval_ms)
+      assert Actions.retention_interval_ms() == 21_600_000
+
+      Application.put_env(:cadence_server, :actions_retention_interval_ms, 0)
+      assert Actions.retention_interval_ms() == 0
+
+      Application.delete_env(:cadence_server, :actions_retention_batch)
+      assert Actions.retention_batch() == 500
+
+      # A zero batch would make the sweep a no-op; it falls back to the default.
+      Application.put_env(:cadence_server, :actions_retention_batch, 0)
+      assert Actions.retention_batch() == 500
+
+      Application.put_env(:cadence_server, :actions_retention_batch, 3)
+      assert Actions.retention_batch() == 3
+
+      Application.delete_env(:cadence_server, :actions_image_retention_per_project)
+      assert Actions.image_retention_per_project() == 5
+
+      Application.put_env(:cadence_server, :actions_image_retention_per_project, 0)
+      assert Actions.image_retention_per_project() == 0
+    end
+  end
+
   describe "list/3" do
     test "an owner and a viewer can list a node's actions", %{
       project: project,
@@ -162,5 +245,10 @@ defmodule Cadence.Server.ActionsTest do
   defp restore_actions_config do
     Application.delete_env(:cadence_server, :actions_enabled)
     Application.delete_env(:cadence_server, :actions_max_manifest_bytes)
+    Application.delete_env(:cadence_server, :actions_max_concurrent_runs)
+    Application.delete_env(:cadence_server, :actions_dispatch_on_boot)
+    # config/test.exs is not re-applied by delete_env, so restore its values.
+    Application.put_env(:cadence_server, :actions_max_concurrent_runs, 1)
+    Application.put_env(:cadence_server, :actions_dispatch_on_boot, false)
   end
 end

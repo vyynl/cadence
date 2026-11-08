@@ -161,6 +161,17 @@ if config_env() != :test do
     actions_volume: System.get_env("CAD_ACTIONS_VOLUME", "cadence_actions"),
     actions_volume_path: System.get_env("CAD_ACTIONS_VOLUME_PATH", "/data/actions"),
     actions_timeout_ms: String.to_integer(System.get_env("CAD_ACTIONS_TIMEOUT_MS", "120000")),
+    actions_max_concurrent_runs:
+      String.to_integer(System.get_env("CAD_ACTIONS_MAX_CONCURRENT_RUNS", "1")),
+    actions_dispatch_on_boot: System.get_env("CAD_ACTIONS_DISPATCH_ON_BOOT", "true") == "true",
+    actions_artifact_retention_days:
+      String.to_integer(System.get_env("CAD_ACTIONS_ARTIFACT_RETENTION_DAYS", "30")),
+    actions_retention_interval_ms:
+      String.to_integer(System.get_env("CAD_ACTIONS_RETENTION_INTERVAL_MS", "21600000")),
+    actions_retention_batch:
+      String.to_integer(System.get_env("CAD_ACTIONS_RETENTION_BATCH", "500")),
+    actions_image_retention_per_project:
+      String.to_integer(System.get_env("CAD_ACTIONS_IMAGE_RETENTION_PER_PROJECT", "5")),
     actions_build_timeout_ms:
       String.to_integer(System.get_env("CAD_ACTIONS_BUILD_TIMEOUT_MS", "300000")),
     actions_max_cpus: String.to_integer(System.get_env("CAD_ACTIONS_MAX_CPUS", "1")),

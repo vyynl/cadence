@@ -24,8 +24,9 @@ defmodule Cadence.Server.FakeDocker do
 
   @doc """
   Override callbacks. Keys match the callback names (`:image?`, `:build_image`,
-  `:create`, `:start`, `:wait`, `:logs`, `:stop`, `:remove`) plus `:on_wait`,
-  a zero-arity function executed just before `wait/1` returns.
+  `:list_images`, `:remove_image`, `:create`, `:start`, `:wait`, `:logs`,
+  `:stop`, `:remove`) plus `:on_wait`, a zero-arity function executed just
+  before `wait/1` returns.
   """
   def script(overrides) when is_map(overrides) do
     ensure_table()
@@ -58,6 +59,18 @@ defmodule Cadence.Server.FakeDocker do
   def build_image(code_dir, files, tag) do
     record(:build_image, [code_dir, files, tag])
     scripted(:build_image, :ok)
+  end
+
+  @impl true
+  def list_images do
+    record(:list_images, [])
+    scripted(:list_images, {:ok, []})
+  end
+
+  @impl true
+  def remove_image(tag) do
+    record(:remove_image, [tag])
+    scripted(:remove_image, :ok)
   end
 
   @impl true

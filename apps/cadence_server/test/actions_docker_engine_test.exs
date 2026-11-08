@@ -12,6 +12,7 @@ defmodule Cadence.Server.Actions.DockerEngineTest do
     ErrorResponse,
     HostConfig,
     HostConfigAllOfLogConfig,
+    ImageSummary,
     Mount,
     MountVolumeOptions
   }
@@ -155,6 +156,34 @@ defmodule Cadence.Server.Actions.DockerEngineTest do
 
     test "a zero cap still returns a marker" do
       assert DockerEngine.trim_log("anything", 0) =~ "[cadence] log truncated"
+    end
+  end
+
+  describe "image_entries/1" do
+    test "maps one entry per repository tag" do
+      summary = %ImageSummary{
+        Id: "sha256:abc",
+        RepoTags: ["cadence-action-demo-aaaaaaaaaaaa", "cadence-action-demo-bbbbbbbbbbbb"],
+        Created: 1_700_000_000
+      }
+
+      assert DockerEngine.image_entries(summary) == [
+               %{
+                 tags: ["cadence-action-demo-aaaaaaaaaaaa"],
+                 created_at: 1_700_000_000,
+                 id: "sha256:abc"
+               },
+               %{
+                 tags: ["cadence-action-demo-bbbbbbbbbbbb"],
+                 created_at: 1_700_000_000,
+                 id: "sha256:abc"
+               }
+             ]
+    end
+
+    test "an untagged image and a non-summary decode contribute nothing" do
+      assert DockerEngine.image_entries(%ImageSummary{RepoTags: nil, Created: 1, Id: "id"}) == []
+      assert DockerEngine.image_entries(%ErrorResponse{}) == []
     end
   end
 end

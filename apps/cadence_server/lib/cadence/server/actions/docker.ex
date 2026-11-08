@@ -46,6 +46,24 @@ defmodule Cadence.Server.Actions.Docker do
   @callback build_image(code_dir :: Path.t(), files :: [String.t()], tag :: String.t()) ::
               :ok | {:error, term()}
 
+  @typedoc """
+  One locally present image.
+
+  `tags` is one entry per repository tag (an image may carry several); the
+  retention pass groups them by the `cadence-action-<slug>-` prefix.
+  """
+  @type image :: %{
+          tags: [String.t()],
+          created_at: integer() | nil,
+          id: String.t() | nil
+        }
+
+  @doc "List locally present images with their tags and Docker `Created` time."
+  @callback list_images() :: {:ok, [image()]} | {:error, term()}
+
+  @doc "Remove one image tag; a tag that is already gone (`404`) is `:ok`."
+  @callback remove_image(tag :: String.t()) :: :ok | {:error, term()}
+
   @doc "Create a container and return its id."
   @callback create(spec :: container_spec()) :: {:ok, String.t()} | {:error, term()}
 

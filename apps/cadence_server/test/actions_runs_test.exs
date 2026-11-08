@@ -510,6 +510,113 @@ defmodule Cadence.Server.Actions.RunsTest do
     end
   end
 
+  describe "dispatch/1 (per-project cap)" do
+    test "a second run waits at the cap and starts when the first finishes", %{
+      project: project,
+      owner: owner,
+      node: node
+    } do
+      Application.put_env(:cadence_server, :actions_max_concurrent_runs, 1)
+      {:ok, gate} = Agent.start_link(fn -> :first end)
+      test_pid = self()
+
+      FakeDocker.script(%{
+        on_wait: fn ->
+          case Agent.get_and_update(gate, fn
+                 :first -> {:first, :released}
+                 other -> {other, other}
+               end) do
+            :first ->
+              send(test_pid, {:waiting, self()})
+
+              receive do
+                :continue -> :ok
+              end
+
+            _released ->
+              :ok
+          end
+        end
+      })
+
+      assert {:ok, first} = Runs.start(%{id: owner.id}, project.id, node.id, "run_analysis")
+      assert_receive {:waiting, first_task}, 2_000
+
+      assert {:ok, second} = Runs.start(%{id: owner.id}, project.id, node.id, "run_analysis")
+      assert second.id != first.id
+      assert Repo.get!(ActionRun, second.id).status == :queued
+      assert length(FakeDocker.calls(:create)) == 1
+
+      send(first_task, :continue)
+
+      assert eventually(fn -> Repo.get!(ActionRun, first.id).status == :succeeded end)
+      assert eventually(fn -> Repo.get!(ActionRun, second.id).status == :succeeded end)
+      assert length(FakeDocker.calls(:create)) == 2
+    end
+
+    test "a zero cap starts both runs immediately", %{
+      project: project,
+      owner: owner,
+      node: node
+    } do
+      Application.put_env(:cadence_server, :actions_max_concurrent_runs, 0)
+      test_pid = self()
+
+      FakeDocker.script(%{
+        on_wait: fn ->
+          send(test_pid, {:waiting, self()})
+
+          receive do
+            :continue -> :ok
+          end
+        end
+      })
+
+      assert {:ok, first} = Runs.start(%{id: owner.id}, project.id, node.id, "run_analysis")
+      assert_receive {:waiting, first_task}, 2_000
+      assert {:ok, second} = Runs.start(%{id: owner.id}, project.id, node.id, "run_analysis")
+      assert_receive {:waiting, second_task}, 2_000
+
+      assert Repo.get!(ActionRun, first.id).status == :running
+      assert Repo.get!(ActionRun, second.id).status == :running
+      assert length(FakeDocker.calls(:create)) == 2
+
+      send(first_task, :continue)
+      send(second_task, :continue)
+
+      assert eventually(fn -> Repo.get!(ActionRun, first.id).status == :succeeded end)
+      assert eventually(fn -> Repo.get!(ActionRun, second.id).status == :succeeded end)
+    end
+
+    test "dispatch_all/0 drains a queued row left by a previous process", %{
+      project: project,
+      owner: owner,
+      node: node
+    } do
+      run = insert_run(project, node, owner)
+
+      assert :ok = Runs.dispatch_all()
+      assert eventually(fn -> Repo.get!(ActionRun, run.id).status == :succeeded end)
+    end
+
+    test "a task that cannot start fails its row and frees the slot", %{
+      project: project,
+      owner: owner,
+      node: node
+    } do
+      Application.put_env(:cadence_server, :actions_task_supervisor, :missing_action_supervisor)
+      run = insert_run(project, node, owner)
+
+      assert :ok = Runs.dispatch(project.id)
+
+      failed = Repo.get!(ActionRun, run.id)
+      assert failed.status == :failed
+      assert failed.error_reason == "run_failed"
+      assert FakeDocker.calls(:create) == []
+      assert Repo.all(from(r in ActionRun, where: r.status == :queued)) == []
+    end
+  end
+
   describe "read APIs" do
     test "list/3 and get/3 are member-scoped", %{
       project: project,
@@ -614,6 +721,22 @@ defmodule Cadence.Server.Actions.RunsTest do
   end
 
   describe "recover_stale/1" do
+    test "a queued row is waiting work, not stale", %{project: project, owner: owner, node: node} do
+      queued = insert_run(project, node, owner)
+      old = DateTime.add(DateTime.utc_now(), -3_600_000, :millisecond)
+
+      Repo.update_all(
+        from(r in ActionRun, where: r.id == ^queued.id),
+        set: [updated_at: old]
+      )
+
+      assert :ok = Runs.recover_stale(project.id)
+
+      survived = Repo.get!(ActionRun, queued.id)
+      assert survived.status == :queued
+      assert survived.error_reason == nil
+    end
+
     test "marks abandoned rows interrupted, removes their containers, and broadcasts", %{
       project: project,
       owner: owner,
@@ -750,7 +873,14 @@ defmodule Cadence.Server.Actions.RunsTest do
   end
 
   defp restore_env_keys do
-    [:actions_docker, :actions_enabled, :scan_max_files, :actions_max_artifact_bytes]
+    [
+      :actions_docker,
+      :actions_enabled,
+      :scan_max_files,
+      :actions_max_artifact_bytes,
+      :actions_max_concurrent_runs,
+      :actions_task_supervisor
+    ]
   end
 
   defp previous_config do

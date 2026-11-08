@@ -56,6 +56,9 @@ defmodule Mix.Tasks.Cadence.Repack do
 
   defp start_app do
     # Repo and the storage children are all a run needs; never bind the port.
+    # A maintenance task must not drain the action run queue as a side effect
+    # (the Dispatcher's boot pass is disabled for this process only).
+    Application.put_env(:cadence_server, :actions_dispatch_on_boot, false)
     endpoint_config = Application.get_env(:cadence_server, Cadence.ServerWeb.Endpoint, [])
 
     Application.put_env(

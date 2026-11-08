@@ -1,13 +1,13 @@
 # Cadence — Progress
 
 ## Current Phase
-**Post-Phase 7 — build order complete.** Phase 7 (7a–7d) shipped, the union
-live smoke is recorded, and the post-7 startup gap is closed: a fresh daemon
-state dir with sync configured now boots instead of crashing, and the operator
-setup is documented in `docs/daemon-setup.md`. The demo-stack visual pass
-(wide/narrow, light/dark) is also done and fixed one CSS overflow, and the
-`:CadProposals` recovery surface shipped; the remaining optional carry-overs
-are listed in **Next**.
+**Post-Phase 7 — build order complete; 6c operational hardening in progress.**
+Phase 7 (7a–7d) shipped, the union live smoke is recorded, and the post-7
+startup gap is closed (`docs/daemon-setup.md`). The demo-stack visual pass and
+`:CadProposals` shipped. The 6c operational-hardening stage has begun: **M1
+(durable per-project run queue) and M2 (artifact/image retention) are done**;
+**M3 (run/artifact paging)** remains, with its design in
+`.claude/plans/actions-6c-hardening/plan.md`.
 
 ## Done (summary)
 
@@ -611,6 +611,51 @@ are listed in **Next**.
   the token never appeared in the daemon SQL log (`log: false`). Cleaned up the
   daemon process, PAT file, and temp state; the demo server retains a
   `proposals-smoke` project as demo data.
+- **6c hardening M1 (run queue + per-project cap)** — `:queued` is now a real
+  waiting state. `Runs.dispatch/1` claims the project's oldest queued row in one
+  `Repo.transaction` under a per-project
+  `pg_try_advisory_xact_lock(hashtext('cadence.action_runs'), hashtext($1))`,
+  counts `:running` rows against `CAD_ACTIONS_MAX_CONCURRENT_RUNS` (default 1,
+  `0` = unlimited), CASes `queued → running`, and spawns the task after commit
+  (the lock is feature-scoped, so it never contends with `Proposals.decide/4`).
+  Dispatch runs on submission, every committed terminal transition, and one
+  boot pass (`Actions.Dispatcher`, `CAD_ACTIONS_DISPATCH_ON_BOOT`, disabled in
+  `config/test.exs`). `recover_stale/1`/`recover_all/0` now only interrupt
+  `:running` rows, so a queued run is never mistaken for a crash; a task that
+  cannot start fails its row (`run_failed`) and the next queued run is
+  dispatched (an exit `:noproc` and a 3-tuple `start_child` result are both
+  handled). Migration `add_action_runs_queue_index` replaces
+  `(project_id, status)` with `(project_id, status, created_at)`. The run detail
+  distinguishes queued from running. Spec §8.3/§12.6/§13/§16, `.env.example`,
+  and `docs/README.md` updated. 11 new tests; 1069 total (312 shared + 207
+  daemon + 550 server). Read-only review PASS WITH WARNINGS; all four findings
+  fixed (spawn-result shapes, exit/throw containment in `dispatch/1`, accessor
+  tests, doc wording) and the unbounded queue depth recorded in §16. Lesson:
+  `.claude/solutions/data-integrity/action-run-queue-claim-20261107.md`.
+- **6c hardening M2 (artifact/image retention)** — `Actions.Cleanup` sweeps
+  terminal runs older than `CAD_ACTIONS_ARTIFACT_RETENTION_DAYS` (default 30,
+  `0` disables), removing `<CAD_ARTIFACT_PATH>/<run_id>/` and nulling
+  `log_path`/`artifact_path` while keeping the row/status/exit code/`artifact_error`;
+  `File.rm_rf` failures keep the paths for a retry, and each pass is capped by
+  `CAD_ACTIONS_RETENTION_BATCH` (default 500). `Actions.Retention` is the 6 h
+  backstop (`CAD_ACTIONS_RETENTION_INTERVAL_MS`), disabled by default in tests
+  and when `CAD_ACTIONS_ENABLED=false`; `mix cadence.actions_sweep [--days N]
+  [--keep-images N]` is the manual path. Both halves run under one global
+  `pg_try_advisory_xact_lock(hashtext('cadence.actions_cleanup'))` (busy =
+  skip); the artifact sweep runs under it and image pruning follows the
+  commit. Images tagged `cadence-action-<slug>-<sha12>` are grouped by the
+  stored project slug (**longest prefix wins**, so `cleanup` cannot prune
+  `cleanup-other`), keeping the newest
+  `CAD_ACTIONS_IMAGE_RETENTION_PER_PROJECT` (default 5, `0` disables) via two
+  new `Actions.Docker` callbacks (`list_images/0`, `remove_image/1`) and a
+  `FakeDocker` implementation. Spec §8.3/§12.6/§13/§16, `.env.example`, and
+  `docs/README.md` updated. 18 new tests; 1087 total (312 shared + 207 daemon +
+  568 server). Read-only review PASS WITH WARNINGS; fixed four findings: the
+  prefix misattribution (longest match), a pooled DB connection held across
+  Docker calls (prune after the election transaction commits), both maintenance
+  mix tasks booting the run dispatcher (boot dispatch disabled in the task
+  process), and a test connection leak. Lesson:
+  `.claude/solutions/data-integrity/action-retention-prefixes-20261107.md`.
 - **4e gate:** 640 tests green (161 shared + 125 daemon + 354 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
@@ -624,11 +669,19 @@ are listed in **Next**.
 
 ## Next
 
-**Immediate step:** the Phase 5 P5 docs live smoke with a real
-`CAD_LLM_API_KEY`, or a 6c/7b residue from the list below. `:CadProposals` is
-done; the demo-stack visual check's two open notes (header-nav spacing,
-unseeded run detail) are in `docs/ui-notes.md`. Everything below is optional
-and independent.
+**Immediate step:** 6c hardening **M3 — run/artifact paging**. Add an `:offset`
+(or `:before`) option to `Runs.list/3` next to the clamped `:limit`, and prev/
+next links on `RunLive.Index` (50 rows/page) that keep the existing live
+refresh (decide whether a `{:action_run_updated, …}` event resets to page 1 or
+reloads the current offset). Page `RunLive.Show` artifacts by 100 (the
+collection cap stays 1,000) with prev/next links, and cover offset boundaries,
+an empty page, artifact page links, and a project with more than 50 runs. The
+design is in `.claude/plans/actions-6c-hardening/plan.md` (M3).
+
+Remaining optional work: the Phase 5 P5 docs live smoke with a real
+`CAD_LLM_API_KEY`, the two `docs/ui-notes.md` demo notes (header-nav spacing,
+unseeded run detail), and the 7b/7c residues below. Everything below is
+optional and independent.
 
 **Integration contract (6c, for anything that touches runs):**
 `Actions.Runs.prepare/4` returns `{:ok, %ActionRun{}}` or
@@ -649,8 +702,9 @@ Carry-over (post-Phase-7, optional):
 
 1. **Phase 5 P5 docs live smoke** — with a real `CAD_LLM_API_KEY`.
 2. **6c residues** (spec §16): run history pages at 50 rows and the detail at
-   the first 100 artifacts (no paging); no per-project run concurrency cap; no
-   artifact/image retention; action log streaming remains post-exit.
+   the first 100 artifacts (no paging — M3); an unbounded queue depth; action
+   log streaming remains post-exit. Per-project run concurrency and
+   artifact/image retention are resolved by M1/M2.
 3. **7b/7c residues** (spec §16): pack consolidation / multi-pack index; no
    run timeout (a hung repack wedges the single-worker queue until restart);
    the repack threshold path was not exercised on the demo seed (its stores are
@@ -665,14 +719,40 @@ dependency is expected.
 ## Blocked
 
 - (none). Phase 7 (7a–7d), the daemon boot guard, the demo-stack visual pass,
-  and `:CadProposals` are complete, and every review's must-fix item is applied
-  and verified. Pre-existing follow-ups (unreadable-object isolation, re-push of
-  an existing row whose objects were later lost, the 8 MB retry ceiling, pack
-  consolidation, the missing repack timeout) remain recorded below and in spec
-  §16.
+  `:CadProposals`, and 6c M1 (run queue) / M2 (artifact/image retention) are
+  complete, and every review's must-fix item is applied and verified. 6c M3
+  (paging) is next, not blocked.
+  Pre-existing follow-ups (unreadable-object isolation, re-push of an existing
+  row whose objects were later lost, the 8 MB retry ceiling, pack consolidation,
+  the missing repack timeout) remain recorded below and in spec §16.
 
 ## Spec Deltas / Open Items
 
+- **Retention removes paths, not history (2026-11-07)** — a swept terminal run
+  keeps its row, status, exit code, and `artifact_error`; only `log_path` and
+  `artifact_path` become nil, so the history page still lists it and the detail
+  page renders "No output was captured." / "No artifacts were produced."
+  Image pruning keeps the newest N per **current** project slug; images for a
+  deleted or renamed project and the Docker build cache are left for manual
+  pruning.
+- **Cleanup elects one pass globally (2026-11-07)** — the artifact sweep takes
+  a global `pg_try_advisory_xact_lock`, so a backstop and a manual task do not
+  duplicate it; a busy backstop is skipped (retried next interval) and the
+  manual task raises `another action cleanup pass is running`. Image pruning
+  runs after the transaction commits, so a slow Docker proxy never holds a Repo
+  connection; concurrent pruning is idempotent (a missing tag is `:ok`).
+  `CAD_ACTIONS_RETENTION_BATCH` caps a pass at 500 runs, so a large backlog
+  drains over several passes.
+- **Run queue depth is unbounded (2026-11-07)** — the per-project queue accepts
+  any number of waiting rows; only managers can submit, and each is a durable
+  `action_runs` row. Recorded in spec §8.3/§16; add a maximum-queued-runs
+  setting (with a refusal message) if a burst of submissions ever needs
+  bounding. Retention does not apply to rows, only to artifacts/logs (M2).
+- **Boot dispatch runs before migrations on a fresh DB (2026-11-07)** — the
+  one-shot `Actions.Dispatcher` calls `Runs.dispatch_all/0` at boot; on an
+  unmigrated database the query raises, is logged by shape, and the pass idles.
+  Queued rows drain on the next `start/4` or the next restart after
+  `mix ecto.migrate` (the same accepted pattern as the daemon boot guard).
 - **`:CadProposals` journal scope (2026-11-08)** — the local journal only records
   unions submitted from that daemon/state dir, and `status` is the creation-time
   value (never refreshed). The review hub/public page remains the complete,
@@ -1660,3 +1740,50 @@ page returned 200, and the capability token was absent from the daemon SQL log
 now also lists a `proposals-smoke` project (demo data; `docker compose down -v`
 resets it). This closes the only untested surface from the `:CadProposals`
 slice.
+
+2026-11-07 — **6c hardening M1 (run queue + per-project cap)** shipped from
+`.claude/plans/actions-6c-hardening/plan.md` (the user approved M1 only).
+`:queued` is now a real waiting state: `Runs.dispatch/1` claims the project's
+oldest queued row in one `Repo.transaction` under a per-project
+`pg_try_advisory_xact_lock`, counts `:running` rows against
+`CAD_ACTIONS_MAX_CONCURRENT_RUNS` (default 1, `0` = unlimited), and spawns after
+commit; dispatch runs on submission, every committed terminal transition, and
+one boot pass (`Actions.Dispatcher`). Recovery now only interrupts `:running`
+rows, so a waiting run is never mistaken for a crash; a task that cannot start
+fails its row (`run_failed`) and frees the slot. Migration
+`add_action_runs_queue_index` replaces `(project_id, status)` with
+`(project_id, status, created_at)`; the run detail distinguishes queued from
+running. Spec §8.3/§12.6/§13/§16, `.env.example`, and `docs/README.md` updated.
+Verification: format clean, dev + `MIX_ENV=prod` compile clean, 1069 tests green
+(312 shared + 207 daemon + 550 server; +11). Read-only review PASS WITH
+WARNINGS; all four findings fixed (spawn-result shapes, exit/throw containment
+in `dispatch/1`, accessor tests, doc wording) and the unbounded queue depth
+recorded in §16. Lesson:
+`.claude/solutions/data-integrity/action-run-queue-claim-20261107.md`. Next: 6c
+M2 (artifact/image retention), then M3 (run/artifact paging). Committed with the
+M1+M2 6c hardening commit.
+
+2026-11-07 — **6c hardening M2 (artifact/image retention)** shipped from
+`.claude/plans/actions-6c-hardening/plan.md` (continuation after M1).
+`Actions.Cleanup` runs one elected pass: terminal runs older than
+`CAD_ACTIONS_ARTIFACT_RETENTION_DAYS` (default 30; `0` disables) lose
+`<CAD_ARTIFACT_PATH>/<run_id>/` and have `log_path`/`artifact_path` nulled while
+the row, status, exit code, and `artifact_error` survive; a failed `rm_rf` keeps
+the paths for a retry and `CAD_ACTIONS_RETENTION_BATCH` caps each pass.
+`Actions.Retention` is the 6 h backstop (`CAD_ACTIONS_RETENTION_INTERVAL_MS`,
+disabled in tests and when actions are off); `mix cadence.actions_sweep
+[--days N] [--keep-images N]` is the manual path. Image pruning keeps the
+newest `CAD_ACTIONS_IMAGE_RETENTION_PER_PROJECT` (default 5; `0` disables)
+`cadence-action-*` images per project using the **longest** stored-slug prefix,
+through new `Actions.Docker` `list_images/0`/`remove_image/1` callbacks and
+`FakeDocker` support. The artifact sweep takes a global
+`pg_try_advisory_xact_lock`; image pruning follows the commit so a slow Docker
+proxy never holds a Repo connection. Both maintenance mix tasks disable the
+Dispatcher's boot pass. Spec §8.3/§12.6/§13/§16, `.env.example`, and
+`docs/README.md` updated. Verification: format clean, dev + prod compile clean,
+1087 tests green (312 shared + 207 daemon + 568 server; +18). Read-only review
+PASS WITH WARNINGS; four findings fixed (ambiguous slug prefixes, pooled
+connection held across Docker calls, mix-task dispatch side effect, test
+connection leak). Lesson:
+`.claude/solutions/data-integrity/action-retention-prefixes-20261107.md`. Next:
+M3 (run/artifact paging). Not committed.

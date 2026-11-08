@@ -134,7 +134,11 @@ defmodule Cadence.ServerWeb.RunLive.Show do
               </span>
             </div>
 
-            <p :if={payload.run.status in [:queued, :running]} class="note">
+            <p :if={payload.run.status == :queued} class="note">
+              Queued: the run starts when this project has a free action slot.
+            </p>
+
+            <p :if={payload.run.status == :running} class="note">
               The action is running. Output is captured when the container exits.
             </p>
 

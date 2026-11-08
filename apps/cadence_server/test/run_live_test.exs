@@ -310,6 +310,23 @@ defmodule Cadence.ServerWeb.RunLiveTest do
       assert has_element?(view, "a[href='/p/#{project.slug}/n/#{node.id}']")
     end
 
+    test "a queued run explains that it is waiting for a slot", %{
+      conn: conn,
+      project: project,
+      owner: owner,
+      viewer: viewer,
+      node: node
+    } do
+      {:ok, run} = Runs.prepare(%{id: owner.id}, project.id, node.id, "run_analysis")
+
+      {:ok, view, _html} = live(signed_conn(conn, viewer), "/p/#{project.slug}/runs/#{run.id}")
+      html = render_async(view)
+
+      assert html =~ "queued"
+      assert html =~ "Queued: the run starts when this project has a free action slot."
+      refute html =~ "The action is running."
+    end
+
     test "shows a mapped failure reason", %{
       conn: conn,
       project: project,
