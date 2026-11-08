@@ -13,6 +13,29 @@ styling pass is planned after 4c-3 (incident panel) unless a demo is imminent.
 
 ## Open
 
+- **Right-edge project metadata rail (GitHub-style; future idea, user-suggested
+  2026-11-08).** Consider a narrow column on the right of the repository pane on
+  `/p/:slug`, with GitHub-About-style blocks. Map it to Cadence concepts rather
+  than copying GitHub:
+  - **About** — project description, README/license links, and recent activity
+    (nodes/commits in the last N days). A description has no writer today; add
+    one only with an owner/trusted control.
+  - **Members** — the existing owner/trusted/approver/viewer memberships
+    instead of "contributors"; an avatar/name list must not leak emails to
+    viewers (§7.2).
+  - **Pinned / Proposals / Incidents** — pinned nodes and open proposal /
+    incident counts are the useful equivalents of Releases/Issues. "Releases"
+    and "Packages" have no model yet; reserve or omit those slots.
+  - **Languages** — derive from the selected snapshot's file extensions if the
+    existing capped tree walk can do it cheaply; otherwise defer. Do not add an
+    expensive scan to every project mount.
+  Layout/contract: the project home is the 25/75 DAG + repository grid (§7.3);
+  a third column changes that rule and must stack cleanly at 390px
+  (DAG → repository → rail) without horizontal overflow. Load counts with
+  `assign_async` (no DB query in the disconnected mount), keep every count
+  bounded/capped, and refresh only via the existing project events. Treat this
+  as a design idea: decide the column, data sources, and the §7.3 update before
+  building.
 - **6c action logs:** the run page renders captured logs as escaped text in a
   `<pre>` (ANSI/control sequences stripped). A "download raw log" or "copy"
   affordance is still missing; add it only if needed, keeping the same escaping
