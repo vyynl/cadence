@@ -88,7 +88,7 @@ defmodule Cadence.ServerWeb.ProjectLive do
           # is cheap to re-read. Keying the cache on both inputs means a
           # tree/blob patch reuses the scan, a flag flip re-derives, and a stale
           # answer is never reused (Iron Law 5).
-          {quarantine, quarantine_key} =
+          {quarantine, quarantine_key, quarantine_cacheable?} =
             quarantine_answer(socket, project, selected_node, raw_view?)
 
           dag_layout =
@@ -115,6 +115,7 @@ defmodule Cadence.ServerWeb.ProjectLive do
               not_found: false,
               quarantine: quarantine,
               quarantine_key: quarantine_key,
+              quarantine_cacheable?: quarantine_cacheable?,
               repo_action: action,
               membership: auth.membership,
               members: auth.members,
@@ -170,14 +171,15 @@ defmodule Cadence.ServerWeb.ProjectLive do
       {true, %Project{} = project, %Node{} = selected_node} ->
         raw_view? = !socket.assigns.raw_view?
 
-        {quarantine, quarantine_key} =
+        {quarantine, quarantine_key, quarantine_cacheable?} =
           quarantine_answer(socket, project, selected_node, raw_view?)
 
         socket =
           assign(socket,
             raw_view?: raw_view?,
             quarantine: quarantine,
-            quarantine_key: quarantine_key
+            quarantine_key: quarantine_key,
+            quarantine_cacheable?: quarantine_cacheable?
           )
 
         {:noreply, reload_repo(socket)}
@@ -256,16 +258,19 @@ defmodule Cadence.ServerWeb.ProjectLive do
 
     if targets_selected_node?(project, selected, project_id, node_id) and
          not socket.assigns.raw_view? do
-      key = quarantine_key(project, selected)
+      # `quarantine_answer/4` reuses only an authoritative cached answer, so a
+      # same-key event retries a scan that previously failed.
+      {quarantine, key, cacheable?} = quarantine_answer(socket, project, selected, false)
+      changed? = quarantine != socket.assigns.quarantine
 
-      if key == socket.assigns.quarantine_key do
-        {:noreply, socket}
-      else
-        quarantine = Portfolio.quarantine_status(project, selected)
-        changed? = quarantine != socket.assigns.quarantine
-        socket = assign(socket, quarantine: quarantine, quarantine_key: key)
-        {:noreply, if(changed?, do: reload_repo(socket), else: socket)}
-      end
+      socket =
+        assign(socket,
+          quarantine: quarantine,
+          quarantine_key: key,
+          quarantine_cacheable?: cacheable?
+        )
+
+      {:noreply, if(changed?, do: reload_repo(socket), else: socket)}
     else
       {:noreply, socket}
     end
@@ -501,6 +506,7 @@ defmodule Cadence.ServerWeb.ProjectLive do
       not_found: false,
       quarantine: :ok,
       quarantine_key: nil,
+      quarantine_cacheable?: false,
       repo_action: :node,
       membership: nil,
       members: nil,
@@ -554,16 +560,21 @@ defmodule Cadence.ServerWeb.ProjectLive do
   defp targets_selected_node?(%{id: project_id}, %{id: node_id}, project_id, node_id), do: true
   defp targets_selected_node?(_project, _selected, _project_id, _node_id), do: false
 
-  defp quarantine_answer(_socket, _project, nil, _raw_view?), do: {:ok, nil}
-  defp quarantine_answer(_socket, _project, _node, true), do: {:ok, nil}
+  defp quarantine_answer(_socket, _project, nil, _raw_view?), do: {:ok, nil, false}
+  defp quarantine_answer(_socket, _project, _node, true), do: {:ok, nil, false}
 
   defp quarantine_answer(socket, project, node, false) do
     key = quarantine_key(project, node)
 
-    if socket.assigns.quarantine_key == key do
-      {socket.assigns.quarantine, key}
+    if socket.assigns.quarantine_key == key and socket.assigns.quarantine_cacheable? do
+      {socket.assigns.quarantine, key, true}
     else
-      {Portfolio.quarantine_status(project, node), key}
+      # A failed scan is `:quarantined` for rendering but must not be cached;
+      # the snapshot may become readable (object repair, cap raised) later.
+      case Portfolio.quarantine_status_with_source(project, node) do
+        {:ok, status} -> {status, key, true}
+        {:error, :unverifiable} -> {:quarantined, key, false}
+      end
     end
   end
 

@@ -380,7 +380,25 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
   # would promote/attach. Anything else keeps the page — and the capped blob
   # walks — untouched.
   defp incident_relevant?(socket, proposal_id, node_id) do
-    proposal_id == socket.assigns.proposal_id or node_id in decision_node_ids(socket)
+    incident_relevant?(
+      socket.assigns.proposal_id,
+      decision_node_ids(socket),
+      review_loaded?(socket),
+      proposal_id,
+      node_id
+    )
+  end
+
+  @doc false
+  # Pure decision used by `incident_relevant?/3`. Before the first successful
+  # load there are no decision node ids, so every incident forces one reload
+  # instead of being dropped; afterwards the proposal/node check applies.
+  def incident_relevant?(local_proposal_id, decision_node_ids, loaded?, proposal_id, node_id) do
+    proposal_id == local_proposal_id or node_id in decision_node_ids or not loaded?
+  end
+
+  defp review_loaded?(socket) do
+    match?(%AsyncResult{ok?: true}, socket.assigns.review)
   end
 
   defp decision_node_ids(socket) do

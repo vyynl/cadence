@@ -205,8 +205,29 @@ defmodule Cadence.Server.Portfolio do
   def quarantine_status(_project, nil, _opts), do: :quarantined
 
   def quarantine_status(project, node, opts) do
+    case quarantine_status_with_source(project, node, opts) do
+      {:ok, status} -> status
+      {:error, :unverifiable} -> :quarantined
+    end
+  end
+
+  @doc """
+  Like `quarantine_status/3`, but reports whether the answer is authoritative.
+
+  `{:ok, :quarantined}` means an incident or a completed scan quarantines the
+  snapshot (deterministic: the snapshot is immutable). `{:error, :unverifiable}`
+  means the scan failed, so the caller may retry later instead of caching a
+  transient `:quarantined`.
+  """
+  @spec quarantine_status_with_source(Project.t(), Node.t() | nil, keyword()) ::
+          {:ok, :ok | :quarantined} | {:error, :unverifiable}
+  def quarantine_status_with_source(project, node, opts \\ [])
+
+  def quarantine_status_with_source(_project, nil, _opts), do: {:ok, :quarantined}
+
+  def quarantine_status_with_source(project, node, opts) do
     if Incidents.blocking_node?(project.id, node.id) do
-      :quarantined
+      {:ok, :quarantined}
     else
       scan_quarantine_status(project, node, opts)
     end
@@ -222,10 +243,10 @@ defmodule Cadence.Server.Portfolio do
            max_bytes: max_bytes
          ) do
       {:ok, blobs} ->
-        if PublicContent.quarantine?(blobs), do: :quarantined, else: :ok
+        {:ok, if(PublicContent.quarantine?(blobs), do: :quarantined, else: :ok)}
 
       {:error, _reason} ->
-        :quarantined
+        {:error, :unverifiable}
     end
   end
 

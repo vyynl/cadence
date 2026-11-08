@@ -7,6 +7,7 @@ defmodule Cadence.ServerWeb.ReviewLiveTest do
 
   alias Cadence.Server.{Incidents, ProposalView, Proposals, Repo}
   alias Cadence.Server.Accounts.User
+  alias Cadence.ServerWeb.ReviewLive.Show
   alias Cadence.Shared.{Membership, Node}
 
   setup do
@@ -729,6 +730,20 @@ defmodule Cadence.ServerWeb.ReviewLiveTest do
       unknown = render_click(view, "resolve_incident", %{"id" => Ecto.UUID.generate()})
       assert unknown =~ "This incident no longer exists."
       assert Repo.get!(Cadence.Server.Incident, other_incident.id).status == :open
+    end
+  end
+
+  describe "incident relevance" do
+    test "an incident before the first load always forces a reload" do
+      assert Show.incident_relevant?("proposal", [], false, nil, "node")
+      assert Show.incident_relevant?("proposal", [], false, "proposal", nil)
+    end
+
+    test "after a load only this proposal or a decision node is relevant" do
+      assert Show.incident_relevant?("proposal", ["node"], true, nil, "node")
+      assert Show.incident_relevant?("proposal", ["other"], true, "proposal", nil)
+      refute Show.incident_relevant?("proposal", ["other"], true, nil, "node")
+      refute Show.incident_relevant?("proposal", [], true, "another", "node")
     end
   end
 

@@ -287,6 +287,13 @@ defmodule Cadence.Server.PortfolioTest do
 
       missing = %{clean | git_commit_sha: String.duplicate("0", 40)}
       assert Portfolio.quarantine_status(project, missing) == :quarantined
+
+      # Callers that cache must distinguish a completed scan from a failure.
+      assert Portfolio.quarantine_status_with_source(project, clean) == {:ok, :ok}
+      assert Portfolio.quarantine_status_with_source(project, secret) == {:ok, :quarantined}
+
+      assert Portfolio.quarantine_status_with_source(project, missing) ==
+               {:error, :unverifiable}
     end
 
     test "reads and redacts files", %{project: project, clean: clean, secret: secret, env: env} do

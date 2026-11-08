@@ -736,6 +736,47 @@ defmodule Cadence.ServerWeb.ProjectLiveTest do
       refute html =~ "README.md"
     end
 
+    test "a failed snapshot scan is retried on the next incident event", %{conn: conn} do
+      project = insert_project("live-scan-retry")
+      clean = insert_node(project, %{message: "clean node"}, %{"README.md" => "# Clean\n"})
+
+      previous = Application.get_env(:cadence_server, :scan_max_files)
+      Application.put_env(:cadence_server, :scan_max_files, 0)
+
+      on_exit(fn ->
+        if previous == nil do
+          Application.delete_env(:cadence_server, :scan_max_files)
+        else
+          Application.put_env(:cadence_server, :scan_max_files, previous)
+        end
+      end)
+
+      {:ok, view, _html} = live(conn, "/p/live-scan-retry")
+
+      html = render_patch(view, "/p/live-scan-retry/n/#{clean.id}")
+      assert html =~ "Snapshot hidden for review"
+      refute html =~ "README.md"
+
+      # The snapshot becomes readable again. A high (non-blocking) incident
+      # keeps the cache key identical, so only a non-cacheable failure answer
+      # allows the scan to be retried.
+      Application.put_env(:cadence_server, :scan_max_files, 1_000)
+
+      {:ok, _incident} =
+        Incidents.open(%{
+          project_id: project.id,
+          node_id: clean.id,
+          kind: :scan_incomplete,
+          severity: :high,
+          title: "Scan notice",
+          details: %{reason: :too_many_files}
+        })
+
+      html = render(view)
+      refute html =~ "Snapshot hidden for review"
+      assert html =~ "README.md"
+    end
+
     test "an incident for another node does not disturb the selected pane", %{conn: conn} do
       project = insert_project("live-incident-other")
 
