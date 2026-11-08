@@ -1,14 +1,11 @@
 # Cadence — Progress
 
 ## Current Phase
-**Phase 7 — storage engineering is in progress.** 7a (shared pack layer) and
-7b (server repacker) are complete: pack v2/idx v2 write+read with ofs/ref
-deltas, transparent loose-first `GitStore` reads, verified atomic
-`pack_objects/3`, a shared index cache, a threshold/backstop/CLI repacker with
-transaction-scoped per-project locking, and deferred loose deletion that only
-unlinks after a later run re-verifies the pack. Next is **7c (sync existence
-handshake)**, with the optional Phase 5 P5 smoke and the union/UI live checks
-as carry-over.
+**Phase 7 — storage engineering is nearly complete.** 7a (shared pack layer),
+7b (server repacker), and 7c (sync existence handshake) are complete. Next is
+**7d (verification/closeout)**: multi-pack reads, index growth, delta-chain
+depth, repacking an already-packed store, and a real-store smoke on the demo
+stack. Phase 5 P5 and the union/UI live checks remain as optional carry-over.
 
 ## Done (summary)
 
@@ -489,6 +486,29 @@ as carry-over.
   orphan-sweep grace for in-flight renames, content re-hash on loose reads).
   Lesson:
   `.claude/solutions/data-integrity/repack-deferred-deletion-20261107.md`.
+- **Phase 7c (sync existence handshake)** — `POST /sync/objects/exists`
+  (bearer PAT, `owner`/`trusted`, project-scoped) takes
+  `%{project_id, shas: [40-hex]}` and answers `%{present: [...]}` from
+  `GitStore.present_shas/2` (loose files + pack indexes in one pass). Invalid
+  SHAs are refused; the raw list is capped before dedupe by
+  `CAD_SYNC_EXISTS_LIMIT` (5000). `Cadence.Shared.Sync.ObjectsExists` is the
+  shared request struct; `SyncClient.objects_exist/2` is the daemon call.
+  `Sync.push_batch/3` now loads each node's `objects_from/2` once, collects the
+  batch's unique SHAs, chunks them under the same cap (a non-positive cap
+  disables the handshake), unions the answers, and filters each node's
+  `git_objects` before encoding. Any failed chunk sends the whole batch
+  unfiltered; a 422 on a filtered push retries once with every object and then
+  surfaces the normal node error. Metadata is always sent; `ensure_complete/2`
+  remains the authority. Tests: 9 server cases (+ acceptance for an existing
+  commit with no objects and a genuinely missing commit) and 7 daemon cases
+  (drop, per-object filter, chunking, non-positive cap, failure fallback, 5xx
+  no-retry, full-object retry); `TestSyncServer` gained the existence route and
+  present-set/push-call counters. 10 new tests; 1042 total (309 shared + 198
+  daemon + 535 server). Spec §10.2/§10.6/§12.6/§13, `docs/phase-7-prep.md`,
+  `docs/README.md`, `.env.example` updated. Two review passes: no blocker/high;
+  fixed the cap-skip design (now chunked), a `<= 0` chunk-size footgun, raw-cap
+  ordering, daemon config docs, and stronger tests. Lesson:
+  `.claude/solutions/data-integrity/sync-existence-chunking-20261107.md`.
 - **4e gate:** 640 tests green (161 shared + 125 daemon + 354 server);
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
@@ -502,18 +522,15 @@ as carry-over.
 
 ## Next
 
-**Immediate step:** start **Phase 7c (sync existence handshake)** (spec
-§10.2/§10.6, §13; `docs/phase-7-prep.md` §7c). Add `POST /sync/objects/exists`
-(bearer PAT, writable roles, project-scoped; `%{project_id, shas: [40-hex]}` →
-`%{present: [40-hex]}`, capped by `CAD_SYNC_EXISTS_LIMIT`, default 5000),
-answered from `GitStore.present_shas/2` (index membership, not one
-`has_object?/2` per SHA). Daemon `SyncClient.objects_exist/2`; `push_batch/3`
-collects the batch's unique object SHAs, asks once, drops present objects per
-node before encoding, and falls back to the current full push on any handshake
-failure (timeout/5xx/429). A server 422 after a filtered push is treated as a
-handshake miss: retry the batch once with all objects, then surface the normal
-node error. Node metadata is always sent; only `git_objects` shrinks
-(`Sync.ensure_complete/2` stays the authority). No new dependency.
+**Immediate step:** start **Phase 7d (verification/closeout)** (spec §13;
+`docs/phase-7-prep.md` §7d). Prove multi-pack reads (two packs plus loose
+objects, with the cache invalidated between writes), index growth, the
+delta-chain depth cap, and a repack of an already-packed store (only new loose
+objects are packed); then run a real-store smoke on the demo stack
+(`docker compose up`, push a project past the threshold, run
+`mix cadence.repack`, verify `read_*`/`objects_from` and the web pages after
+loose copies are swept). 7d is verification only unless it finds a defect; no
+new dependency is expected.
 
 **Integration contract (6c, for anything that touches runs):**
 `Actions.Runs.prepare/4` returns `{:ok, %ActionRun{}}` or
@@ -554,20 +571,40 @@ Carry-over (small, not blocking Phase 7):
    the first 100 artifacts (no paging); no per-project run concurrency cap; no
    artifact/image retention; action log streaming remains post-exit.
 
-**Spin-up:** `@phx-full` (or `@phx-plan` → `@phx-work`) at Phase 7c. No new
+**Spin-up:** `@phx-full` (or `@phx-plan` → `@phx-work`) at Phase 7d. No new
 dependency is expected; the pack layer is hand-written and the spec §11 table
 already records it.
 
 ## Blocked
 
-- (none). Phase 7b is complete and both review cycles' findings are fixed and
-  verified. Open deltas (artifact/image retention, run-history paging,
-  per-project run concurrency, the `/out` quota prerequisite, the Engine API
-  floor, `Project.docker_image` having no writer, userns) are recorded below
-  and in spec §16; none block 7c.
+- (none). Phase 7c is complete and both review passes' must-fix items are
+  applied and verified. Follow-ups recorded below (unreadable-object isolation,
+  re-push of an existing row whose objects were later lost, the 8 MB retry
+  ceiling) are pre-existing and do not block 7d. Open deltas
+  (artifact/image retention, run-history paging, per-project run concurrency,
+  the `/out` quota prerequisite, the Engine API floor, `Project.docker_image`
+  having no writer, userns) remain recorded below and in spec §16.
 
 ## Spec Deltas / Open Items
 
+- **7c handshake notes (2026-11-07)** — `objects_from/2` returns the **full
+  reachable closure** for every node, so a push batch's unique SHA set is
+  roughly the project's whole history, not the new delta. That is why the
+  handshake **chunks** (`CAD_SYNC_EXISTS_LIMIT` per request) instead of skipping
+  over-cap batches: a flat cap would silently disable the optimization on any
+  real repository. A non-positive value disables it explicitly. Requests are
+  sequential, so a very large batch adds round trips but still filters; any
+  failed chunk sends the whole batch unfiltered. `present_shas/2` reads the pack
+  cache without reload-on-miss, so a cross-VM repack can produce a stale-*absent*
+  answer — safe (the daemon resends) and a genuinely missing object is a 422
+  followed by one full-object retry. The retry is per spec on **any** 422 from a
+  filtered push, so a batch whose full payload exceeds the endpoint's default
+  8 MB parser limit can go 422 → retry → 413 and cannot self-heal; such a batch
+  could not push unfiltered before 7c either. Two pre-existing follow-ups are
+  **not** fixed here: a `{:objects, node_id, reason}` load failure still fails
+  the whole batch instead of isolating that node, and re-pushing an existing
+  node row skips `import_objects`/`ensure_complete`, so objects lost later from
+  the store are not detected.
 - **Repacker 7b notes (2026-11-07)** — deletion needs **two** runs by design:
   the writing run never unlinks (OTP cannot fsync a directory), and the next
   run re-reads each covered entry through the pack and re-hashes it before
@@ -1370,3 +1407,24 @@ call, orphan grace, content re-hash). Lesson:
 at `e6903b6` (`feat: Phase 7b — server repacker with verified deferred loose
 sweep`), with this handoff note as the follow-up docs commit; working tree
 clean. Next: 7c (sync existence handshake).
+
+2026-11-07 — **Phase 7c (sync existence handshake)** shipped from
+`.claude/plans/phase-7c-exists/plan.md` (`@phx-full`). New
+`POST /sync/objects/exists` (bearer PAT, owner/trusted, project-scoped) answers
+`%{present}` from `GitStore.present_shas/2`; invalid SHAs are refused and the
+raw list is capped by `CAD_SYNC_EXISTS_LIMIT` (5000) before dedupe. The daemon
+loads each node's objects once, chunks the batch's unique SHAs under the cap,
+unions the answers, filters `git_objects`, and sends metadata unchanged. Any
+failed chunk falls back to a full push; a 422 on a filtered push retries once
+with every object. A non-positive cap disables the handshake. Spec
+§10.2/§10.6/§12.6/§13, `docs/phase-7-prep.md`, `docs/README.md`, `.env.example`
+updated. Verification: `mix format --check-formatted`, dev + `MIX_ENV=prod mix
+compile --warnings-as-errors`, 1042 tests green (309 shared + 198 daemon + 535
+server; +10). Two review passes: no blocker/high; fixed the skip-over-cap design
+(now chunked), a `<= 0` chunk-size footgun, raw-cap ordering, daemon config
+docs, and test fidelity, and added per-object-filter, chunking, no-retry-on-5xx,
+and complete-retry assertions. Lesson:
+`.claude/solutions/data-integrity/sync-existence-chunking-20261107.md`. Committed
+at `a9a649d` (`feat: Phase 7c — sync existence handshake`), with this handoff
+note as the follow-up docs commit; working tree clean. Next: 7d
+(multi-pack/index/delta-depth verification and a demo-stack smoke).
