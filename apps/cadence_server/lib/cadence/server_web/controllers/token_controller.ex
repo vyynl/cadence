@@ -16,9 +16,20 @@ defmodule Cadence.ServerWeb.TokenController do
         json(conn, 401, %{error: "unauthorized"})
 
       user ->
+        # Templates escape every interpolation (HEEx), so the hand-built HTML
+        # strings this page used to send are gone. The explicit "new.html"
+        # template form keeps rendering independent of conn.params, because the
+        # controller tests call these actions directly on a bare conn.
+        # Both token pages carry a CSRF token and (on create) a live PAT, so
+        # every cache in the path must keep its own copy.
         conn
-        |> put_resp_content_type("text/html")
-        |> send_resp(200, form_html(user))
+        |> put_resp_header("cache-control", "private, no-store")
+        |> put_view(Cadence.ServerWeb.TokenHTML)
+        |> render("new.html",
+          layout: false,
+          email: to_string(user.email),
+          csrf: Plug.CSRFProtection.get_csrf_token()
+        )
     end
   end
 
@@ -35,51 +46,14 @@ defmodule Cadence.ServerWeb.TokenController do
             plaintext = api_key.__metadata__.plaintext_api_key
 
             conn
-            |> put_resp_content_type("text/html")
-            |> send_resp(201, created_html(plaintext))
+            |> put_resp_header("cache-control", "private, no-store")
+            |> put_status(201)
+            |> put_view(Cadence.ServerWeb.TokenHTML)
+            |> render("create.html", layout: false, plaintext: plaintext)
 
           {:error, _reason} ->
             json(conn, 422, %{error: "could not create api key"})
         end
     end
-  end
-
-  defp form_html(user) do
-    csrf = Plug.CSRFProtection.get_csrf_token()
-    email = user.email |> to_string() |> Plug.HTML.html_escape()
-
-    """
-    <!doctype html>
-    <html lang="en">
-      <head><meta charset="utf-8"><title>Cadence API key</title></head>
-      <body>
-        <h1>Create a Cadence API key</h1>
-        <p>Signed in as #{email}.</p>
-        <p>The key is shown once. Store it in <code>~/.config/cadence/env</code>.</p>
-        <form method="post" action="/auth/tokens">
-          <input type="hidden" name="_csrf_token" value="#{csrf}">
-          <label>Key name
-            <input type="text" name="name" value="daemon" required>
-          </label>
-          <button type="submit">Create key</button>
-        </form>
-      </body>
-    </html>
-    """
-  end
-
-  defp created_html(plaintext) do
-    """
-    <!doctype html>
-    <html lang="en">
-      <head><meta charset="utf-8"><title>Cadence API key</title></head>
-      <body>
-        <h1>Your Cadence API key</h1>
-        <p>This value is shown once. Store it now:</p>
-        <pre>#{plaintext}</pre>
-        <p>Put it in <code>~/.config/cadence/env</code> as <code>CAD_AUTH_TOKEN</code>.</p>
-      </body>
-    </html>
-    """
   end
 end

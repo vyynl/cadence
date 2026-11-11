@@ -1506,6 +1506,7 @@ inserts); the daemon can mark only that node failed and retry the rest.
 | Ash data layer | `ash_postgres` |
 | Phoenix auth routes | `ash_authentication_phoenix` |
 | Ash DSL formatting / codegen | `sourceror` (dev/test only) |
+| Static security analysis | `sobelow` (dev/test only, `~> 0.18`) |
 | LiveView test DOM | `lazy_html` (test only; required by `Phoenix.LiveViewTest`) |
 | Docker API | `ex_docker_api` `~> 1.55` (Tesla + the built-in httpc adapter; requires Elixir 1.20) |
 | Rate limiting | `Hammer` (declared in `cadence_shared`; used by the daemon's `LLMRateLimit` and the server's `LLMRateLimit` / `MeldWorker`) |

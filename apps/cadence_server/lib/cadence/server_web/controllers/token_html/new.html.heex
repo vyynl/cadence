@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cadence API key</title>
+  </head>
+  <body>
+    <h1>Create a Cadence API key</h1>
+    <p>Signed in as {@email}.</p>
+    <p>The key is shown once. Store it in <code>~/.config/cadence/env</code>.</p>
+    <form method="post" action={~p"/auth/tokens"}>
+      <input type="hidden" name="_csrf_token" value={@csrf} />
+      <label>
+        Key name
+        <input type="text" name="name" value="daemon" required />
+      </label>
+      <button type="submit">Create key</button>
+    </form>
+  </body>
+</html>

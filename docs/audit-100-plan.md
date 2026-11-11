@@ -90,9 +90,10 @@ T1, D1) lands at ~97 and costs about half the effort.
 ## Security (88 → 100)
 
 **S1. Add Sobelow as a dev-only tool.**
-- Add `{:sobelow, "~> 0.13", only: [:dev, :test], runtime: false}` to the
+- Add `{:sobelow, "~> 0.18", only: [:dev, :test], runtime: false}` to the
   server's deps **and a spec §11 dependency row** (the rule in AGENTS.md §4).
-  Run `mix sobelow --exit medium` in the gate/CI.
+  Run `mix sobelow --exit medium` in the gate/CI (from `apps/cadence_server`;
+  the umbrella root refuses).
 - Acceptance: no medium+ findings; the audit records the command and output.
 - Effort: 1 hour.
 

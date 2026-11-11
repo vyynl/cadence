@@ -49,7 +49,7 @@ defmodule Cadence.ServerWeb.Router do
     end
 
     get("/auth/tokens/new", TokenController, :new)
-    post("/auth/tokens", TokenController, :create)
+    post("/auth/tokens", TokenController, :create, log: false)
 
     sign_in_route(auth_routes_prefix: "/auth", layout: {Cadence.ServerWeb.Layouts, :app})
     sign_out_route(AuthController, "/sign-out", layout: {Cadence.ServerWeb.Layouts, :app})

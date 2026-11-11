@@ -53,6 +53,7 @@ defmodule Cadence.Server.MixProject do
       {:ex_docker_api, "~> 1.55"},
       {:hammer, "~> 7.5"},
       {:sourceror, "~> 1.7", only: [:dev, :test]},
+      {:sobelow, "~> 0.18", only: [:dev, :test], runtime: false},
       {:lazy_html, ">= 0.1.0", only: :test},
       {:slipstream, "~> 1.2", only: [:dev, :test]}
     ]
