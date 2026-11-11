@@ -901,6 +901,26 @@ is optional and recorded in spec §16.
   limit, CSP, sleeps/coverage/CI, `mix_audit`, `libgraph`), with acceptance
   criteria, effort, and the rubric-only items that should stay documented
   exemptions (Mox, streams, the Phoenix endpoint/router compile cycle).
+- **Audit 100 slice, wave 2 (2026-11-11)** — **S1 + S2 shipped.**
+  **S1:** `sobelow` 0.18.1 is a dev/test-only `cadence_server` dependency (spec
+  §11 row; run from `apps/cadence_server`, the umbrella root refuses). Its scan
+  found two real `XSS.SendResp` mediums — the one-time API key page
+  interpolated the plaintext key into hand-built HTML — so both token pages now
+  render escaped HEEx templates (`Cache-Control: private, no-store`, POST
+  `log: false`), with new tests pinning template escaping and the full browser
+  CSRF round-trip. `mix sobelow --exit medium` is 0 medium / 1 high
+  (`Config.CSP`, deliberately deferred to S3) / 26 low triaged as false
+  positives (25 `Traversal.FileModule` on server-derived paths, 1 `XSS.Raw` on
+  MDEx-sanitized output). **S2:** `/sync/*` is bounded per authenticated user
+  by a Hammer fix-window limiter run after `AuthPlug` (`Cadence.Server.SyncRateLimit`
+  + `Plugs.SyncRateLimit`): `CAD_SYNC_RATE_LIMIT` (300) per
+  `CAD_SYNC_RATE_SCALE` (60000 ms), non-positive disables, denial is `429` +
+  `Retry-After` + `{"error":"rate_limited"}` before any controller work. The
+  meld limiter stays the inner per-project bound. 9 request tests cover the
+  accept boundary, per-user (not per-token) keying, denied mutations, the
+  401-before-limiter order, runtime config reads, and disabled mode. Gate:
+  1202 tests; format and dev/prod compile clean. The daemon's union 429 message
+  is now neutral ("rate limited; retry shortly").
 - **Audit 100 slice, wave 1 (2026-11-11)** — **T1 + T2 shipped.**
   **T1:** 36 of 42 fixed `Process.sleep` sites were removed from the daemon and
   server suites; `Cadence.{Daemon,Server}.TestHelpers` now provides bounded
@@ -957,11 +977,13 @@ is optional and recorded in spec §16.
 
 ## Next
 
-**Audit 100 cleanup is in progress** (see `docs/audit-100-plan.md`). Wave 1
-shipped: T1 (fixed sleeps) and T2 (80% coverage floor). Next in this run:
-S1 (Sobelow), S2 (`/sync` rate limit), S3 (CSP), then P1 (users batching);
-the session cap is 6 committed items. Remaining after that: P2/P3, A2/A1,
-D1/D2, T4, and the A3/P4/T3 exemption notes.
+**Audit 100 cleanup is in progress** (see `docs/audit-100-plan.md`). Waves 1–2
+shipped: T1 (fixed sleeps), T2 (80% coverage floor), S1 (Sobelow + two XSS
+fixes), S2 (`/sync/*` per-user rate limit). Next in this run: **S3 (CSP)** —
+it is also what turns `mix sobelow --exit medium` green (the single remaining
+high is `Config.CSP`); then P1 (batch `users_by_ids/1`), which reaches the
+session cap of 6 committed items. Remaining after that: P2/P3, A2/A1, D1/D2,
+T4, and the A3/P4/T3 exemption notes.
 
 **Immediate product step:** **Phase 9d — web scale and provenance.** 9a–9c are shipped,
 so an imported merge history can publish. The full plan is
@@ -1658,6 +1680,17 @@ expected for the closeout follow-ups.
   the review UI (optional 4d/UI-pass work).
 
 ## Last Updated
+2026-11-11 (audit 100, wave 2) — **S1 + S2 shipped.** Sobelow 0.18.1 (dev/test,
+server only, spec §11) found two real XSS mediums in the token pages, now
+escaped HEEx with `no-store`; `mix sobelow --exit medium` is 0 medium / 1 high
+(`Config.CSP`, deferred to S3) / 26 triaged lows. `/sync/*` now has a per-user
+Hammer fix-window bound (`CAD_SYNC_RATE_LIMIT` 300 / `CAD_SYNC_RATE_SCALE`
+60000, non-positive disables) returning `429` + `Retry-After` before any
+controller work, with 9 request tests; the meld limiter remains the inner
+bound. Gate: 1202 tests (332 shared + 627 server + 243 daemon), format and
+dev/prod compile clean. **Paused mid-run:** next is S3 (CSP), which also turns
+Sobelow green; then P1. Resume with `/audit-100 S3 P1` (or the full list) —
+the run ledger is `.claude/plans/audit-100/progress.md`.
 2026-11-11 (audit 100, wave 1) — **T1 + T2 shipped** (`73c9d65` and the T2
 commit). 36 fixed sleeps removed via shared polling/barrier helpers; three
 false-green tests fixed in the process. Coverage now has an explicit 80% floor
