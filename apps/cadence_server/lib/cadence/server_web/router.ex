@@ -14,7 +14,25 @@ defmodule Cadence.ServerWeb.Router do
     plug(:fetch_session)
     plug(:fetch_flash)
     plug(:protect_from_forgery)
-    plug(:put_secure_browser_headers)
+
+    # This must stay a literal map with the lowercase "content-security-policy"
+    # key: any indirection (function call, variable, interpolation) downgrades
+    # Sobelow's Config.CSP check to :low, which still passes `--exit medium`, and
+    # a capitalized key emits two headers.
+    #
+    # `style-src 'unsafe-inline'` is required for the DAG layout and stagger
+    # style attributes (nonces cannot cover style attributes). `img-src https:`
+    # is load-bearing for MDEx README badges and for the AshAuth sign-in page's
+    # banner image; images are not a script vector.
+    #
+    # Only the `:browser` pipeline emits this header: unmatched-path 404 error
+    # pages are rendered from the pre-pipeline conn, and `/health` and `/sync/*`
+    # are not browser pages.
+    plug(:put_secure_browser_headers, %{
+      "content-security-policy" =>
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
+    })
+
     plug(:load_from_session)
   end
 

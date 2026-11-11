@@ -640,6 +640,13 @@ public read-only proposal page. `/p/:slug/reviews` and
 `/p/:slug/reviews/:proposal_id` are member-only (authenticated, §7.2) and are
 never public. `/auth`, `/sync`, `/health`, and static paths are reserved.
 
+Every response from the `:browser` pipeline carries a static
+Content-Security-Policy (`default-src 'self'` with same-origin scripts and
+LiveView connections; `style-src` permits inline style attributes for the DAG
+and `img-src` permits `https:` for README badges and the sign-in banner);
+unmatched-path 404 error pages are rendered outside the pipeline and are the
+only exception.
+
 ### 7.2 Owner/trusted views (authenticated)
 
 - All of the above, plus:
