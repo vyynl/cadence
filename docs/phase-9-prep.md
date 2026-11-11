@@ -3,8 +3,8 @@
 **Spec:** §4.1 (nodes), §5.1/§5.3 (daemon, commit pipeline), §6 (DAG), §7.3
 (web DAG), §10.1/§10.2 (push protocol), §12.6 (env contract), §13 (build
 order), §16 (open decisions).
-**Status:** approved 2026-11-11 (recommended defaults D1–D10); **9a shipped
-2026-11-11**; 9b–9e pending, no user-facing import yet.
+**Status:** approved 2026-11-11 (recommended defaults D1–D10); **9a and 9b
+shipped 2026-11-11**; 9c–9e pending, no web/server-side import yet.
 **Dependencies:** none new. `GitStore` already reads loose objects and packs.
 
 ## Goal
@@ -130,7 +130,13 @@ reachable from the DAG/repository browser.
   and annotated tags are read but not copied into the destination store (only
   their commit is imported).
 
-### 9b — daemon importer, API, CLI
+### 9b — daemon importer, API, CLI (shipped 2026-11-11)
+
+Shipped as `Cadence.Daemon.Importer` (+ `ImportTasks`), `POST /import`,
+`GET /import/:id`, `mix cad.import`, `Cadence.Daemon.Release.import/2,3`, and
+`Cadence.Daemon.ImportClient`. Shared additions: `GitStore.list_refs/1`,
+`resolve_revision/2` accepting full `refs/...` names, and
+`GitStore.preflight_blobs/3` (blob cap + per-node estimate).
 
 - `Cadence.Daemon.Importer`: validation, refs, walk, copy, batched node insert
   with sync rows, pin/pointer, dirty-tree commit, job state, progress, typed

@@ -1865,6 +1865,11 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_SYNC_MAX_ATTEMPTS` | no | `10` | Max automatic retries for a pending node |
 | `CAD_SYNC_PUSH_LIMIT` | no | `100` | Max nodes per push batch |
 | `CAD_SYNC_EXISTS_LIMIT` | no | `5000` | Existence-handshake chunk size (keep at or below the server's cap) |
+| `CAD_IMPORT_MAX_COMMITS` | no | `2000` | Max commits one import walks; a larger history is a typed error (the effective cap is the smaller of this and `--limit`) |
+| `CAD_IMPORT_MAX_BLOB_BYTES` | no | `8388608` | Reject an import containing a larger blob (`0` disables) |
+| `CAD_IMPORT_MAX_SECONDS` | no | `1800` | Wall-clock bound for one import job; the worker kills it (`0` disables) |
+| `CAD_IMPORT_ALLOW_SHALLOW` | no | `false` | Allow importing a shallow clone (boundary commits become roots) |
+| `CAD_IMPORT_PUSH_BATCH` | no | `100` | Nodes inserted and enqueued per transaction batch during an import |
 | `CAD_IGNORE` | no | `_build,deps,node_modules,.venv,venv,__pycache__,.elixir_ls,target` | Comma-separated entry names skipped when snapshotting the working tree (`.git` is always skipped) |
 | `CAD_LLM_TIMEOUT_MS` | no | `5000` | LLM request timeout |
 | `CAD_LLM_RATE_LIMIT` | no | `10` | LLM calls per rate window |
@@ -2198,6 +2203,39 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   the server's prod variables; `docs/daemon-setup.md` covers release install,
   migration, registration, systemd, and upgrades (§12.2/§12.8). A burrito
   single-file binary remains optional and unimplemented.
+
+**Phase 9 — Import an existing Git repository**
+- 9a — shared import primitives (shipped): `detect_repository/1` (worktree,
+  `.git` redirect, bare), `read_ref/2`, `resolve_revision/2` (branch, tag,
+  `HEAD`, full `refs/...` names, annotated-tag peel), `shallow_commits/1`,
+  `walk_commits/3` (bounded BFS, parents-first Kahn order, `:max`/`:truncate`,
+  shallow boundaries, typed missing-object errors), and
+  `copy_commit_objects/4` (shared-tree visited set, per-object re-hash, blob
+  cap, gitlink skip). Submodule gitlinks are `:commit` entries that scans,
+  pushes, and the browser skip; tag objects are readable from loose files and
+  packs (pack type 4) but are not copied into the destination.
+- 9b — daemon importer, job API, CLI (shipped):
+  `Cadence.Daemon.Importer` validates the source, resolves refs (default
+  `HEAD`, repeatable `--ref`, `--all-refs`), walks the graph, preflights blob
+  sizes with `GitStore.preflight_blobs/3`, copies objects, inserts nodes in
+  `CAD_IMPORT_PUSH_BATCH` transactions (each with a `SyncPending` row,
+  parents-first), pins the selected tip, moves the session pointer, commits a
+  dirty working tree once against the imported tip, resumes the watcher, and
+  wakes sync. Imported nodes keep the original SHA, full message, author
+  timestamp, and parents (merges preserved), are flagless and
+  `docs_state: :skipped`, and carry `session_metadata["import"]` provenance
+  (refs on tip nodes only). Jobs run one at a time under
+  `Cadence.Daemon.ImportTasks`, bounded by `CAD_IMPORT_MAX_SECONDS`; state is
+  in memory (no table) and retained for the newest 50 terminal jobs. Re-runs
+  are idempotent by `(project_id, git_commit_sha)`; a project with nodes but
+  none imported is refused. The socket API adds `POST /import` (202 + job,
+  typed 400/404/409/422/429/503) and `GET /import/:id`; `mix cad.import` and
+  `Cadence.Daemon.Release.import/2,3` submit and poll. A bare source is
+  registered data-only (no watcher/queue) and never snapshots its own object
+  directory (§12.6).
+- 9c–9e remain: server owner-only multi-parent push + sync body limit, web
+  newest-N DAG + paged History + provenance, and docs/spec/live smoke. 9e adds
+  the normative pipeline text as §5.7 and records the §10.2 exception.
 
 ---
 

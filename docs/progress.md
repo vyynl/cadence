@@ -11,8 +11,9 @@ daemon convergence. The completed phase briefs are archived and
 A post-release DAG fix corrected the hover-card layering and removed the native
 SVG "Project session graph" tooltip; the rubric-specific path from 87 to 100 is
 `docs/audit-100-plan.md`. Phase 9 (import a local Git repository) is approved;
-slice **9a** (shared read-only Git primitives) shipped, and 9b (daemon
-importer/API/CLI) is next. Remaining work is optional and recorded in spec §16.
+slice **9a** (shared read-only Git primitives) and **9b** (daemon importer, job
+API, CLI) shipped. 9c (server owner-only multi-parent push + sync body limit) is
+next. Remaining work is optional and recorded in spec §16.
 
 ## Done (summary)
 
@@ -831,8 +832,8 @@ importer/API/CLI) is next. Remaining work is optional and recorded in spec §16.
   primitives (ref resolution, commit walk, object copy), the daemon importer +
   job API + `mix cad.import`, the server's owner-only multi-parent push
   exception and sync body limit, and the web's newest-N DAG cap + paged
-  History. The recommended defaults D1–D10 are approved; 9a shipped and 9b–9e
-  remain.
+  History. The recommended defaults D1–D10 are approved; 9a/9b shipped and
+  9c–9e remain.
 - **DAG hover-card layering fix (2026-11-11)** — the web DAG's node card was
   part of the node's `<a>`, so a later node's dot painted over a card extending
   below/right of the hovered node and the top layers were unreadable. The SVG
@@ -846,6 +847,33 @@ importer/API/CLI) is next. Remaining work is optional and recorded in spec §16.
   to the card body, no node layer above it) and pinned by
   `dag_component_test.exs` (no `<title>`, overlay after `dag-nodes`, one link
   per node). Spec §7.3 records the layer rule; ui-notes moved to Done.
+- **Phase 9b (daemon importer, job API, CLI, 2026-11-11)** — Git import is now
+  usable from the daemon. `Cadence.Daemon.Importer` validates the source
+  (worktree, `.git` redirect, bare), resolves `HEAD`/`--ref`/`--all-refs`,
+  walks commits (bounded, parents-first), preflights blob sizes, copies
+  objects, inserts nodes in `CAD_IMPORT_PUSH_BATCH` transactions (each with a
+  `SyncPending` row), pins the selected tip, moves the session pointer, commits
+  a dirty worktree once, resumes the watcher, and wakes sync. Nodes keep the
+  original SHA/message/author timestamp/parents (merges preserved), are
+  flagless and `docs_state: :skipped`, and carry `session_metadata["import"]`
+  provenance (refs on tips only). Jobs run one at a time under
+  `Cadence.Daemon.ImportTasks`, bounded by `CAD_IMPORT_MAX_SECONDS`, retained
+  in memory (newest 50); re-runs are idempotent by
+  `(project_id, git_commit_sha)` and a project with non-imported nodes is
+  refused. `POST /import` returns 202 + job with typed 400/404/409/422/429/503
+  errors; `GET /import/:id` reports progress; `mix cad.import` and
+  `Cadence.Daemon.Release.import/2,3` poll through `ImportClient`. Bare
+  sources register data-only (no queue/watcher, including across rehydrate).
+  Shared additions: `GitStore.list_refs/1`, full `refs/...` names in
+  `resolve_revision/2`, and `preflight_blobs/3` (blob cap + per-node estimate).
+  Config: `CAD_IMPORT_MAX_COMMITS`, `CAD_IMPORT_MAX_BLOB_BYTES`,
+  `CAD_IMPORT_MAX_SECONDS`, `CAD_IMPORT_ALLOW_SHALLOW`,
+  `CAD_IMPORT_PUSH_BATCH`; `Projects.register_project/2` gained `watch: false`,
+  and test state now lives under a temp `state_dir`. Spec §12.6/§13,
+  `docs/phase-9-prep.md`, and `docs/README.md` updated. 23 new daemon tests +
+  5 shared tests (243 daemon + 332 shared + 603 server = 1,178 total); 9c is
+  next. Lesson:
+  `.claude/solutions/otp/token-scoped-watcher-suspension-20261111.md`.
 - **Audit 87→100 plan (2026-11-11)** — `docs/audit-100-plan.md` turns each
   remaining rubric deduction into a concrete task (ProjectLive split, result
   component, users N+1, preview query, proposal cache, Sobelow, `/sync` rate
@@ -888,23 +916,24 @@ importer/API/CLI) is next. Remaining work is optional and recorded in spec §16.
 
 ## Next
 
-**Immediate step:** **Phase 9b — daemon importer, job API, and CLI.** 9a is
-shipped: `GitStore.detect_repository/1`, `read_ref/2`, `resolve_revision/2`,
-`shallow_commits/1`, `walk_commits/3`, and `copy_commit_objects/4` are tested.
-The full plan is `docs/phase-9-prep.md` (D1–D10 approved). 9b must:
+**Immediate step:** **Phase 9c — server protocol for imported merges.** 9a and
+9b are shipped. The full plan is `docs/phase-9-prep.md` (D1–D10 approved). 9c
+must:
 
-1. Add `Cadence.Daemon.Importer` (one job at a time, supervised): validate the
-   source, resolve the selected refs, walk commits, copy objects, insert nodes
-   parents-first in batches (each with a `SyncPending` row), pin the tip, move
-   the session pointer, resume the watcher, and commit a dirty tree once.
-2. Add `POST /import` (202 + job id) and `GET /import/:id` with progress and
-   typed errors, plus `mix cad.import` and `Cadence.Daemon.Release.import/…`.
-3. Add the `CAD_IMPORT_*` keys to `runtime.exs`, `.env.example`, and spec
-   §12.6; tests for linear/root/merge/tag/idempotent/shallow/large-blob/dirty
-   tree/job/API paths.
+1. Make `@max_parents` a policy: ordinary pushes stay at 1; an owner-pushed
+   node carrying `session_metadata["import"]["source"] == "git"` may have up to
+   `CAD_SYNC_MAX_PUSH_PARENTS` (default 8) parents. `check_parents/2` validates
+   every parent and the project scope, and the error contract stays
+   `failed_local_id`-compatible.
+2. Add a sync-scoped `Plug.Parsers` limit (`CAD_SYNC_MAX_BODY_BYTES`, default
+   64 MiB) without changing the browser/public pipeline limits; test 413 and
+   the boundary.
+3. Add the keys to spec §10.2/§12.6 and record the governance trade (imported
+   multi-parent nodes bypass the meld review path) in §16.
 
-Then 9c (server owner-only multi-parent push + sync-scoped body limit), 9d
-(newest-N DAG + paged History + provenance), and 9e (docs/spec/live smoke).
+Then 9d (newest-N DAG + paged History + provenance) and 9e (docs/spec/live
+smoke). A real-server import of a merged history cannot publish until 9c lands;
+the daemon side is complete and tested.
 
 After that, optional follow-ups, roughly in priority order:
 
@@ -977,8 +1006,9 @@ expected for the closeout follow-ups.
   `:CadProposals`, 6c M1 (run queue) / M2 (retention) / M3 (paging), Phase
   8a (production server release), Phase 8b (daemon release), closeout slice 1
   (proposal links, `actions_manifest`, meld docs state), closeout slice 2 (run
-  queue cap, header nav, seeded run, raw-log download), the DAG width fix, and
-  closeout slice 3 (final audit, P1 fixes, 1.0.0 release) are complete, and
+  queue cap, header nav, seeded run, raw-log download), the DAG width fix,
+  closeout slice 3 (final audit, P1 fixes, 1.0.0 release), and Phase 9a/9b
+  (shared import primitives + daemon importer/API/CLI) are complete, and
   every review's must-fix item is applied and verified. The audit's remaining
   P3 items are optional improvements, not blockers (see `Next` and
   `docs/audit-2026-11-11.md`). Pre-existing
@@ -988,6 +1018,54 @@ expected for the closeout follow-ups.
 
 ## Spec Deltas / Open Items
 
+- **Phase 9b implementation notes (2026-11-11)** — (a) Import job state is
+  in-memory by design (D8): no table, the newest 50 terminal jobs are retained,
+  and a daemon restart loses history; a resubmit is idempotent and resumes.
+  (b) `POST /import` performs the source validation, ref resolution, commit
+  walk, and blob preflight synchronously (so errors are typed HTTP responses
+  and no project is created on a cap/shallow/large-blob failure); the object
+  copy + inserts run in the job. On a huge history the preflight can take a
+  while before the 202; `CAD_IMPORT_MAX_COMMITS` (2,000) bounds the walk.
+  (c) The selected refs are recorded only on tip nodes; non-tip nodes carry
+  `source`/`author`/`author_email`/`imported_at` so a repo with hundreds of
+  refs does not repeat them on every node. (d) A re-run pins only newly
+  inserted tip nodes; a pin change on an already-pushed node does not
+  re-sync (the server owns that row), so the first import is the deterministic
+  preview and later ref moves add new pinned tips without unpinning old ones.
+  (e) `point_at_tip` never rewinds a local (non-imported) pointer, and the
+  dirty-tree commit compares against the current pointer, so a re-run after
+  local edits neither resets the session nor duplicates the dirty node.
+  (f) A bare source is registered data-only (no queue/watcher) and
+  `Projects.rehydrate` skips bare locations, so an external fetch into a bare
+  repo can never become a node. (g) `Projects.register_project/2` gained
+  `watch: false` and the daemon test config now sets a temp `state_dir`, so
+  tests no longer write Git stores into the operator's real state directory.
+  (h) Imported merge nodes cannot publish against the current server (it still
+  refuses >1 parent); 9c closes that. (i) `preflight_blobs/3` estimates the
+  per-node payload from blob content (tree/commit headers excluded) and reads
+  each unique blob once; tree traversal is per commit, bounded by the commit
+  cap.
+- **Phase 9b review fixes (2026-11-11)** — (a) Suspensions are token-scoped:
+  `Watcher.suspend(project_id, token)` / `resume(project_id, token)` keep a
+  token set, so a doc job's resume cannot lift an import's suspension (and
+  vice versa); the importer uses `{:import, job_id}` and releases it in
+  `after` **and** in the timeout handler (a killed task never runs `after`).
+  (b) Terminal jobs drop their internal plan, so 50 retained jobs do not pin
+  thousands of decoded commits in memory. (c) `copy_commit_objects/4` uses
+  `present_shas/2` once per object instead of `has_object?/2`, which reloads
+  the pack cache on every miss. (d) A malformed/unreadable source object is a
+  typed `{:invalid_source, :unreadable_object}` (422) instead of crashing the
+  request, and a non-UTF-8 commit message is sanitized with
+  `String.replace_invalid/1` before it reaches the DB/JSON. (e) The job reports
+  `merge_commits` and `mix cad.import` warns that those nodes (and their
+  descendants) stay queued until 9c raises the server's parent limit.
+  (f) `ImportClient.wait/3` starts its deadline when the job starts running,
+  so queue time behind other imports is not charged to the job's bound; an
+  omitted `allow_shallow`/`all_refs` is now truly omitted from the request, so
+  `CAD_IMPORT_ALLOW_SHALLOW=true` works for the CLI and release helper.
+  (g) A failed import intentionally leaves no watcher until the next re-run or
+  daemon boot: starting one before the first node exists would create a
+  non-imported root and make the retry `:project_not_importable`.
 - **Phase 9a implementation notes (2026-11-11)** — (a) Submodule gitlinks
   (tree mode `160000`) are now `:commit` entries, not blobs: `objects_from/2`,
   `walk_blobs/3`, and secret scans skip them, `read_path/4` returns
@@ -1517,6 +1595,33 @@ expected for the closeout follow-ups.
   the review UI (optional 4d/UI-pass work).
 
 ## Last Updated
+2026-11-11 (Phase 9b) — **daemon importer, job API, and CLI.** Added
+`Cadence.Daemon.Importer` (one job at a time under
+`Cadence.Daemon.ImportTasks`, bounded by `CAD_IMPORT_MAX_SECONDS`, in-memory
+job state, newest 50 retained): source validation, ref resolution
+(`HEAD`/`--ref`/`--all-refs`, annotated-tag peel), bounded parents-first walk,
+blob preflight, object copy, batched node inserts with sync rows, tip pin,
+session pointer, one dirty-tree commit, watcher resume, and a sync wake.
+Imported nodes are flagless, `docs_state: :skipped`, keep original
+SHAs/messages/author timestamps/parents, and carry `session_metadata["import"]`
+(refs on tips only). `POST /import` (202 + job, typed errors) and
+`GET /import/:id`; `mix cad.import`; `Cadence.Daemon.Release.import/2,3` +
+`ImportClient`. Shared: `GitStore.list_refs/1`, full `refs/...` names in
+`resolve_revision/2`, `preflight_blobs/3`. Bare sources register data-only and
+rehydrate skips them; `Projects.register_project/2` gained `watch: false`, and
+the test config now uses a temp `state_dir`. Config: `CAD_IMPORT_MAX_COMMITS`,
+`CAD_IMPORT_MAX_BLOB_BYTES`, `CAD_IMPORT_MAX_SECONDS`,
+`CAD_IMPORT_ALLOW_SHALLOW`, `CAD_IMPORT_PUSH_BATCH`. Spec §12.6/§13, brief, and
+README updated. 23 new daemon tests + 5 shared tests; 243 daemon + 332 shared + 603
+server = 1,178 total. Next: 9c (server owner-only multi-parent push + sync body
+limit).
+
+2026-11-11 (session close) — **Phase 9b committed at `7ae407a`**
+(`feat(daemon): import an existing Git repository (Phase 9b)`), with this
+handoff note as the follow-up docs commit. Working tree clean; format and
+dev/prod compile clean. Next session: **9c** — `@phx-full` at
+`docs/phase-9-prep.md` (D1–D10 are already approved).
+
 2026-11-11 (Phase 9a) — **shared Git import primitives.** Added
 `GitStore.detect_repository/1`, `read_ref/2`, `resolve_revision/2` (annotated
 tags peel), `shallow_commits/1`, `walk_commits/3` (bounded, parents-first,
