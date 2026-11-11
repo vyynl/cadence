@@ -1,6 +1,7 @@
 # Elixir
 /_build/
 /cover/
+/apps/*/cover/
 /deps/
 /doc/
 /.fetch
