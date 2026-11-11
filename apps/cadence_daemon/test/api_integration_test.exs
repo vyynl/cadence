@@ -28,6 +28,8 @@ defmodule Cadence.Daemon.API.IntegrationTest do
         socket
       )
 
+    on_exit(fn -> ProjectRegistry.stop_project(project_id) end)
+
     %{status: 200, body: %{"projects" => projects}} =
       Client.request("GET", "/projects", nil, socket)
 
@@ -56,8 +58,10 @@ defmodule Cadence.Daemon.API.IntegrationTest do
 
     slug = "release-#{System.unique_integer([:positive])}"
 
-    assert %{"project" => %{"slug" => ^slug, "name" => "Release"}} =
+    assert %{"project" => %{"slug" => ^slug, "name" => "Release"} = project} =
              Cadence.Daemon.Release.register("Release", slug, work_dir, socket)
+
+    on_exit(fn -> ProjectRegistry.stop_project(project["id"]) end)
 
     %{status: 200, body: %{"projects" => projects}} =
       Client.request("GET", "/projects", nil, socket)

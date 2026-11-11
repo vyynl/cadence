@@ -123,6 +123,49 @@ defmodule Cadence.Daemon.WatcherTest do
     assert eventually(fn -> count_nodes(project) == 1 end)
   end
 
+  test "survives a vanished project directory and resumes when it returns",
+       %{work_dir: work_dir, git_dir: git_dir, project: project} do
+    queue =
+      start_supervised!(
+        {CommitQueue, [project_id: project.id, work_dir: work_dir, git_dir: git_dir]}
+      )
+
+    name = {:via, Registry, {Cadence.Daemon.Queues, {:watcher, project.id}}}
+
+    pid =
+      start_supervised!(
+        {Watcher,
+         [
+           dir: work_dir,
+           commit_queue: queue,
+           backend: :fs_poll,
+           interval: 50,
+           debounce_ms: 50,
+           reconnect_ms: 50,
+           name: name
+         ]}
+      )
+
+    # Let the poller establish its baseline before removing the directory.
+    Process.sleep(300)
+
+    File.rm_rf!(work_dir)
+
+    # The backend crashes on its next poll. The watcher must stay up (that is
+    # what keeps the project supervisor from restarting it in a loop) and no
+    # commit may be attempted against the missing tree.
+    Process.sleep(400)
+    assert Process.alive?(pid)
+    refute Watcher.suspended?(project.id)
+    assert count_nodes(project) == 0
+
+    File.mkdir_p!(work_dir)
+    Process.sleep(300)
+    File.write!(Path.join(work_dir, "back.txt"), "hi\n")
+
+    assert eventually(fn -> count_nodes(project) == 1 end)
+  end
+
   defp count_nodes(project) do
     Repo.aggregate(where(Node, [n], n.project_id == ^project.id), :count)
   end

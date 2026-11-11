@@ -34,6 +34,7 @@ defmodule Cadence.Daemon.ProjectSupervisor do
       |> maybe_put(:debounce_ms, opts[:debounce_ms])
       |> maybe_put(:backend, opts[:backend])
       |> maybe_put(:interval, opts[:interval])
+      |> maybe_put(:reconnect_ms, opts[:reconnect_ms])
 
     children = [
       {CommitQueue,

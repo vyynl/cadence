@@ -11,13 +11,38 @@ defmodule Cadence.Daemon.Watcher do
   tree. Events seen while suspended are dropped, and `resume/1` re-arms a
   debounce that was already pending (a user edit is never lost), so an
   automated write cannot create a second node (spec §9.3).
+
+  The watcher owns its file-system backend for its whole lifetime instead of
+  dying with it. A project directory that is deleted, renamed, or briefly
+  unreadable makes `file_system`'s backend crash; a linked watcher would then
+  die, the project supervisor would restart it, and sustained restarts could
+  exhaust the supervisor's intensity and take the whole project registry down
+  with it. Here the backend exit is caught, retried on a slow timer, and the
+  watcher resumes when the directory comes back.
   """
 
   use GenServer
 
+  require Logger
+
   alias Cadence.Daemon.CommitQueue
 
-  defstruct [:queue, :debounce_ms, :timer, suspended: false, pending: false]
+  @default_reconnect_ms 5_000
+
+  defstruct [
+    :dir,
+    :backend,
+    :interval,
+    :retry_ms,
+    :worker,
+    :reconnect_timer,
+    :last_error,
+    :queue,
+    :debounce_ms,
+    :timer,
+    suspended: false,
+    pending: false
+  ]
 
   def start_link(opts) do
     {name, opts} = Keyword.pop(opts, :name)
@@ -66,21 +91,30 @@ defmodule Cadence.Daemon.Watcher do
         Application.get_env(:cadence_daemon, :watch_backend, :fs_inotify)
       )
 
-    fs_opts = [dirs: [dir], backend: backend]
+    # Catching the backend's exit is what keeps a broken project local: without
+    # it the linked backend crash kills the watcher and the supervisor restarts
+    # it in a tight loop.
+    Process.flag(:trap_exit, true)
 
-    fs_opts =
-      case Keyword.get(opts, :interval) do
-        nil -> fs_opts
-        interval -> Keyword.put(fs_opts, :interval, interval)
-      end
+    state = %__MODULE__{
+      dir: dir,
+      backend: backend,
+      interval: Keyword.get(opts, :interval),
+      retry_ms: Keyword.get(opts, :reconnect_ms, @default_reconnect_ms),
+      queue: queue,
+      debounce_ms: debounce_ms
+    }
 
-    case FileSystem.start_link(fs_opts) do
+    case open_backend(state) do
       {:ok, worker} ->
-        FileSystem.subscribe(worker)
-        {:ok, %__MODULE__{queue: queue, debounce_ms: debounce_ms, timer: nil}}
+        {:ok, %{state | worker: worker}}
 
-      :ignore ->
-        {:stop, :no_file_system_backend}
+      {:error, reason} ->
+        # Stay alive and retry. A watcher that stopped here would be restarted
+        # by the project supervisor; three failures in five seconds would
+        # terminate that supervisor.
+        log_failure(state, reason)
+        {:ok, schedule_reconnect(%{state | last_error: reason})}
     end
   end
 
@@ -110,26 +144,122 @@ defmodule Cadence.Daemon.Watcher do
   end
 
   @impl true
-  def handle_info({:file_event, _worker, {_path, _events}}, %{suspended: true} = state) do
+  def handle_info({:file_event, worker, {_path, _events}}, %{worker: worker} = state)
+      when worker != nil do
+    if state.suspended do
+      {:noreply, state}
+    else
+      {:noreply, schedule_commit(state)}
+    end
+  end
+
+  def handle_info({:file_event, worker, :stop}, %{worker: worker} = state) when worker != nil do
     {:noreply, state}
   end
 
-  def handle_info({:file_event, _worker, {_path, _events}}, state) do
-    {:noreply, schedule_commit(state)}
+  # A late event from a backend that already died.
+  def handle_info({:file_event, _worker, _event}, state), do: {:noreply, state}
+
+  def handle_info({:EXIT, worker, reason}, %{worker: worker} = state) when worker != nil do
+    Logger.warning("watcher backend for #{state.dir} exited: #{summarize_exit(reason)}; retrying")
+
+    {:noreply, schedule_reconnect(%{state | worker: nil, last_error: reason})}
   end
 
-  def handle_info({:file_event, _worker, :stop}, state) do
-    {:noreply, state}
+  def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
+
+  def handle_info(:reconnect, %{worker: nil} = state) do
+    state = %{state | reconnect_timer: nil}
+
+    case open_backend(state) do
+      {:ok, worker} ->
+        Logger.info("watcher resumed for #{state.dir}")
+        {:noreply, %{state | worker: worker, last_error: nil}}
+
+      {:error, reason} ->
+        if reason != state.last_error, do: log_failure(state, reason)
+        {:noreply, schedule_reconnect(%{state | last_error: reason})}
+    end
   end
+
+  def handle_info(:reconnect, state), do: {:noreply, state}
 
   def handle_info(:debounced_commit, %{suspended: true} = state) do
     {:noreply, %{state | timer: nil}}
   end
 
   def handle_info(:debounced_commit, state) do
-    CommitQueue.commit(state.queue, :auto, skip_unchanged: true)
+    # A debounce can outlive the directory (delete/rename); committing then
+    # would crash the queue on a snapshot error. Wait for the watcher to
+    # reconnect instead.
+    if File.dir?(state.dir) do
+      CommitQueue.commit(state.queue, :auto, skip_unchanged: true)
+    end
+
     {:noreply, %{state | timer: nil}}
   end
+
+  @impl true
+  def terminate(_reason, %{worker: worker}) when is_pid(worker) do
+    # The backend is linked, so it follows this process down; stopping it
+    # explicitly keeps shutdown ordering deterministic.
+    Process.exit(worker, :shutdown)
+    :ok
+  end
+
+  def terminate(_reason, _state), do: :ok
+
+  defp open_backend(%{dir: dir} = state) do
+    if File.dir?(dir) do
+      fs_opts = [dirs: [dir], backend: state.backend]
+
+      fs_opts =
+        case state.interval do
+          nil -> fs_opts
+          interval -> Keyword.put(fs_opts, :interval, interval)
+        end
+
+      case start_backend(fs_opts) do
+        {:ok, worker} ->
+          FileSystem.subscribe(worker)
+          {:ok, worker}
+
+        :ignore ->
+          {:error, :no_file_system_backend}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    else
+      {:error, :no_such_directory}
+    end
+  end
+
+  defp start_backend(fs_opts) do
+    FileSystem.start_link(fs_opts)
+  rescue
+    exception -> {:error, exception}
+  end
+
+  defp log_failure(state, reason) do
+    Logger.warning(
+      "watcher for #{state.dir} unavailable (#{inspect(reason)}); retrying every #{state.retry_ms} ms"
+    )
+  end
+
+  # A crashed GenServer reports `{exception, stacktrace}`; log the message, not
+  # the whole stack, so one missing directory does not flood the daemon log.
+  defp summarize_exit({%{__struct__: _} = exception, _stacktrace}) do
+    Exception.message(exception)
+  end
+
+  defp summarize_exit(reason), do: inspect(reason)
+
+  defp schedule_reconnect(%{reconnect_timer: nil} = state) do
+    %{state | reconnect_timer: Process.send_after(self(), :reconnect, state.retry_ms)}
+  end
+
+  defp schedule_reconnect(state), do: state
 
   defp schedule_commit(state) do
     if state.timer, do: Process.cancel_timer(state.timer)
