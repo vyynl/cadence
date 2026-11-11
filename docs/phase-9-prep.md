@@ -3,8 +3,8 @@
 **Spec:** §4.1 (nodes), §5.1/§5.3 (daemon, commit pipeline), §6 (DAG), §7.3
 (web DAG), §10.1/§10.2 (push protocol), §12.6 (env contract), §13 (build
 order), §16 (open decisions).
-**Status:** approved 2026-11-11 (recommended defaults D1–D10); **9a and 9b
-shipped 2026-11-11**; 9c–9e pending, no web/server-side import yet.
+**Status:** approved 2026-11-11 (recommended defaults D1–D10); **9a, 9b, and 9c
+shipped 2026-11-11**; 9d–9e pending, no web-side import UI yet.
 **Dependencies:** none new. `GitStore` already reads loose objects and packs.
 
 ## Goal
@@ -150,15 +150,23 @@ Shipped as `Cadence.Daemon.Importer` (+ `ImportTasks`), `POST /import`,
 - Tests: linear, root, merge, tag, idempotent re-run, non-empty project, shallow
   reject/allow, large blob preflight, dirty tree, job status, socket/mix paths.
 
-### 9c — server protocol for imported merges
+### 9c — server protocol for imported merges (shipped 2026-11-11)
 
-- `@max_parents` becomes a policy: 1 for ordinary pushes; up to
-  `CAD_SYNC_MAX_PUSH_PARENTS` for owner-pushed nodes carrying the import
-  marker. `check_parents/2` validates every parent and the project scope.
-- Sync-scoped `Plug.Parsers` with `CAD_SYNC_MAX_BODY_BYTES` (default 64 MiB);
-  the browser/public pipeline keeps the default. Tests for 413 and the limit.
-- Spec §10.2 records the exception; `docs/progress.md` notes the governance
-  trade (no review gate for imported merge nodes).
+- `Cadence.Server.Sync` uses a parent policy: 1 for ordinary pushes, up to
+  `CAD_SYNC_MAX_PUSH_PARENTS` (default 8) for an owner pushing a node carrying
+  `session_metadata["import"]["source"] == "git"`. `check_parents/2` validates
+  every parent in one project-scoped query; duplicate parents and cross-project
+  parents are refused. Errors stay `failed_local_id`-compatible
+  (`multiple_parents`, `too_many_parents`, `duplicate_parent`, `unknown_parent`).
+- `Cadence.ServerWeb.Parsers` is the endpoint parser plug: `/sync/*` bodies use
+  `CAD_SYNC_MAX_BODY_BYTES` (default 64 MiB); browser/public routes keep Plug's
+  8 MiB default. A non-positive/non-integer limit falls back to the default.
+- Tests: `sync_nodes_test.exs` covers owner merge push, ordinary/trusted
+  refusal, the cap, cross-project parents, and duplicates;
+  `sync_body_limit_test.exs` covers the 413 boundary, exact-limit acceptance,
+  the browser pipeline, and the fallback.
+- Spec §10.2/§10.4/§12.6/§13/§16 record the exception, the parser limit, and the
+  governance trade.
 
 ### 9d — web scale and provenance
 

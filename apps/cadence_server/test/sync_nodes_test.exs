@@ -567,6 +567,307 @@ defmodule Cadence.ServerWeb.SyncNodesTest do
     end
   end
 
+  describe "imported merges (Phase 9c)" do
+    test "an owner may push an imported merge node with multiple parents", %{
+      conn: conn,
+      project: project,
+      plaintext: plaintext
+    } do
+      dag = build_merge_dag(tmp_dir())
+
+      payload = %{
+        "nodes" => [
+          node_payload(project, dag.root_id, dag.root, [], dag.repo, "root"),
+          node_payload(project, dag.left_id, dag.left, [dag.root_id], dag.repo, "left"),
+          node_payload(project, dag.right_id, dag.right, [dag.root_id], dag.repo, "right"),
+          imported(
+            node_payload(
+              project,
+              dag.merge_id,
+              dag.merge,
+              [dag.left_id, dag.right_id],
+              dag.repo,
+              "merge"
+            )
+          )
+        ]
+      }
+
+      assert %{"mappings" => mappings} =
+               conn
+               |> authed(plaintext)
+               |> post_json("/sync/nodes", payload)
+               |> json_response(200)
+
+      assert length(mappings) == 4
+      assert Repo.get!(Node, dag.merge_id).parents == [dag.left_id, dag.right_id]
+    end
+
+    test "an ordinary owner push still refuses a second parent", %{
+      project: project,
+      plaintext: plaintext
+    } do
+      dag = build_merge_dag(tmp_dir())
+
+      payload = %{
+        "nodes" => [
+          node_payload(project, dag.root_id, dag.root, [], dag.repo, "root"),
+          node_payload(project, dag.left_id, dag.left, [dag.root_id], dag.repo, "left"),
+          node_payload(project, dag.right_id, dag.right, [dag.root_id], dag.repo, "right"),
+          node_payload(
+            project,
+            dag.merge_id,
+            dag.merge,
+            [dag.left_id, dag.right_id],
+            dag.repo,
+            "merge"
+          )
+        ]
+      }
+
+      assert %{
+               "error" => "pushed nodes may have at most one parent",
+               "failed_local_id" => failed_local_id
+             } =
+               authed_conn(plaintext)
+               |> post_json("/sync/nodes", payload)
+               |> json_response(422)
+
+      assert failed_local_id == dag.merge_id
+      assert Repo.get(Node, dag.merge_id) == nil
+    end
+
+    test "a trusted member cannot push an imported merge", %{
+      project: project
+    } do
+      trusted = seed_user("trusted")
+      insert_membership(trusted, project, :trusted)
+      {:ok, trusted_key} = Accounts.create_api_key(trusted, "trusted-sync")
+      plaintext = trusted_key.__metadata__.plaintext_api_key
+
+      dag = build_merge_dag(tmp_dir())
+
+      payload = %{
+        "nodes" => [
+          node_payload(project, dag.root_id, dag.root, [], dag.repo, "root"),
+          node_payload(project, dag.left_id, dag.left, [dag.root_id], dag.repo, "left"),
+          node_payload(project, dag.right_id, dag.right, [dag.root_id], dag.repo, "right"),
+          imported(
+            node_payload(
+              project,
+              dag.merge_id,
+              dag.merge,
+              [dag.left_id, dag.right_id],
+              dag.repo,
+              "merge"
+            )
+          )
+        ]
+      }
+
+      assert %{"failed_local_id" => failed_local_id} =
+               authed_conn(plaintext)
+               |> post_json("/sync/nodes", payload)
+               |> json_response(422)
+
+      assert failed_local_id == dag.merge_id
+      assert Repo.get(Node, dag.merge_id) == nil
+    end
+
+    test "an imported merge above the configured cap is refused", %{
+      project: project,
+      plaintext: plaintext
+    } do
+      previous = Application.get_env(:cadence_server, :sync_max_push_parents)
+      Application.put_env(:cadence_server, :sync_max_push_parents, 2)
+      on_exit(fn -> restore_env(:sync_max_push_parents, previous) end)
+
+      dag = build_merge_dag(tmp_dir())
+
+      payload = %{
+        "nodes" => [
+          node_payload(project, dag.root_id, dag.root, [], dag.repo, "root"),
+          node_payload(project, dag.left_id, dag.left, [dag.root_id], dag.repo, "left"),
+          node_payload(project, dag.right_id, dag.right, [dag.root_id], dag.repo, "right"),
+          node_payload(project, dag.third_id, dag.third, [dag.root_id], dag.repo, "third"),
+          imported(
+            node_payload(
+              project,
+              dag.octopus_id,
+              dag.octopus,
+              [dag.left_id, dag.right_id, dag.third_id],
+              dag.repo,
+              "octopus"
+            )
+          )
+        ]
+      }
+
+      assert %{"error" => "pushed node exceeds the parent limit", "failed_local_id" => id} =
+               authed_conn(plaintext)
+               |> post_json("/sync/nodes", payload)
+               |> json_response(422)
+
+      assert id == dag.octopus_id
+    end
+
+    test "a parent from another project is refused", %{
+      project: project,
+      user: user,
+      plaintext: plaintext
+    } do
+      other_project = insert_project(user, "merge-other")
+      insert_membership(user, other_project, :owner)
+
+      foreign =
+        %Node{}
+        |> Node.changeset(%{
+          project_id: other_project.id,
+          git_commit_sha: String.duplicate("d", 40),
+          parents: [],
+          flags: [],
+          created_by: user.id,
+          created_at: DateTime.utc_now(),
+          docs_state: :skipped
+        })
+        |> Repo.insert!()
+
+      dag = build_merge_dag(tmp_dir())
+
+      payload = %{
+        "nodes" => [
+          node_payload(project, dag.root_id, dag.root, [], dag.repo, "root"),
+          node_payload(project, dag.left_id, dag.left, [dag.root_id], dag.repo, "left"),
+          imported(
+            node_payload(
+              project,
+              dag.merge_id,
+              dag.merge,
+              [dag.left_id, foreign.id],
+              dag.repo,
+              "merge"
+            )
+          )
+        ]
+      }
+
+      assert %{"error" => "parent node does not exist (parents-first ordering required)"} =
+               authed_conn(plaintext)
+               |> post_json("/sync/nodes", payload)
+               |> json_response(422)
+    end
+
+    test "re-pushing an existing imported merge stays idempotent when the cap is lowered", %{
+      conn: conn,
+      project: project,
+      plaintext: plaintext
+    } do
+      dag = build_merge_dag(tmp_dir())
+
+      payload = %{
+        "nodes" => [
+          node_payload(project, dag.root_id, dag.root, [], dag.repo, "root"),
+          node_payload(project, dag.left_id, dag.left, [dag.root_id], dag.repo, "left"),
+          node_payload(project, dag.right_id, dag.right, [dag.root_id], dag.repo, "right"),
+          imported(
+            node_payload(
+              project,
+              dag.merge_id,
+              dag.merge,
+              [dag.left_id, dag.right_id],
+              dag.repo,
+              "merge"
+            )
+          )
+        ]
+      }
+
+      assert %{"mappings" => first} =
+               conn
+               |> authed(plaintext)
+               |> post_json("/sync/nodes", payload)
+               |> json_response(200)
+
+      previous = Application.get_env(:cadence_server, :sync_max_push_parents)
+      Application.put_env(:cadence_server, :sync_max_push_parents, 1)
+      on_exit(fn -> restore_env(:sync_max_push_parents, previous) end)
+
+      assert %{"mappings" => second} =
+               authed_conn(plaintext)
+               |> post_json("/sync/nodes", payload)
+               |> json_response(200)
+
+      assert first == second
+    end
+
+    test "a non-positive parent cap falls back to the ordinary one-parent rule", %{
+      project: project,
+      plaintext: plaintext
+    } do
+      previous = Application.get_env(:cadence_server, :sync_max_push_parents)
+      Application.put_env(:cadence_server, :sync_max_push_parents, 0)
+      on_exit(fn -> restore_env(:sync_max_push_parents, previous) end)
+
+      dag = build_merge_dag(tmp_dir())
+
+      payload = %{
+        "nodes" => [
+          node_payload(project, dag.root_id, dag.root, [], dag.repo, "root"),
+          node_payload(project, dag.left_id, dag.left, [dag.root_id], dag.repo, "left"),
+          node_payload(project, dag.right_id, dag.right, [dag.root_id], dag.repo, "right"),
+          imported(
+            node_payload(
+              project,
+              dag.merge_id,
+              dag.merge,
+              [dag.left_id, dag.right_id],
+              dag.repo,
+              "merge"
+            )
+          )
+        ]
+      }
+
+      assert %{
+               "error" => "pushed nodes may have at most one parent",
+               "failed_local_id" => failed_local_id
+             } =
+               authed_conn(plaintext)
+               |> post_json("/sync/nodes", payload)
+               |> json_response(422)
+
+      assert failed_local_id == dag.merge_id
+    end
+
+    test "duplicate parents are refused", %{project: project, plaintext: plaintext} do
+      dag = build_merge_dag(tmp_dir())
+
+      payload = %{
+        "nodes" => [
+          node_payload(project, dag.root_id, dag.root, [], dag.repo, "root"),
+          node_payload(project, dag.left_id, dag.left, [dag.root_id], dag.repo, "left"),
+          imported(
+            node_payload(
+              project,
+              dag.merge_id,
+              dag.merge,
+              [dag.left_id, dag.left_id],
+              dag.repo,
+              "merge"
+            )
+          )
+        ]
+      }
+
+      assert %{"error" => "parent nodes must be unique", "failed_local_id" => id} =
+               authed_conn(plaintext)
+               |> post_json("/sync/nodes", payload)
+               |> json_response(422)
+
+      assert id == dag.merge_id
+    end
+  end
+
   ## Helpers
 
   defp authed_conn(plaintext) do
@@ -626,6 +927,10 @@ defmodule Cadence.ServerWeb.SyncNodesTest do
     |> Repo.insert!()
   end
 
+  defp imported(node_payload) do
+    put_in(node_payload, ["metadata", "session_metadata"], %{"import" => %{"source" => "git"}})
+  end
+
   defp build_dag(dir) do
     repo = GitStore.init(Path.join(dir, "origin"), bare: true)
 
@@ -656,6 +961,57 @@ defmodule Cadence.ServerWeb.SyncNodesTest do
       child_tree: child_tree,
       sibling: sibling,
       sibling_tree: sibling_tree
+    }
+  end
+
+  defp build_merge_dag(dir) do
+    repo = GitStore.init(Path.join(dir, "origin"), bare: true)
+
+    root_tree =
+      build_tree(repo, Path.join(dir, "merge-root"), %{"README.md" => "# Root\n"})
+
+    root = GitStore.write_commit(repo, root_tree, [], @author, "root")
+
+    left_tree = build_tree(repo, Path.join(dir, "merge-left"), %{"left.txt" => "left\n"})
+    left = GitStore.write_commit(repo, left_tree, [root], @author, "left")
+
+    right_tree = build_tree(repo, Path.join(dir, "merge-right"), %{"right.txt" => "right\n"})
+    right = GitStore.write_commit(repo, right_tree, [root], @author, "right")
+
+    third_tree = build_tree(repo, Path.join(dir, "merge-third"), %{"third.txt" => "third\n"})
+    third = GitStore.write_commit(repo, third_tree, [root], @author, "third")
+
+    merge_tree =
+      build_tree(repo, Path.join(dir, "merge-result"), %{
+        "left.txt" => "left\n",
+        "right.txt" => "right\n"
+      })
+
+    merge = GitStore.write_commit(repo, merge_tree, [left, right], @author, "merge")
+
+    octopus_tree =
+      build_tree(repo, Path.join(dir, "merge-octopus"), %{
+        "left.txt" => "left\n",
+        "right.txt" => "right\n",
+        "third.txt" => "third\n"
+      })
+
+    octopus = GitStore.write_commit(repo, octopus_tree, [left, right, third], @author, "octopus")
+
+    %{
+      repo: repo,
+      root_id: Ecto.UUID.generate(),
+      left_id: Ecto.UUID.generate(),
+      right_id: Ecto.UUID.generate(),
+      third_id: Ecto.UUID.generate(),
+      merge_id: Ecto.UUID.generate(),
+      octopus_id: Ecto.UUID.generate(),
+      root: root,
+      left: left,
+      right: right,
+      third: third,
+      merge: merge,
+      octopus: octopus
     }
   end
 

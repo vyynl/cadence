@@ -1329,6 +1329,18 @@ or `config/`.
   from an owner/trusted member succeed.
 - Push: `POST /sync/nodes` with a batch of new local nodes (Git objects +
   metadata). A batch is scoped to one project and must be parents-first.
+- A pushed node normally has at most one parent. The exception is an imported
+  Git merge: the project **owner** may push a node with up to
+  `CAD_SYNC_MAX_PUSH_PARENTS` (default 8) parents when it carries
+  `session_metadata["import"]["source"] == "git"` (§13 Phase 9). Every parent
+  must exist in the same project and the list must be unique; trusted members,
+  ordinary nodes, and unmarked multi-parent payloads are refused with a 422 and
+  `failed_local_id`. Imported merges are not reviewed like melds — the
+  governance trade is recorded in §16.
+- Sync routes parse request bodies with a sync-scoped `Plug.Parsers` limit
+  (`CAD_SYNC_MAX_BODY_BYTES`, default 64 MiB); browser and public routes keep
+  Plug's 8 MiB default. An over-limit request is a 413 generated before
+  authentication.
 - Negotiate (optional): before a push the daemon may call
   `POST /sync/objects/exists` with the batch's unique object SHAs. The server
   answers the subset it already holds (loose objects plus pack indexes) and the
@@ -1367,8 +1379,9 @@ or `config/`.
 
 - If the cloud already has a child of the same parent, the pushed node simply
   becomes a sibling. No merge needed at the DAG level.
-- Melds are the only operation that combines multiple parents, and they only
-  happen server-side.
+- Melds are normally the only operation that combines multiple parents, and
+  they only happen server-side. The exception is an owner-pushed imported merge
+  node (§10.2), whose parents come from the source commit.
 
 ### 10.5 Active heads sync
 
@@ -1779,6 +1792,8 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_GIT_STORE_PATH` | no | `/data/git` | Git object storage |
 | `CAD_SYNC_PULL_LIMIT` | no | `100` | Max nodes returned per pull batch |
 | `CAD_SYNC_EXISTS_LIMIT` | no | `5000` | Max SHAs per existence-handshake request (server cap; the daemon chunks at its own value, which should not exceed this) |
+| `CAD_SYNC_MAX_PUSH_PARENTS` | no | `8` | Max parents an owner may push for an imported merge node (ordinary pushes stay at 1; an invalid or non-positive value falls back to 1) |
+| `CAD_SYNC_MAX_BODY_BYTES` | no | `67108864` | Sync-scoped `Plug.Parsers` body limit; browser/public routes keep Plug's 8 MiB default (non-positive falls back to 64 MiB) |
 | `CAD_DAG_INTRO_MS` | no | `1200` | First-load DAG/repo intro animation duration |
 | `CAD_FILE_MAX_BYTES` | no | `524288` | Max bytes rendered in the public file viewer |
 | `CAD_FILE_MAX_LINES` | no | `2000` | Max lines rendered in the public file viewer |
@@ -2233,9 +2248,18 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   `Cadence.Daemon.Release.import/2,3` submit and poll. A bare source is
   registered data-only (no watcher/queue) and never snapshots its own object
   directory (§12.6).
-- 9c–9e remain: server owner-only multi-parent push + sync body limit, web
-  newest-N DAG + paged History + provenance, and docs/spec/live smoke. 9e adds
-  the normative pipeline text as §5.7 and records the §10.2 exception.
+- 9c — server protocol for imported merges (shipped): the push parent limit is
+  a policy — 1 for ordinary pushes, up to `CAD_SYNC_MAX_PUSH_PARENTS` (default
+  8) for an owner pushing a node marked
+  `session_metadata["import"]["source"] == "git"`. Every parent is validated in
+  the push's project and duplicates are refused; refusals stay
+  `failed_local_id`-compatible (`multiple_parents`, `too_many_parents`,
+  `duplicate_parent`, `unknown_parent`). The endpoint parses `/sync/*` bodies
+  with `CAD_SYNC_MAX_BODY_BYTES` (default 64 MiB); browser/public routes keep
+  Plug's 8 MiB default.
+- 9d–9e remain: web newest-N DAG + paged History + provenance, and the
+  docs/spec/live smoke (§5.7, §7.3, §16). 9e adds the normative pipeline text
+  as §5.7.
 
 ---
 
@@ -2481,7 +2505,8 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       requires adding `picosat_elixir` or `simple_sat` to spec §11.
 - [x] **Push batch semantics (Phase 2b):** resolved in 2b-2 — fail-fast,
       single-project batches, parents-first ordering, and at most one parent per
-      pushed node (melds stay server-side).
+      pushed node (melds stay server-side). Phase 9c adds the owner-only
+      imported-merge exception (§10.2).
 - [x] **Server-side project provisioning:** resolved in 2b-3 — the daemon
       ensures its local project exists via the idempotent
       `POST /sync/projects` endpoint (`Cadence.Server.Projects.provision/2`).
@@ -2501,6 +2526,14 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       `docs/release-notes.md` is the release summary, upgrade note, and
       known-limitation list. Bump the version and add an entry there for every
       release; CI and image publishing remain open below.
+- [x] **Imported merge nodes bypass meld review (Phase 9c):** resolved — an
+      owner may push a multi-parent node carrying
+      `session_metadata["import"]["source"] == "git"` (up to
+      `CAD_SYNC_MAX_PUSH_PARENTS`), so an imported Git history keeps its merge
+      topology without a proposal. The trade: such nodes are not reviewed like
+      melds. Mitigations: owner-only, import marker, parent cap, project-scoped
+      parents, and the per-node secret scan. A dedicated import proposal type
+      remains the stricter future option.
 - [ ] **Image publishing / CI:** `docker-compose.prod.yml` builds
       `cadence-server:prod` (or `CAD_SERVER_IMAGE`) locally and the image is
       otherwise operator-managed. Registry publishing, version pinning, and a

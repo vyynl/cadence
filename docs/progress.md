@@ -11,9 +11,10 @@ daemon convergence. The completed phase briefs are archived and
 A post-release DAG fix corrected the hover-card layering and removed the native
 SVG "Project session graph" tooltip; the rubric-specific path from 87 to 100 is
 `docs/audit-100-plan.md`. Phase 9 (import a local Git repository) is approved;
-slice **9a** (shared read-only Git primitives) and **9b** (daemon importer, job
-API, CLI) shipped. 9c (server owner-only multi-parent push + sync body limit) is
-next. Remaining work is optional and recorded in spec §16.
+slices **9a** (shared read-only Git primitives), **9b** (daemon importer, job
+API, CLI), and **9c** (server owner-only multi-parent push + sync body limit)
+shipped. 9d (web DAG cap + paged History + provenance) is next. Remaining work
+is optional and recorded in spec §16.
 
 ## Done (summary)
 
@@ -874,6 +875,26 @@ next. Remaining work is optional and recorded in spec §16.
   5 shared tests (243 daemon + 332 shared + 603 server = 1,178 total); 9c is
   next. Lesson:
   `.claude/solutions/otp/token-scoped-watcher-suspension-20261111.md`.
+- **Phase 9c (server protocol for imported merges, 2026-11-11)** — imported
+  merges can publish. The push parent limit is a policy: 1 for ordinary pushes,
+  up to `CAD_SYNC_MAX_PUSH_PARENTS` (default 8; absent → 8, invalid/non-positive
+  → 1) for an **owner** pushing a node carrying
+  `session_metadata["import"]["source"] == "git"`. The policy is enforced for
+  new rows in `insert_node/4`, so a re-push of an already-stored node stays
+  idempotent even if the cap is later lowered. `check_parents/2` validates every
+  parent in one project-scoped query; duplicate and cross-project parents are
+  refused. Errors stay `failed_local_id`-compatible (`multiple_parents`,
+  `too_many_parents`, `duplicate_parent`, `unknown_parent`).
+  `Cadence.ServerWeb.Parsers` replaces the inline endpoint parser: `/sync/*`
+  bodies use `CAD_SYNC_MAX_BODY_BYTES` (default 64 MiB) while browser/public
+  routes keep Plug's 8 MiB default; the limit is read at call time and an
+  invalid/non-positive value falls back. Spec §10.2/§10.4/§12.6/§13/§16,
+  `.env.example`, `docs/phase-9-prep.md`, and `docs/README.md` updated. 12 new
+  server tests (8 policy + body-limit 4); full gate
+  1,190 tests (332 shared + 615 server + 243 daemon), format and dev/prod
+  compile clean. Review found 2 issues (idempotent re-push, cap fallback); both
+  fixed and pinned by tests. Lesson:
+  `.claude/solutions/phoenix-issues/scoped-body-parser-and-policy-at-insert-20261111.md`.
 - **Audit 87→100 plan (2026-11-11)** — `docs/audit-100-plan.md` turns each
   remaining rubric deduction into a concrete task (ProjectLive split, result
   component, users N+1, preview query, proposal cache, Sobelow, `/sync` rate
@@ -916,24 +937,23 @@ next. Remaining work is optional and recorded in spec §16.
 
 ## Next
 
-**Immediate step:** **Phase 9c — server protocol for imported merges.** 9a and
-9b are shipped. The full plan is `docs/phase-9-prep.md` (D1–D10 approved). 9c
-must:
+**Immediate step:** **Phase 9d — web scale and provenance.** 9a–9c are shipped,
+so an imported merge history can publish. The full plan is
+`docs/phase-9-prep.md` (D1–D10 approved). 9d must:
 
-1. Make `@max_parents` a policy: ordinary pushes stay at 1; an owner-pushed
-   node carrying `session_metadata["import"]["source"] == "git"` may have up to
-   `CAD_SYNC_MAX_PUSH_PARENTS` (default 8) parents. `check_parents/2` validates
-   every parent and the project scope, and the error contract stays
-   `failed_local_id`-compatible.
-2. Add a sync-scoped `Plug.Parsers` limit (`CAD_SYNC_MAX_BODY_BYTES`, default
-   64 MiB) without changing the browser/public pipeline limits; test 413 and
-   the boundary.
-3. Add the keys to spec §10.2/§12.6 and record the governance trade (imported
-   multi-parent nodes bypass the meld review path) in §16.
+1. `Portfolio.list_nodes/2` with `:limit`/`:offset`; the project page renders
+   the newest `CAD_DAG_MAX_NODES` (default 150) and shows "Showing the newest
+   150 of N commits".
+2. A public paged `History` list (50 per page: message, author display name,
+   date, short SHA, link to the node) for the remainder; skip the intro
+   animation above `CAD_DAG_INTRO_MAX_NODES` (default 60).
+3. A node-pane provenance line (`Imported from git · <author name>`); author
+   emails only to `can_manage?` audiences, never anonymously.
+4. Tests: cap boundary, truncation note, history paging, intro threshold,
+   provenance visibility, message redaction.
 
-Then 9d (newest-N DAG + paged History + provenance) and 9e (docs/spec/live
-smoke). A real-server import of a merged history cannot publish until 9c lands;
-the daemon side is complete and tested.
+Then 9e (docs/spec/live smoke: `docs/import.md`, spec §5.7 + §7.3, a fixture
+repo imported and published end to end).
 
 After that, optional follow-ups, roughly in priority order:
 
@@ -1007,8 +1027,9 @@ expected for the closeout follow-ups.
   8a (production server release), Phase 8b (daemon release), closeout slice 1
   (proposal links, `actions_manifest`, meld docs state), closeout slice 2 (run
   queue cap, header nav, seeded run, raw-log download), the DAG width fix,
-  closeout slice 3 (final audit, P1 fixes, 1.0.0 release), and Phase 9a/9b
-  (shared import primitives + daemon importer/API/CLI) are complete, and
+  closeout slice 3 (final audit, P1 fixes, 1.0.0 release), and Phase 9a/9b/9c
+  (shared import primitives + daemon importer/API/CLI + server multi-parent
+  push/body limit) are complete, and
   every review's must-fix item is applied and verified. The audit's remaining
   P3 items are optional improvements, not blockers (see `Next` and
   `docs/audit-2026-11-11.md`). Pre-existing
@@ -1018,6 +1039,22 @@ expected for the closeout follow-ups.
 
 ## Spec Deltas / Open Items
 
+- **Phase 9c implementation notes (2026-11-11)** — (a) The parent policy is
+  enforced for **new rows** in `insert_node/4`, not during payload parsing: a
+  re-push of an already-stored node must stay idempotent even if
+  `CAD_SYNC_MAX_PUSH_PARENTS` was lowered after it was accepted. Shape checks
+  (UUIDs, duplicate parents) stay in the parser. (b) An absent cap uses 8; an
+  invalid or non-positive value falls back to 1 (the ordinary rule), so a typo
+  cannot silently widen the policy. (c) The body limit is read at request time
+  because endpoint plug `init/1` runs at compile time; `Plug.Parsers` runs
+  before `AuthPlug`, so an over-limit request is 413 before authentication.
+  (d) `Plug.Parsers.RequestTooLargeError` is not a `Plug.Conn.WrapperError`, so
+  `Phoenix.ConnTest` re-raises it; the test pins
+  `Plug.Exception.status(error) == 413` (the adapter mapping) plus an exact
+  boundary case. (e) The exception is a governance trade recorded in §16: an
+  owner can publish an imported merge without meld review; owner-only + import
+  marker + cap + project-scoped parents + per-node secret scan are the
+  mitigations.
 - **Phase 9b implementation notes (2026-11-11)** — (a) Import job state is
   in-memory by design (D8): no table, the newest 50 terminal jobs are retained,
   and a daemon restart loses history; a resubmit is idempotent and resumes.
@@ -2476,3 +2513,18 @@ stack listed and opened the run, served the log (200, `text/plain`,
 1440×1000 or 390×844. Next: the final audit/docs pass (health audit, archive the
 phase briefs, release notes/versioning). Tree is formatted and compiled; shipped
 with this commit.
+
+2026-11-11 — **Phase 9c (server protocol for imported merges) shipped.** An
+owner can now push an imported Git merge with up to `CAD_SYNC_MAX_PUSH_PARENTS`
+(default 8) parents; ordinary pushes and trusted members stay at one parent.
+The policy is enforced for new rows only, so idempotent retries survive a cap
+change, and `check_parents/2` validates every parent in one project-scoped
+query (duplicate/cross-project parents are refused). `Cadence.ServerWeb.Parsers`
+scopes body limits: `/sync/*` uses `CAD_SYNC_MAX_BODY_BYTES` (default 64 MiB),
+browser/public routes keep Plug's 8 MiB. Spec §10.2/§10.4/§12.6/§13/§16,
+`.env.example`, the 9 brief, and `docs/README.md` updated; the governance trade
+(no meld review for imported merges) is recorded in §16. Verification: 1,190
+tests green (332 shared + 615 server + 243 daemon), format check and dev/prod
+compile clean. Review: 2 findings (idempotent re-push, cap fallback) fixed and
+pinned by tests. Next: **9d — web newest-N DAG + paged History + provenance**.
+Tree is formatted and compiled; changes are uncommitted.

@@ -136,6 +136,8 @@ defmodule Cadence.ServerWeb.SyncController do
   defp message(:invalid_cursor), do: "invalid cursor"
   defp message(:mixed_projects), do: "all nodes in a batch must share one project"
   defp message(:multiple_parents), do: "pushed nodes may have at most one parent"
+  defp message(:too_many_parents), do: "pushed node exceeds the parent limit"
+  defp message(:duplicate_parent), do: "parent nodes must be unique"
 
   defp message(:unknown_parent),
     do: "parent node does not exist (parents-first ordering required)"

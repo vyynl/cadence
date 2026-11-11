@@ -52,11 +52,7 @@ defmodule Cadence.ServerWeb.Endpoint do
 
   plug(Plug.Static, at: "/assets", from: :cadence_server, gzip: false)
 
-  plug(Plug.Parsers,
-    parsers: [:urlencoded, :multipart, :json],
-    pass: ["*/*"],
-    json_decoder: Jason
-  )
+  plug(Cadence.ServerWeb.Parsers)
 
   plug(Plug.MethodOverride)
   plug(Plug.Head)

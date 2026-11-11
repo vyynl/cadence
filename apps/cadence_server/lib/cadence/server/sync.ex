@@ -18,7 +18,7 @@ defmodule Cadence.Server.Sync do
   alias Cadence.Shared.Sync.NodeCodec
 
   @writable_roles [:owner, :trusted]
-  @max_parents 1
+  @default_max_push_parents 8
 
   @type user :: Ash.Resource.record()
 
@@ -263,10 +263,10 @@ defmodule Cadence.Server.Sync do
   defp node_attrs(metadata, local_id, project_id, user) do
     with {:ok, sha} <- commit_sha(metadata["git_commit_sha"]),
          {:ok, parents} <- parents(metadata["parents"] || []),
-         :ok <- max_parents(parents),
+         {:ok, session_metadata} <- session_metadata(metadata["session_metadata"]),
+         :ok <- unique_parents(parents),
          {:ok, flags} <- flags(metadata["flags"] || []),
          {:ok, docs_state} <- docs_state(metadata["docs_state"]),
-         {:ok, session_metadata} <- session_metadata(metadata["session_metadata"]),
          {:ok, created_at} <- created_at(metadata["created_at"]),
          {:ok, message} <- message(metadata["message"]) do
       {:ok,
@@ -307,8 +307,36 @@ defmodule Cadence.Server.Sync do
 
   defp parents(_parents), do: {:error, :invalid_parent}
 
-  defp max_parents(parents) do
-    if length(parents) <= @max_parents, do: :ok, else: {:error, :multiple_parents}
+  # Ordinary pushes carry one parent. An owner may preserve an imported Git
+  # merge's topology, but only for a node the importer marked as such
+  # (spec §10.2); every other role and node stays at one parent. Enforced for
+  # new rows only: re-pushing an already-stored node stays idempotent even if
+  # the configured cap was lowered after it was accepted.
+  defp max_parents(parents, role, session_metadata) do
+    case parent_limit(role, session_metadata) do
+      limit when length(parents) <= limit -> :ok
+      1 -> {:error, :multiple_parents}
+      _limit -> {:error, :too_many_parents}
+    end
+  end
+
+  defp parent_limit(:owner, %{"import" => %{"source" => "git"}}),
+    do: sync_max_push_parents()
+
+  defp parent_limit(_role, _session_metadata), do: 1
+
+  # An absent key uses the default; an invalid or non-positive value falls back
+  # to the ordinary one-parent rule (a typo cannot silently widen the policy).
+  defp sync_max_push_parents do
+    case Application.get_env(:cadence_server, :sync_max_push_parents) do
+      nil -> @default_max_push_parents
+      limit when is_integer(limit) and limit > 0 -> limit
+      _limit -> 1
+    end
+  end
+
+  defp unique_parents(parents) do
+    if length(Enum.uniq(parents)) == length(parents), do: :ok, else: {:error, :duplicate_parent}
   end
 
   defp flags(flags) when is_list(flags) do
@@ -375,7 +403,8 @@ defmodule Cadence.Server.Sync do
   defp insert_node(store, node, project_id, role) do
     case Repo.get(Node, node.local_id) do
       nil ->
-        with :ok <- import_objects(store, node.objects),
+        with :ok <- max_parents(node.attrs.parents, role, node.attrs.session_metadata),
+             :ok <- import_objects(store, node.objects),
              :ok <- ensure_complete(store, node.attrs.git_commit_sha),
              :ok <- check_parents(node.attrs.parents, project_id),
              {:ok, inserted} <- insert_node_row(node.attrs, role) do
@@ -412,11 +441,15 @@ defmodule Cadence.Server.Sync do
 
   defp check_parents([], _project_id), do: :ok
 
-  defp check_parents([parent], project_id) do
-    case Repo.get_by(Node, id: parent, project_id: project_id) do
-      nil -> {:error, :unknown_parent}
-      _parent -> :ok
-    end
+  defp check_parents(parents, project_id) do
+    found =
+      Repo.aggregate(
+        from(n in Node, where: n.project_id == ^project_id and n.id in ^parents),
+        :count,
+        :id
+      )
+
+    if found == length(parents), do: :ok, else: {:error, :unknown_parent}
   end
 
   defp insert_node_row(attrs, role) do
