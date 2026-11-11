@@ -158,6 +158,8 @@ if config_env() != :test and server_artifact? do
     sync_exists_limit: String.to_integer(System.get_env("CAD_SYNC_EXISTS_LIMIT", "5000")),
     sync_max_push_parents: String.to_integer(System.get_env("CAD_SYNC_MAX_PUSH_PARENTS", "8")),
     sync_max_body_bytes: String.to_integer(System.get_env("CAD_SYNC_MAX_BODY_BYTES", "67108864")),
+    sync_rate_limit: String.to_integer(System.get_env("CAD_SYNC_RATE_LIMIT", "300")),
+    sync_rate_scale: String.to_integer(System.get_env("CAD_SYNC_RATE_SCALE", "60000")),
     dag_intro_ms: String.to_integer(System.get_env("CAD_DAG_INTRO_MS", "1200")),
     file_max_bytes: String.to_integer(System.get_env("CAD_FILE_MAX_BYTES", "524288")),
     file_max_lines: String.to_integer(System.get_env("CAD_FILE_MAX_LINES", "2000")),

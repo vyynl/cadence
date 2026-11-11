@@ -416,7 +416,7 @@ defmodule Cadence.Daemon.API.Router do
   end
 
   defp union_error(conn, {:http, 429, _body}) do
-    send_json(conn, 429, %{error: "meld rate limited; retry shortly"})
+    send_json(conn, 429, %{error: "rate limited; retry shortly"})
   end
 
   defp union_error(conn, {:http, status, body})

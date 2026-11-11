@@ -303,7 +303,7 @@ defmodule Cadence.Daemon.API.RouterTest do
           {500, %{"error" => "sync failed"}, "sync failed"},
           {502, %{"error" => "meld failed"}, "meld failed"},
           {422, %{"error" => "invalid parent"}, "one or more selected nodes are not synced yet"},
-          {429, %{"error" => "meld rate limited"}, "meld rate limited; retry shortly"}
+          {429, %{"error" => "meld rate limited"}, "rate limited; retry shortly"}
         ] do
       Req.Test.stub(__MODULE__, fn conn ->
         conn

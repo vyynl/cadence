@@ -1321,6 +1321,13 @@ server stores only its SHA-256 hash, and the plaintext is shown once at
 issuance. It is stored in `~/.config/cadence/env` (chmod 600), never in source
 or `config/`.
 
+Every `/sync/*` request is also bounded per authenticated user (not per token
+or IP): `CAD_SYNC_RATE_LIMIT` requests per `CAD_SYNC_RATE_SCALE` window, so one
+user's daemon cannot exhaust another's budget. A denial is `429` with
+`Retry-After` in whole seconds and `{"error": "rate_limited"}`; a non-positive
+limit disables the bound. The meld limiter (§6.5) remains the inner,
+per-project bound. Browser, public, and `/health` routes are not limited.
+
 ### 10.2 Local → Cloud
 
 - Provision: before the first push, a daemon ensures the project exists via
@@ -1478,8 +1485,9 @@ SyncMessage.UnionResponse
   # the proposal is approved. `proposal_url` is the public review link built
   # from CAD_PUBLIC_URL §6.5 (nil from an older server; the daemon then derives
   # it from CAD_SERVER_URL). 201 on success; 403 not a proposer, 404 unknown
-  # project, 422 invalid/too many parents or payload, 429 meld rate limited
-  # (with Retry-After), 502 meld/model failure, 500 server object corruption.
+  # project, 422 invalid/too many parents or payload, 429 rate limited (the
+  # outer per-user sync bound or the meld limiter, both with Retry-After),
+  # 502 meld/model failure, 500 server object corruption.
   # The synchronous call can take up to
   # (CAD_MELD_RETRY_ATTEMPTS + 1) × CAD_MELD_TIMEOUT_MS + CAD_MELD_RETRY_BACKOFF_MS
   # (about 120.5 s at defaults); callers must budget above that.
@@ -1509,7 +1517,7 @@ inserts); the daemon can mark only that node failed and retry the rest.
 | Static security analysis | `sobelow` (dev/test only, `~> 0.18`) |
 | LiveView test DOM | `lazy_html` (test only; required by `Phoenix.LiveViewTest`) |
 | Docker API | `ex_docker_api` `~> 1.55` (Tesla + the built-in httpc adapter; requires Elixir 1.20) |
-| Rate limiting | `Hammer` (declared in `cadence_shared`; used by the daemon's `LLMRateLimit` and the server's `LLMRateLimit` / `MeldWorker`) |
+| Rate limiting | `Hammer` (declared in `cadence_shared`; used by the daemon's `LLMRateLimit` and the server's `LLMRateLimit` / `MeldWorker` / `SyncRateLimit`) |
 | Graph model | `libgraph` |
 | TUI (optional, daemon-side) | `ExRatatui` |
 | Neovim plugin | Lua + plenary.nvim |
@@ -1795,6 +1803,8 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_SYNC_EXISTS_LIMIT` | no | `5000` | Max SHAs per existence-handshake request (server cap; the daemon chunks at its own value, which should not exceed this) |
 | `CAD_SYNC_MAX_PUSH_PARENTS` | no | `8` | Max parents an owner may push for an imported merge node (ordinary pushes stay at 1; an invalid or non-positive value falls back to 1) |
 | `CAD_SYNC_MAX_BODY_BYTES` | no | `67108864` | Sync-scoped `Plug.Parsers` body limit; browser/public routes keep Plug's 8 MiB default (non-positive falls back to 64 MiB) |
+| `CAD_SYNC_RATE_LIMIT` | no | `300` | Max `/sync/*` requests per authenticated user per window (a non-positive value disables the bound) |
+| `CAD_SYNC_RATE_SCALE` | no | `60000` | `/sync/*` rate window in milliseconds (non-positive or non-integer falls back to the default) |
 | `CAD_DAG_INTRO_MS` | no | `1200` | First-load DAG/repo intro animation duration |
 | `CAD_FILE_MAX_BYTES` | no | `524288` | Max bytes rendered in the public file viewer |
 | `CAD_FILE_MAX_LINES` | no | `2000` | Max lines rendered in the public file viewer |

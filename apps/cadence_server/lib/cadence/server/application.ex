@@ -10,6 +10,7 @@ defmodule Cadence.Server.Application do
       {AshAuthentication.Supervisor, otp_app: :cadence_server},
       {Phoenix.PubSub, name: Cadence.Server.PubSub},
       Cadence.Server.LLMRateLimit,
+      Cadence.Server.SyncRateLimit,
       Cadence.Server.MeldWorker,
       Cadence.Server.Actions.TaskSupervisor,
       Cadence.Server.Actions.Dispatcher,

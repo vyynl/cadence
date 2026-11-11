@@ -67,6 +67,10 @@ config :cadence_server,
   sync_exists_limit: 5_000,
   sync_max_push_parents: 8,
   sync_max_body_bytes: 67_108_864,
+  # The bound is opt-in per test because `sync_rate_limit_test.exs` owns the
+  # limit assertions; the plug still runs on every sync request, so an
+  # ordering regression still fails loudly there.
+  sync_rate_limit: 0,
   dag_intro_ms: 0,
   file_max_bytes: 4096,
   file_max_lines: 100,

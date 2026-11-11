@@ -20,6 +20,8 @@ defmodule Cadence.ServerWeb.Router do
 
   pipeline :api do
     plug(Cadence.ServerWeb.AuthPlug)
+    # After auth: the bucket is keyed on the authenticated user (spec §10.1).
+    plug(Cadence.ServerWeb.Plugs.SyncRateLimit)
   end
 
   scope "/", Cadence.ServerWeb do
