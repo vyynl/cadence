@@ -71,8 +71,11 @@ Click order that covers every surface:
 8. **Public proposal page** — every proposal has a read-only, identity-free
    link at `/proposals/<token>`. Copy one from the review page or from the
    seed output; it works signed out and hides sensitive paths and content.
-9. **Navigation** — the header shows the signed-in email plus **Sign out**, or
-   **Sign in** when anonymous. Signing out is a two-step, CSRF-safe flow (a
+9. **Run history** — `/p/cadence-demo/runs` lists one seeded finished run;
+   open it for the status, exit code, escaped log output, and the
+   **Download raw log** link. It was written by the seed, not executed.
+10. **Navigation** — the header shows the signed-in email plus **Sign out**, or
+    **Sign in** when anonymous. Signing out is a two-step, CSRF-safe flow (a
    confirmation page that submits DELETE).
 
 ## Seed data
@@ -80,14 +83,16 @@ Click order that covers every surface:
 `mix cadence.demo_seed` (run automatically on container boot) creates:
 
 - `cadence-demo` — 5 nodes with real Git snapshots (functioning, broken,
-  sandbox, in-progress), one pinned node, a README and source files, and one
-  secret-tainted node with an open critical incident.
+  sandbox, in-progress), one pinned node, a README and source files, one
+  secret-tainted node with an open critical incident, and one finished action
+  run with a captured log (written by the seed, not executed).
 - `meld-review` — three parent nodes plus five proposals: pending meld,
   pending promotion, approved meld (its node was attached by
   `Proposals.approve/3`), rejected meld, and an isolated meld carrying a
   critical `secret_detected` incident.
 
-Re-running is a no-op. To rebuild from scratch:
+Re-running is a no-op, so a database seeded by an older image does not pick up
+new seed changes (for example the demo action run). To rebuild from scratch:
 
 ```bash
 docker compose exec server mix cadence.demo_seed --reset

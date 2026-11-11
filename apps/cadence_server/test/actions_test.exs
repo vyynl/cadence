@@ -45,6 +45,23 @@ defmodule Cadence.Server.ActionsTest do
       assert Actions.max_concurrent_runs() == 1
     end
 
+    test "max_queued_runs/0 defaults to 20 and accepts zero" do
+      Application.delete_env(:cadence_server, :actions_max_queued_runs)
+      assert Actions.max_queued_runs() == 20
+
+      Application.put_env(:cadence_server, :actions_max_queued_runs, 5)
+      assert Actions.max_queued_runs() == 5
+
+      Application.put_env(:cadence_server, :actions_max_queued_runs, 0)
+      assert Actions.max_queued_runs() == 0
+
+      Application.put_env(:cadence_server, :actions_max_queued_runs, -2)
+      assert Actions.max_queued_runs() == 20
+
+      Application.put_env(:cadence_server, :actions_max_queued_runs, "nope")
+      assert Actions.max_queued_runs() == 20
+    end
+
     test "dispatch_on_boot?/0 defaults on and can be disabled" do
       Application.delete_env(:cadence_server, :actions_dispatch_on_boot)
       assert Actions.dispatch_on_boot?()

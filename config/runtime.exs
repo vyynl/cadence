@@ -184,6 +184,8 @@ if config_env() != :test and server_artifact? do
     actions_timeout_ms: String.to_integer(System.get_env("CAD_ACTIONS_TIMEOUT_MS", "120000")),
     actions_max_concurrent_runs:
       String.to_integer(System.get_env("CAD_ACTIONS_MAX_CONCURRENT_RUNS", "1")),
+    actions_max_queued_runs:
+      String.to_integer(System.get_env("CAD_ACTIONS_MAX_QUEUED_RUNS", "20")),
     actions_dispatch_on_boot: System.get_env("CAD_ACTIONS_DISPATCH_ON_BOOT", "true") == "true",
     actions_artifact_retention_days:
       String.to_integer(System.get_env("CAD_ACTIONS_ARTIFACT_RETENTION_DAYS", "30")),

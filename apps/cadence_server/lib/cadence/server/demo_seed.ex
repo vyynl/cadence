@@ -24,7 +24,7 @@ defmodule Cadence.Server.DemoSeed do
 
   import Ecto.Query
 
-  alias Cadence.Server.{Accounts, Incidents, ProjectGit, Proposals, Repo}
+  alias Cadence.Server.{Accounts, ActionRun, Actions, Incidents, ProjectGit, Proposals, Repo}
   alias Cadence.Server.Accounts.{ApiKey, Token, User, UserIdentity}
   alias Cadence.Server.Proposal
   alias Cadence.Shared.{GitStore, Membership, Node, Project}
@@ -176,7 +176,71 @@ defmodule Cadence.Server.DemoSeed do
         details: %{stage: :push_scan, patterns: [:aws_access_key]}
       })
 
+    seed_demo_run(project, owner, functioning, at)
+
     :ok
+  end
+
+  # One terminal run so the run history and detail pages are part of the demo
+  # (and the visual pass). Nothing is executed: the row and its captured log are
+  # written directly, best-effort (an unwritable artifact dir leaves
+  # `log_path: nil` and the page shows "No output was captured").
+  defp seed_demo_run(project, owner, node, at) do
+    {:ok, run} =
+      %ActionRun{}
+      |> ActionRun.changeset(%{
+        project_id: project.id,
+        node_id: node.id,
+        user_id: owner.id,
+        action_name: "run_analysis",
+        command: "python actions/run.py"
+      })
+      |> Repo.insert()
+
+    log = """
+    $ python actions/run.py
+    cadence demo action
+    greeting: Hello from the demo
+    files: 3
+    finished in 0.03s
+    """
+
+    log_path =
+      case write_demo_log(run, log) do
+        {:ok, path} -> path
+        :error -> nil
+      end
+
+    started_at = at.(1_500)
+    finished_at = DateTime.add(started_at, 3, :second)
+
+    Repo.update_all(
+      from(r in ActionRun, where: r.id == ^run.id),
+      set: [
+        status: :succeeded,
+        exit_code: 0,
+        image: "python:3.12-slim",
+        log_path: log_path,
+        created_at: started_at,
+        started_at: started_at,
+        finished_at: finished_at,
+        updated_at: finished_at
+      ]
+    )
+
+    :ok
+  end
+
+  defp write_demo_log(run, log) do
+    relative = Path.join(run.id, "output.log")
+    absolute = Path.join(Actions.artifact_path(), relative)
+
+    with :ok <- File.mkdir_p(Path.dirname(absolute)),
+         :ok <- File.write(absolute, log) do
+      {:ok, relative}
+    else
+      _other -> :error
+    end
   end
 
   defp demo_root_files do
@@ -671,10 +735,14 @@ defmodule Cadence.Server.DemoSeed do
   end
 
   defp reset! do
-    project_ids =
+    {project_ids, run_ids} =
       Repo.transaction(fn ->
         project_ids = Repo.all(from(p in Project, where: p.slug in ^@slugs, select: p.id))
 
+        run_ids =
+          Repo.all(from(r in ActionRun, where: r.project_id in ^project_ids, select: r.id))
+
+        Repo.delete_all(from(r in ActionRun, where: r.project_id in ^project_ids))
         Repo.delete_all(from(i in Cadence.Server.Incident, where: i.project_id in ^project_ids))
         Repo.delete_all(from(p in Proposal, where: p.project_id in ^project_ids))
         Repo.delete_all(from(n in Node, where: n.project_id in ^project_ids))
@@ -695,14 +763,15 @@ defmodule Cadence.Server.DemoSeed do
         Repo.delete_all(from(m in Membership, where: m.user_id in ^user_ids))
         Repo.delete_all(from(u in User, where: u.id in ^user_ids))
 
-        project_ids
+        {project_ids, run_ids}
       end)
       |> case do
-        {:ok, project_ids} -> project_ids
+        {:ok, result} -> result
         {:error, reason} -> raise "demo reset failed: #{inspect(reason)}"
       end
 
     Enum.each(project_ids, &File.rm_rf(ProjectGit.path(&1)))
+    Enum.each(run_ids, &File.rm_rf(Path.join(Actions.artifact_path(), &1)))
 
     :ok
   end

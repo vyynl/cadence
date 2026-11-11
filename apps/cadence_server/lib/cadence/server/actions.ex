@@ -43,6 +43,21 @@ defmodule Cadence.Server.Actions do
   end
 
   @doc """
+  Maximum `:queued` runs per project (spec §8.3).
+
+  `CAD_ACTIONS_MAX_QUEUED_RUNS` (default 20); `0` disables the cap. A submission
+  beyond the cap is refused with `:queue_full` instead of growing an unbounded
+  queue.
+  """
+  @spec max_queued_runs() :: non_neg_integer()
+  def max_queued_runs do
+    case Application.get_env(:cadence_server, :actions_max_queued_runs, 20) do
+      value when is_integer(value) and value >= 0 -> value
+      _other -> 20
+    end
+  end
+
+  @doc """
   Whether the boot pass dispatches queued runs (spec §8.3).
 
   Disabled in tests: a boot process must not query the sandboxed Repo.

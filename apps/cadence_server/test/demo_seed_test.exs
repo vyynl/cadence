@@ -3,7 +3,7 @@ defmodule Cadence.Server.DemoSeedTest do
 
   import Ecto.Query
 
-  alias Cadence.Server.{DemoSeed, Proposals, Repo}
+  alias Cadence.Server.{ActionRun, DemoSeed, Proposals, Repo}
   alias Cadence.Server.Accounts.{Token, User}
   alias Cadence.Server.Proposal
   alias Cadence.Shared.{Membership, Node, Project}
@@ -11,6 +11,9 @@ defmodule Cadence.Server.DemoSeedTest do
   setup do
     pid = Ecto.Adapters.SQL.Sandbox.start_owner!(Repo, shared: false)
     on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
+
+    artifact_path = Application.fetch_env!(:cadence_server, :artifact_path)
+    on_exit(fn -> File.rm_rf!(artifact_path) end)
     :ok
   end
 
@@ -63,6 +66,21 @@ defmodule Cadence.Server.DemoSeedTest do
 
     tainted = Enum.find(nodes, &(&1.id == incident.node_id))
     assert tainted
+  end
+
+  test "cadence-demo seeds one finished action run with a readable log" do
+    DemoSeed.run()
+
+    demo = project!("cadence-demo")
+    pinned = Enum.find(nodes!(demo), & &1.pinned)
+
+    assert [run] = Repo.all(from(r in ActionRun, where: r.project_id == ^demo.id))
+    assert run.status == :succeeded
+    assert run.exit_code == 0
+    assert run.node_id == pinned.id
+    assert run.action_name == "run_analysis"
+    assert {:ok, log} = Cadence.Server.Actions.Runs.log(run)
+    assert log =~ "cadence demo action"
   end
 
   test "meld-review has proposals in every review state" do
@@ -124,10 +142,15 @@ defmodule Cadence.Server.DemoSeedTest do
     DemoSeed.run()
     before = counts()
 
+    [run] = Repo.all(from(r in ActionRun, where: r.action_name == "run_analysis"))
+    log_dir = Path.join(Application.fetch_env!(:cadence_server, :artifact_path), run.id)
+    assert File.exists?(Path.join(log_dir, "output.log"))
+
     summary = DemoSeed.run(reset: true)
 
     assert summary.fresh
     assert counts() == before
+    refute File.exists?(log_dir)
     assert length(proposals!(project!("meld-review"))) == 5
   end
 
@@ -168,6 +191,7 @@ defmodule Cadence.Server.DemoSeedTest do
       nodes: Repo.aggregate(Node, :count),
       memberships: Repo.aggregate(Membership, :count),
       proposals: Repo.aggregate(Proposal, :count),
+      runs: Repo.aggregate(ActionRun, :count),
       users: Repo.aggregate(User, :count),
       tokens: Repo.aggregate(Token, :count)
     }

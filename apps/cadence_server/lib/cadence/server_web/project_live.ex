@@ -844,6 +844,10 @@ defmodule Cadence.ServerWeb.ProjectLive do
   defp run_error(:forbidden), do: run_forbidden_message()
   defp run_error(:not_found), do: "That action or snapshot is no longer available."
   defp run_error(:quarantined), do: "This snapshot is quarantined and cannot run actions."
+
+  defp run_error(:queue_full),
+    do: "The run queue is full. Wait for a run to finish and try again."
+
   defp run_error(:unknown_action), do: "That action is no longer in the manifest."
   defp run_error(:run_failed), do: "The run could not be started."
   defp run_error(%Ecto.Changeset{}), do: "The run request was invalid."

@@ -23,9 +23,10 @@ defmodule Cadence.ServerWeb.RunLiveTest do
 
   setup do
     previous =
-      Map.new([:actions_docker, :actions_enabled], fn key ->
-        {key, Application.get_env(:cadence_server, key)}
-      end)
+      Map.new(
+        [:actions_docker, :actions_enabled, :actions_max_queued_runs],
+        fn key -> {key, Application.get_env(:cadence_server, key)} end
+      )
 
     Application.put_env(:cadence_server, :actions_docker, FakeDocker)
 
@@ -152,6 +153,34 @@ defmodule Cadence.ServerWeb.RunLiveTest do
       # The task clears the container id after removal; wait for that so a
       # later on_exit cannot race with the real Docker client.
       assert eventually(fn -> is_nil(Repo.get!(ActionRun, run.id).container_id) end)
+    end
+
+    test "a full run queue is refused with a flash", %{
+      conn: conn,
+      project: project,
+      owner: owner,
+      node: node
+    } do
+      Application.put_env(:cadence_server, :actions_max_queued_runs, 1)
+      {:ok, queued} = Runs.prepare(%{id: owner.id}, project.id, node.id, "run_analysis")
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/#{project.slug}")
+      render_patch(view, "/p/#{project.slug}/n/#{node.id}")
+
+      html = render_click(view, "run_action", %{"action" => "run_analysis"})
+
+      assert html =~ "The run queue is full."
+      assert Repo.aggregate(ActionRun, :count) == 1
+
+      # The refused submission still dispatches, so the waiting row starts.
+      assert eventually(fn ->
+               Repo.get!(ActionRun, queued.id).status
+               |> ActionRun.terminal?()
+             end)
+
+      # The task clears the container id after removal; wait for that so the
+      # sandbox owner cannot stop the connection under it.
+      assert eventually(fn -> is_nil(Repo.get!(ActionRun, queued.id).container_id) end)
     end
 
     test "an unknown action name is refused by the runner", %{
@@ -627,6 +656,91 @@ defmodule Cadence.ServerWeb.RunLiveTest do
         )
 
       assert response.status == 404
+    end
+  end
+
+  describe "raw log download" do
+    test "a member downloads the captured log", %{
+      conn: conn,
+      project: project,
+      owner: owner,
+      viewer: viewer,
+      node: node
+    } do
+      run = finished_run(project, owner, node)
+
+      response = get(signed_conn(conn, viewer), "/p/#{project.slug}/runs/#{run.id}/log")
+
+      assert response.status == 200
+      assert response.resp_body == "action output\n"
+
+      assert Plug.Conn.get_resp_header(response, "content-type")
+             |> hd()
+             |> String.starts_with?("text/plain")
+
+      assert Plug.Conn.get_resp_header(response, "content-disposition") ==
+               [~s(attachment; filename="run-#{run.id}.log")]
+
+      assert Plug.Conn.get_resp_header(response, "cache-control") == ["private, no-store"]
+    end
+
+    test "a run without a captured log is 404", %{
+      conn: conn,
+      project: project,
+      owner: owner,
+      viewer: viewer,
+      node: node
+    } do
+      [run] = insert_runs(project, node, owner, 1)
+
+      assert get(signed_conn(conn, viewer), "/p/#{project.slug}/runs/#{run.id}/log").status ==
+               404
+    end
+
+    test "the run page links the raw log", %{
+      conn: conn,
+      project: project,
+      owner: owner,
+      viewer: viewer,
+      node: node
+    } do
+      run = finished_run(project, owner, node)
+
+      {:ok, view, _html} = live(signed_conn(conn, viewer), "/p/#{project.slug}/runs/#{run.id}")
+      render_async(view)
+
+      assert has_element?(
+               view,
+               "a[href='/p/#{project.slug}/runs/#{run.id}/log']",
+               "Download raw log"
+             )
+    end
+
+    test "anonymous, outsiders, unknown runs, disabled runs, and a missing log are 404", %{
+      conn: conn,
+      project: project,
+      owner: owner,
+      viewer: viewer,
+      outsider: outsider,
+      node: node
+    } do
+      run = finished_run(project, owner, node)
+      path = "/p/#{project.slug}/runs/#{run.id}/log"
+
+      assert get(conn, path).status == 404
+      assert get(signed_conn(conn, outsider), path).status == 404
+
+      assert get(
+               signed_conn(conn, viewer),
+               "/p/#{project.slug}/runs/#{Ecto.UUID.generate()}/log"
+             ).status == 404
+
+      Application.put_env(:cadence_server, :actions_enabled, false)
+      assert get(signed_conn(conn, viewer), path).status == 404
+      Application.put_env(:cadence_server, :actions_enabled, true)
+
+      File.rm!(Path.join([Application.fetch_env!(:cadence_server, :artifact_path), run.log_path]))
+      assert get(signed_conn(conn, viewer), path).status == 404
     end
   end
 

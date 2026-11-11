@@ -34,6 +34,13 @@ defmodule Cadence.Server.Actions.Runs do
   task that cannot be started fails its row (`run_failed`) and the next queued
   run is dispatched.
 
+  The waiting queue is capped by `CAD_ACTIONS_MAX_QUEUED_RUNS` (`0` disables):
+  `prepare/4` counts the project's `:queued` rows and inserts in one transaction
+  under the same per-project advisory key, so concurrent submissions cannot
+  both slip past the cap. An over-cap submission returns `:queue_full` and is
+  refused; `start/4` still attempts a dispatch, so a claim skipped while a
+  submission held the lock is retried even when that submission is refused.
+
   ## Durability
 
   A run row is written before any container exists. If the server dies mid-run,
@@ -90,6 +97,7 @@ defmodule Cadence.Server.Actions.Runs do
           | :forbidden
           | :not_found
           | :quarantined
+          | :queue_full
           | :unknown_action
           | Ecto.Changeset.t()
 
@@ -130,14 +138,27 @@ defmodule Cadence.Server.Actions.Runs do
   just wrote. If the execution task cannot be started, that row is failed
   (`run_failed`) and the next queued run is dispatched, so `{:ok, run}` can
   refer to a row that has already failed; the run page shows the real state.
+
+  Even a refused submission attempts a dispatch: a concurrent terminal
+  transition's non-blocking claim may have skipped while `prepare/4` held the
+  per-project advisory lock, so the refusal is still a chance to drain the
+  already-queued work.
   """
   @spec start(map(), String.t(), String.t(), String.t()) ::
           {:ok, ActionRun.t()} | {:error, error()}
   def start(actor, project_id, node_id, action_name) do
-    with {:ok, run} <- prepare(actor, project_id, node_id, action_name) do
-      :ok = dispatch(run.project_id)
-      {:ok, run}
+    result = prepare(actor, project_id, node_id, action_name)
+
+    # A refused (full-queue) submission still drains work a concurrent claim
+    # skipped; every other refusal never reaches a write path.
+    if match?({:ok, _}, result) or match?({:error, :queue_full}, result) do
+      case UUID.cast(project_id) do
+        {:ok, project_id} -> :ok = dispatch(project_id)
+        :error -> :ok
+      end
     end
+
+    result
   end
 
   @doc """
@@ -1019,6 +1040,35 @@ defmodule Cadence.Server.Actions.Runs do
   end
 
   defp insert_run(project, node, actor, action) do
+    # The depth check and the insert share one transaction under the same
+    # per-project advisory key the dispatcher claims with. The dispatcher uses
+    # `pg_try_...`, so a concurrent claim skips (and retries on the next
+    # transition/boot) instead of blocking a submission; two submissions can
+    # never both slip past the cap.
+    Repo.transaction(fn ->
+      Repo.query!(
+        "SELECT pg_advisory_xact_lock(hashtext('cadence.action_runs'), hashtext($1))",
+        [project.id]
+      )
+
+      limit = Actions.max_queued_runs()
+
+      if limit > 0 and queued_count(project.id) >= limit do
+        Repo.rollback(:queue_full)
+      else
+        case insert_run_row(project, node, actor, action) do
+          {:ok, run} -> run
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+      end
+    end)
+    |> case do
+      {:ok, run} -> {:ok, run}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp insert_run_row(project, node, actor, action) do
     %ActionRun{}
     |> ActionRun.changeset(%{
       project_id: project.id,
@@ -1028,6 +1078,14 @@ defmodule Cadence.Server.Actions.Runs do
       command: action.command
     })
     |> Repo.insert()
+  end
+
+  defp queued_count(project_id) do
+    from(r in ActionRun,
+      where: r.project_id == ^project_id and r.status == :queued,
+      select: count(r.id)
+    )
+    |> Repo.one()
   end
 
   defp actor_id(%{id: id}), do: id

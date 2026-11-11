@@ -656,7 +656,11 @@ never public. `/auth`, `/sync`, `/health`, and static paths are reserved.
   `project:<id>`: a run status change refreshes the page live (the run list
   keeps its current page). Captured output
   is rendered as escaped text with ANSI/control sequences stripped (never
-  `raw/1`); output is available after the container exits. Artifacts download
+  `raw/1`); output is available after the container exits. The run page also
+  links a raw log download (`/p/:slug/runs/:run_id/log`): member-only, from the
+  recorded `log_path`, served as `text/plain` with
+  `content-disposition: attachment` and `private, no-store`; every refusal is a
+  404. Artifacts download
   only through the recorded collection (`application/octet-stream`,
   `content-disposition: attachment`); a non-member, another project's run, an
   unknown artifact, and a traversal attempt are all a plain 404.
@@ -994,7 +998,9 @@ Rust, etc. These live in `cadence_server/priv/templates/`.
   ANSI CSI/OSC sequences and remaining control bytes removed and invalid UTF-8
   replaced; HTML is never passed through `raw/1`. Log capture is post-exit, so
   the page follows status events live but output appears when the container
-  exits. Artifact downloads are served only for an exact path from the run's
+  exits. A **Download raw log** link serves the recorded `log_path` as
+  `text/plain` + `attachment` + `private, no-store` (member-only; every refusal
+  is a 404). Artifact downloads are served only for an exact path from the run's
   recorded collection, as `application/octet-stream` with
   `content-disposition: attachment`; everything else is a 404.
 - The staging directory is removed after collection; the container is always
@@ -1009,22 +1015,27 @@ Rust, etc. These live in `cadence_server/priv/templates/`.
 - Runs are **queued per project**. At most `CAD_ACTIONS_MAX_CONCURRENT_RUNS`
   may be `:running` for one project (default `1`; `0` disables the cap), so a
   burst of manager clicks becomes waiting work instead of a burst of
-  containers. A claim is one transaction guarded by a per-project
-  `pg_try_advisory_xact_lock`: the running count is read and the oldest
-  `:queued` row (by `created_at, id`) is compare-and-set to `:running`; its
-  execution task is spawned after commit. The advisory lock is scoped to runs
-  and does not contend with proposal decisions, which lock the project row.
-  Dispatch runs on submission, after every committed terminal transition, and
-  once at boot (`CAD_ACTIONS_DISPATCH_ON_BOOT`, a one-shot process that leaves
-  no idle worker); all three are best-effort and shape-only logged.
+  containers. The waiting queue is itself bounded by
+  `CAD_ACTIONS_MAX_QUEUED_RUNS` (default `20`; `0` disables it): a submission
+  that would exceed it is refused with `:queue_full` and a flash, instead of
+  growing an unbounded queue. The depth check and the insert share one
+  transaction under the same per-project advisory key, so concurrent
+  submissions cannot both slip past the cap. A claim is one transaction guarded
+  by a per-project `pg_try_advisory_xact_lock`: the running count is read and the
+  oldest `:queued` row (by `created_at, id`) is compare-and-set to `:running`;
+  its execution task is spawned after commit. The advisory lock is scoped to
+  runs and does not contend with proposal decisions, which lock the project
+  row. Dispatch runs on submission, after every committed terminal transition,
+  and once at boot (`CAD_ACTIONS_DISPATCH_ON_BOOT`, a one-shot process that
+  leaves no idle worker); all three are best-effort and shape-only logged.
 - A `:queued` row is **waiting work, not staleness**: `recover_stale/1` and
   `recover_all/0` only interrupt abandoned `:running` rows, and a queued row
   left by a crash is resumed by the boot pass or the next terminal transition.
   A task that cannot be started fails its row (`run_failed`) and the next
   queued run is dispatched, so a broken supervisor cannot wedge the queue. The
-  run list and detail page distinguish `queued` from `running`. The queue
-  itself is unbounded and only managers can add to it; a maximum queue depth is
-  left to §16 if abuse appears.
+  run list and detail page distinguish `queued` from `running`. The queue depth
+  is capped by `CAD_ACTIONS_MAX_QUEUED_RUNS` (above); only managers can add to
+  it.
 - **Retention** runs on demand (`mix cadence.actions_sweep`) and as a backstop
   every `CAD_ACTIONS_RETENTION_INTERVAL_MS` (default 6 h; `0` disables). One
   `Actions.Cleanup` pass is elected with a global `pg_try_advisory_xact_lock`
@@ -1691,7 +1702,9 @@ The repository also ships a **local demo stack** (`docker-compose.yml` +
 `docker/Dockerfile.demo`): `postgres:16-alpine` plus a `MIX_ENV=dev` server that
 runs migrations, seeds demo data (`mix cadence.demo_seed`), and boots only
 `cadence_server` (no daemon). CSS is bind-mounted for style iteration and the
-demo password strategy is compiled in via `CAD_DEMO_AUTH` (§7.4). This is an
+demo password strategy is compiled in via `CAD_DEMO_AUTH` (§7.4). The demo data
+includes one finished action run (written by the seed, not executed) so the run
+history and detail pages are part of the tour. This is an
 exploration aid, not a production artifact; `docker/Dockerfile` (8a) is the
 production image. See `docs/demo.md`.
 
@@ -1797,6 +1810,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_ACTIONS_MAX_LOG_BYTES` | no | `1048576` | Max captured container log size |
 | `CAD_ACTIONS_MAX_ARTIFACT_BYTES` | no | `33554432` | Max total bytes collected from `/out` |
 | `CAD_ACTIONS_MAX_CONCURRENT_RUNS` | no | `1` | Per-project limit on `:running` action runs (`0` disables the cap) |
+| `CAD_ACTIONS_MAX_QUEUED_RUNS` | no | `20` | Per-project limit on `:queued` action runs (`0` disables the cap) |
 | `CAD_ACTIONS_DISPATCH_ON_BOOT` | no | `true` | Drain queued runs once when the server boots |
 | `CAD_ACTIONS_ARTIFACT_RETENTION_DAYS` | no | `30` | Delete a terminal run's logs/artifacts after this age (`0` disables) |
 | `CAD_ACTIONS_RETENTION_INTERVAL_MS` | no | `21600000` | Retention backstop interval (`0` disables the periodic pass) |
@@ -2091,7 +2105,9 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   resolution (members-only; the flag is reserved) (§7.2, §8.2, §8.3, §16).
 - 6 post-close — run queue (shipped): `:queued` is a real waiting state bounded
   by `CAD_ACTIONS_MAX_CONCURRENT_RUNS` per project (default 1, `0` =
-  unlimited). Claims are atomic through a per-project
+  unlimited) and `CAD_ACTIONS_MAX_QUEUED_RUNS` waiting rows (default 20, `0` =
+  unlimited; excess submissions are refused). Claims are atomic through a
+  per-project
   `pg_try_advisory_xact_lock`; dispatch runs on submission, every terminal
   transition, and one boot pass (`CAD_ACTIONS_DISPATCH_ON_BOOT`); queued rows
   are never treated as stale, a task that cannot start fails its row and frees
@@ -2307,9 +2323,12 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       under a per-project advisory lock; dispatch runs on submit, every terminal
       transition, and one boot pass; `:queued` is waiting work and is never
       interrupted by stale-run recovery.
-- [ ] **Run queue depth:** the per-project queue is unbounded and only managers
-      can add to it (§8.3). Add a maximum-queued-runs setting (with a refusal
-      message) if a burst of submissions ever needs bounding.
+- [x] **Run queue depth:** resolved — `CAD_ACTIONS_MAX_QUEUED_RUNS` (default
+      `20`, `0` disables) caps a project's `:queued` rows. `Runs.prepare/4`
+      counts and inserts in one transaction under the per-project advisory key,
+      so concurrent submissions cannot both slip past it; over-cap submissions
+      return `:queue_full` and the project page flashes a refusal. `:running` is
+      still bounded by `CAD_ACTIONS_MAX_CONCURRENT_RUNS` (§8.3, §12.6).
 - [ ] **Docker Engine floor / API version:** action staging relies on
       `volume-subpath` (API 1.45, Docker 26+). `CAD_DOCKER_API_VERSION` defaults
       to `v1.45` because that is the compatible floor for Docker 26–29; there is

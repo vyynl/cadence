@@ -617,6 +617,102 @@ defmodule Cadence.Server.Actions.RunsTest do
     end
   end
 
+  describe "queue depth cap" do
+    test "refuses a submission beyond the per-project queue limit", %{
+      project: project,
+      owner: owner,
+      node: node
+    } do
+      Application.put_env(:cadence_server, :actions_max_concurrent_runs, 1)
+      Application.put_env(:cadence_server, :actions_max_queued_runs, 1)
+      {:ok, gate} = Agent.start_link(fn -> :first end)
+      test_pid = self()
+
+      FakeDocker.script(%{
+        on_wait: fn ->
+          case Agent.get_and_update(gate, fn
+                 :first -> {:first, :released}
+                 other -> {other, other}
+               end) do
+            :first ->
+              send(test_pid, {:waiting, self()})
+
+              receive do
+                :continue -> :ok
+              end
+
+            _released ->
+              :ok
+          end
+        end
+      })
+
+      assert {:ok, first} = Runs.start(%{id: owner.id}, project.id, node.id, "run_analysis")
+      assert_receive {:waiting, first_task}, 2_000
+
+      assert {:ok, queued} = Runs.start(%{id: owner.id}, project.id, node.id, "run_analysis")
+      assert Repo.get!(ActionRun, queued.id).status == :queued
+
+      assert {:error, :queue_full} =
+               Runs.start(%{id: owner.id}, project.id, node.id, "run_analysis")
+
+      assert Repo.aggregate(
+               from(r in ActionRun,
+                 where: r.project_id == ^project.id and r.status == :queued
+               ),
+               :count
+             ) == 1
+
+      send(first_task, :continue)
+      assert eventually(fn -> Repo.get!(ActionRun, first.id).status == :succeeded end)
+      assert eventually(fn -> Repo.get!(ActionRun, queued.id).status == :succeeded end)
+
+      # Terminal rows do not count toward the queued depth. Use prepare/4 so no
+      # task is spawned after the assertions (the row is rolled back with the
+      # test sandbox).
+      assert {:ok, _next} = Runs.prepare(%{id: owner.id}, project.id, node.id, "run_analysis")
+    end
+
+    test "a zero limit disables the queue cap", %{project: project, owner: owner, node: node} do
+      Application.put_env(:cadence_server, :actions_max_concurrent_runs, 1)
+      Application.put_env(:cadence_server, :actions_max_queued_runs, 0)
+      {:ok, gate} = Agent.start_link(fn -> :first end)
+      test_pid = self()
+
+      FakeDocker.script(%{
+        on_wait: fn ->
+          case Agent.get_and_update(gate, fn
+                 :first -> {:first, :released}
+                 other -> {other, other}
+               end) do
+            :first ->
+              send(test_pid, {:waiting, self()})
+
+              receive do
+                :continue -> :ok
+              end
+
+            _released ->
+              :ok
+          end
+        end
+      })
+
+      assert {:ok, first} = Runs.start(%{id: owner.id}, project.id, node.id, "run_analysis")
+      assert_receive {:waiting, first_task}, 2_000
+
+      assert {:ok, second} = Runs.start(%{id: owner.id}, project.id, node.id, "run_analysis")
+      assert {:ok, third} = Runs.start(%{id: owner.id}, project.id, node.id, "run_analysis")
+      assert Repo.get!(ActionRun, second.id).status == :queued
+      assert Repo.get!(ActionRun, third.id).status == :queued
+
+      send(first_task, :continue)
+      assert eventually(fn -> Repo.get!(ActionRun, first.id).status == :succeeded end)
+      assert eventually(fn -> Repo.get!(ActionRun, second.id).status == :succeeded end)
+      assert eventually(fn -> Repo.get!(ActionRun, third.id).status == :succeeded end)
+    end
+  end
+
   describe "read APIs" do
     test "list/3 and get/3 are member-scoped", %{
       project: project,
@@ -992,6 +1088,7 @@ defmodule Cadence.Server.Actions.RunsTest do
       :scan_max_files,
       :actions_max_artifact_bytes,
       :actions_max_concurrent_runs,
+      :actions_max_queued_runs,
       :actions_task_supervisor
     ]
   end

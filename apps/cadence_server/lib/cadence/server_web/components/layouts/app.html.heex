@@ -25,12 +25,14 @@
       <nav>
         <a class="brand" href="/">Cadence</a>
         <a href="/">Portfolio</a>
-        <%= if assigns[:current_user] do %>
-          <span class="nav-user">{to_string(assigns[:current_user].email)}</span>
-          <a href="/sign-out">Sign out</a>
-        <% else %>
-          <a href="/sign-in">Sign in</a>
-        <% end %>
+        <span class="nav-account">
+          <%= if assigns[:current_user] do %>
+            <span class="nav-user" title={to_string(assigns[:current_user].email)}>{to_string(assigns[:current_user].email)}</span>
+            <a href="/sign-out">Sign out</a>
+          <% else %>
+            <a href="/sign-in">Sign in</a>
+          <% end %>
+        </span>
       </nav>
     </header>
     <main id="main" tabindex="-1">

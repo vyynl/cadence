@@ -34,6 +34,7 @@ defmodule Cadence.ServerWeb.Router do
     get("/", PortfolioController, :index)
     get("/proposals/:token", ProposalController, :show, log: false)
     get("/p/:slug/runs/:run_id/artifacts/*path", RunArtifactController, :show)
+    get("/p/:slug/runs/:run_id/log", RunLogController, :show)
 
     ash_authentication_live_session :project do
       live("/p/:slug", ProjectLive, :home)

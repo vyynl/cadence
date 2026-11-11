@@ -36,22 +36,22 @@ styling pass is planned after 4c-3 (incident panel) unless a demo is imminent.
   bounded/capped, and refresh only via the existing project events. Treat this
   as a design idea: decide the column, data sources, and the §7.3 update before
   building.
-- **6c action logs:** the run page renders captured logs as escaped text in a
-  `<pre>` (ANSI/control sequences stripped). A "download raw log" or "copy"
-  affordance is still missing; add it only if needed, keeping the same escaping
-  rules for any inline render.
-- **Header nav spacing:** `site-header nav` is inline flow with single-space
-  gaps, so `Cadence Portfolio <email> Sign out` reads as one run of text,
-  especially at 390px. A `·` separator or grouping the account cluster would
-  read better, but any added gap must not overflow the narrow width.
-- **Run detail is still unexercised in the demo:** the seed creates no
-  `action_runs`, so `/p/cadence-demo/runs` only shows the empty state. The
-  `RunLive.Show` layout (status/live refresh, escaped log `<pre>`, artifact
-  list) remains covered by markup tests; seed a run or a demo action manifest
-  to include it in the visual pass.
 
 ## Done
 
+- **Raw log download (2026-11-11, closeout slice 2):** the run page's Output
+  section links **Download raw log** (`/p/:slug/runs/:run_id/log`). The
+  controller is member-only (`Runs.get/3` re-checks), reads the recorded
+  `log_path` through `Runs.log/1`, and answers `text/plain` + `attachment` +
+  `private, no-store`; every refusal is a 404.
+- **Header nav spacing (2026-11-11, closeout slice 2):** the account cluster is
+  grouped in `.nav-account`; `.site-header nav` is a wrapping flex row with a
+  gap, and `.nav-user` truncates. "Cadence Portfolio email Sign out" reads and
+  wraps cleanly at 390px with no overflow.
+- **Seeded demo run (2026-11-11, closeout slice 2):** `cadence-demo` seeds one
+  finished (`:succeeded`) action run on the pinned node with a captured
+  `output.log`, so the run history and detail pages are part of the tour;
+  `--reset` removes the rows and their artifact dirs.
 - **DAG canvas width (2026-11-08, user-flagged):** fixed. `DAGLayout.layout/2`
   now sizes the SVG from the columns the graph actually occupies (capped by
   `max_columns`), so the default no longer reserves 10 columns (444px) for a

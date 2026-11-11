@@ -201,6 +201,15 @@ defmodule Cadence.ServerWeb.RunLive.Show do
 
             <section class="run-output" aria-label="Run output">
               <h3>Output</h3>
+
+              <p :if={payload.run.log_path} class="run-output-actions">
+                <a
+                  class="run-log-download"
+                  href={~p"/p/#{@project.slug}/runs/#{payload.run.id}/log"}
+                >
+                  Download raw log
+                </a>
+              </p>
               <% terminal? = ActionRun.terminal?(payload.run.status) %>
 
               <p :if={payload.log in [nil, ""] and terminal?} class="note">

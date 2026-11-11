@@ -144,9 +144,32 @@ main:focus {
 }
 
 .site-header nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 1rem;
   max-width: 88rem;
   margin: 0 auto;
   padding: 1rem 1.5rem;
+}
+
+/* Group the signed-in identity with its action so the header reads as
+   "Cadence · Portfolio · <email> · Sign out" instead of one run of text, and
+   wraps as a unit at narrow widths. */
+.nav-account {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+  margin-left: auto;
+}
+
+.nav-user {
+  color: var(--muted);
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .brand {
@@ -1212,6 +1235,21 @@ code {
 .run-meta dd {
   margin: 0;
   overflow-wrap: anywhere;
+}
+
+.run-output-actions {
+  margin: 0.25rem 0 0;
+}
+
+.run-log-download {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.run-log-download:hover,
+.run-log-download:focus-visible {
+  color: var(--accent);
 }
 
 .run-log {

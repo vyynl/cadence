@@ -1,14 +1,14 @@
 # Cadence — Progress
 
 ## Current Phase
-**Closeout hardening — slice 1 (contract cleanup) complete.** Phase 8 and the
-planned build order are done; this slice resolved three recorded mismatches:
-union proposal links now come from the server (`proposal_url` in the sync
-response, persisted in the daemon journal), the unused
-`Project.actions_manifest` column is gone from the shared schema and both
-databases, and server-created meld nodes record `docs_state: :skipped` instead
-of pending forever. Next is closeout slice 2 (run-queue depth cap plus the
-remaining `docs/ui-notes.md` items), then the final audit.
+**Closeout hardening — slice 2 complete.** Phase 8 and the planned build order
+are done; slices 1–2 resolved the recorded contract mismatches and UI notes:
+union proposal links come from the server, `Project.actions_manifest` is gone,
+meld nodes record `docs_state: :skipped`, the action run queue is capped, the
+header nav is grouped and wrapping, the demo seeds a finished run, and the run
+page offers a raw-log download. Next is the final audit/docs pass (health audit,
+archive the phase briefs, release notes/versioning); the remaining items are
+optional and recorded in spec §16.
 
 ## Done (summary)
 
@@ -767,6 +767,27 @@ remaining `docs/ui-notes.md` items), then the final audit.
   clean. Review: PASS WITH WARNINGS; all findings fixed (journal contract text,
   non-additive migration warning, historical meld rows, empty-URL fallback,
   test URL source).
+- **Closeout slice 2 (run queue cap + UI notes, 2026-11-11)** — four fixes.
+  **Queue depth:** `CAD_ACTIONS_MAX_QUEUED_RUNS` (default 20, `0` disables)
+  caps a project's `:queued` rows. `Runs.prepare/4` counts and inserts in one
+  transaction under the same per-project advisory key the dispatcher claims
+  with (blocking lock for submissions, `pg_try_` for claims), so concurrent
+  submissions cannot both slip past it; over-cap submissions return
+  `:queue_full` and the project page flashes a refusal. Terminal rows do not
+  count. **Header nav:** the account cluster is grouped (`.nav-account`) and
+  `.site-header nav` is a wrapping flex row with a gap; `.nav-user` truncates.
+  **Seeded demo run:** `cadence-demo` gets one finished (`:succeeded`) run on
+  the pinned node with a written `output.log` (best-effort; reset removes the
+  rows and artifact dirs), so the run history/detail pages are in the tour.
+  **Raw log:** member-only `GET /p/:slug/runs/:run_id/log` serves the recorded
+  log as `text/plain` + `attachment` + `private, no-store`; every refusal is
+  404; the run page links **Download raw log**. Spec
+  §7.2/§8.3/§12.4/§12.6/§13/§16, `.env.example`, `docs/demo.md`, and
+  `docs/ui-notes.md` updated. Verified: 1131 tests green (313 shared + 217
+  daemon + 601 server), format/dev/prod compile clean, and a live demo-stack
+  check (rebuilt server, reseeded) — the seeded run lists and opens, the log
+  download returns 200 `text/plain` `attachment`, and the header has no
+  horizontal overflow at 1440×1000 or 390×844.
 - **DAG width fix (2026-11-08, user-flagged)** — the project-home rail no longer
   overflows. `DAGLayout.layout/2` derives the SVG width from the columns
   actually occupied (capped by `max_columns`) instead of always reserving 10
@@ -792,23 +813,25 @@ remaining `docs/ui-notes.md` items), then the final audit.
 
 ## Next
 
-**Immediate step:** **closeout slice 2** — add a run-queue depth cap
-(`CAD_ACTIONS_MAX_QUEUED_RUNS`, a refusal error and flash) and the remaining
-`docs/ui-notes.md` items (header-nav spacing, a seeded demo run so
-`/p/cadence-demo/runs/:id` is exercised, and a raw-log affordance). Then the
-final audit/docs pass (health audit, archive the phase briefs, version/release
-notes).
+**Immediate step:** **final audit/docs pass.** Run the project health audit
+(architecture, tests, dependencies, docs), then archive the completed phase
+briefs (`phase-4-prep.md`, `phase-6-prep.md`, `phase-7-prep.md`) and write
+release notes / decide the version (currently `0.1.0` in the root and app
+`mix.exs` files). Confirm every §16 item is either resolved or explicitly
+deferred, and refresh `docs/README.md` if the doc index shifts.
 
-The planned build order (spec §13, Phases 1–8) is complete. Remaining optional
-work is the Phase 5 P5 docs live smoke with a real `CAD_LLM_API_KEY`, the
-7b/7c residues below, action log streaming, burrito packaging, and CI/image
-publishing. If the run history ever needs stable paging, replace the offset
-with a `(created_at, id)` cursor (recorded in spec §16).
+The planned build order (spec §13, Phases 1–8) is complete and the closeout
+slices are done. Remaining optional work is the Phase 5 P5 docs live smoke with
+a real `CAD_LLM_API_KEY`, the 7b/7c residues below, action log streaming,
+burrito packaging, and CI/image publishing. If the run history ever needs
+stable paging, replace the offset with a `(created_at, id)` cursor (recorded in
+spec §16).
 
 **Integration contract (6c, for anything that touches runs):**
 `Actions.Runs.prepare/4` returns `{:ok, %ActionRun{}}` or
-`{:error, :disabled | :forbidden | :not_found | :quarantined | :unknown_action |
-Ecto.Changeset.t()}`; `start/4` adds the async task and returns the queued row;
+`{:error, :disabled | :forbidden | :not_found | :quarantined | :queue_full |
+:unknown_action | Ecto.Changeset.t()}`; `start/4` adds the async task and
+returns the queued row;
 `execute/1` is the synchronous body tests use. Statuses are
 `queued → running → succeeded | failed | timed_out | interrupted`; infra
 failures carry a closed `error_reason` (`quarantined`, `staging_failed`,
@@ -825,10 +848,11 @@ takes `:limit`/`:offset`; `Runs.page/3` returns
 Carry-over (post-Phase-7, optional):
 
 1. **Phase 5 P5 docs live smoke** — with a real `CAD_LLM_API_KEY`.
-2. **6c residues** (spec §16): an unbounded queue depth; action log streaming
-   remains post-exit; run paging is offset-based (a cursor is the fix if the
-   window shift ever matters). Per-project run concurrency, artifact/image
-   retention, and run/artifact paging are resolved by M1/M2/M3.
+2. **6c residues** (spec §16): action log streaming remains post-exit; run
+   paging is offset-based (a cursor is the fix if the window shift ever
+   matters). Per-project run concurrency, queue depth, artifact/image
+   retention, and run/artifact paging are resolved by M1/M2/M3 and closeout
+   slice 2.
 3. **7b/7c residues** (spec §16): pack consolidation / multi-pack index; the
    repack threshold path was not exercised on the demo seed (its stores are
    below 1,000 objects — the manual two-run path was used, and the threshold is
@@ -849,14 +873,31 @@ expected for the closeout slices.
 - (none). Phase 7 (7a–7d), the daemon boot guard, the demo-stack visual pass,
   `:CadProposals`, 6c M1 (run queue) / M2 (retention) / M3 (paging), Phase
   8a (production server release), Phase 8b (daemon release), closeout slice 1
-  (proposal links, `actions_manifest`, meld docs state), and the DAG width
-  fix are complete, and every review's must-fix item is applied and verified.
+  (proposal links, `actions_manifest`, meld docs state), closeout slice 2 (run
+  queue cap, header nav, seeded run, raw-log download), and the DAG width fix
+  are complete, and every review's must-fix item is applied and verified.
   Pre-existing follow-ups (unreadable-object isolation, re-push of an existing
   row whose objects were later lost, the 8 MB retry ceiling, pack
   consolidation) remain recorded below and in spec §16.
 
 ## Spec Deltas / Open Items
 
+- **Closeout slice 2 notes (2026-11-11)** — (a) The queue-depth check holds a
+  **blocking** `pg_advisory_xact_lock` on the run-claim key while inserting; a
+  concurrent dispatcher's `pg_try_...` claim skips and retries on the next
+  transition/boot. Submissions are user-initiated and brief, so this is the
+  trade for an exact cap without a unique/index trick. (b) Only `:queued` rows
+  count; `:running` is still bounded by `CAD_ACTIONS_MAX_CONCURRENT_RUNS`. (c)
+  The seeded run is synthetic (row + log written by the seed, nothing executed)
+  and the log write is best-effort: an unwritable `CAD_ARTIFACT_PATH` leaves
+  `log_path: nil`. (d) The raw-log route serves the recorded `log_path` through
+  `Runs.log/1`; it is member-only and never accepts a client path. (e) The
+  header grouping is markup/CSS only; the live demo-stack check covered
+  1440×1000 and 390×844 with no horizontal overflow. (f) The cap's exactness
+  rests on the shared advisory key; the shared-sandbox tests cover it
+  sequentially (two concurrent submissions are argued from the blocking lock,
+  not exercised on two pooled connections). (g) A refused submission still
+  dispatches, so a claim skipped while the submission held the lock is retried.
 - **Closeout slice 1 notes (2026-11-11)** — (a) `union_proposals.url` is
   nullable: rows written before the migration (or by an older server) fall back
   to `CAD_SERVER_URL`; the daemon also falls back on an empty/malformed value.
@@ -925,11 +966,6 @@ expected for the closeout slices.
   connection; concurrent pruning is idempotent (a missing tag is `:ok`).
   `CAD_ACTIONS_RETENTION_BATCH` caps a pass at 500 runs, so a large backlog
   drains over several passes.
-- **Run queue depth is unbounded (2026-11-07)** — the per-project queue accepts
-  any number of waiting rows; only managers can submit, and each is a durable
-  `action_runs` row. Recorded in spec §8.3/§16; add a maximum-queued-runs
-  setting (with a refusal message) if a burst of submissions ever needs
-  bounding. Retention does not apply to rows, only to artifacts/logs (M2).
 - **Boot dispatch runs before migrations on a fresh DB (2026-11-07)** — the
   one-shot `Actions.Dispatcher` calls `Runs.dispatch_all/0` at boot; on an
   unmigrated database the query raises, is logged by shape, and the pass idles.
@@ -2128,3 +2164,21 @@ and `docs/phase-6-prep.md` updated. Verification: 1122 tests green (313 shared
 and dev/prod compile clean. Review: PASS WITH WARNINGS; all findings fixed.
 Next: closeout slice 2 (run-queue depth cap + UI notes), then the final audit.
 Tree is formatted and compiled; shipped with this commit.
+
+2026-11-11 — **Closeout slice 2 (run queue cap + UI notes) shipped.** A new
+`CAD_ACTIONS_MAX_QUEUED_RUNS` (default 20, `0` disables) caps per-project
+`:queued` rows in `Runs.prepare/4` (count + insert under the run-claim advisory
+lock, so concurrent submissions cannot both pass); excess submissions return
+`:queue_full` with a page flash. The header account cluster is grouped and the
+nav wraps with no overflow at 390px. `cadence-demo` seeds one finished run with
+a written `output.log` (reset removes rows and artifact dirs), and a member-only
+`GET /p/:slug/runs/:run_id/log` serves the captured log as `text/plain` +
+`attachment` + `private, no-store` with a **Download raw log** link on the run
+page. Spec §7.2/§8.3/§12.4/§12.6/§13/§16, `.env.example`, `docs/demo.md`, and
+`docs/ui-notes.md` updated. Verification: 1131 tests green (313 shared + 217
+daemon + 601 server), format/dev/prod compile clean; a rebuilt/reseeded demo
+stack listed and opened the run, served the log (200, `text/plain`,
+`attachment`, `private, no-store`), and showed no horizontal overflow at
+1440×1000 or 390×844. Next: the final audit/docs pass (health audit, archive the
+phase briefs, release notes/versioning). Tree is formatted and compiled; shipped
+with this commit.
