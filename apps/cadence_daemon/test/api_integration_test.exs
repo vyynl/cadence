@@ -49,4 +49,19 @@ defmodule Cadence.Daemon.API.IntegrationTest do
 
     assert length(nodes) == 2
   end
+
+  test "Release.register/4 registers through the socket (release equivalent of mix cad.register)",
+       %{socket: socket, work_dir: work_dir} do
+    start_supervised!({API, socket_path: socket})
+
+    slug = "release-#{System.unique_integer([:positive])}"
+
+    assert %{"project" => %{"slug" => ^slug, "name" => "Release"}} =
+             Cadence.Daemon.Release.register("Release", slug, work_dir, socket)
+
+    %{status: 200, body: %{"projects" => projects}} =
+      Client.request("GET", "/projects", nil, socket)
+
+    assert Enum.any?(projects, &(&1["slug"] == slug))
+  end
 end

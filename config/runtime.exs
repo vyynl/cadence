@@ -1,8 +1,17 @@
 import Config
 
+# This file is evaluated by every artifact built from the umbrella. The daemon
+# release (spec §12.8) contains only `cadence_daemon` + `cadence_shared`, so the
+# server block below — which requires the server's prod-only variables — is
+# evaluated only when `cadence_server` is on this artifact's code path. Dev/test
+# checkouts and the `cadence` server release include it; `mix release
+# cadence_daemon` does not.
+server_artifact? = not match?({:error, _}, :code.lib_dir(:cadence_server))
+
 if config_env() != :test do
   state_dir =
-    System.get_env("CAD_STATE_DIR", Path.join(System.user_home!(), ".local/state/cadence"))
+    System.get_env("CAD_STATE_DIR") ||
+      Path.join(System.user_home!(), ".local/state/cadence")
 
   config :cadence_daemon, Cadence.Daemon.Repo, database: Path.join(state_dir, "cadence.db")
 
@@ -14,13 +23,22 @@ if config_env() != :test do
       )
       |> String.split(",", trim: true)
 
+  darwin? = match?({:unix, :darwin}, :os.type())
+
+  watch_backend =
+    case System.get_env("CAD_WATCH_BACKEND") do
+      # `fs_inotify` is Linux-only and `fs_mac` is Darwin-only in `file_system`;
+      # selecting the wrong one stops the watcher, so fall back quietly.
+      "fs_poll" -> :fs_poll
+      "fs_mac" -> if(darwin?, do: :fs_mac, else: :fs_inotify)
+      "fs_inotify" -> if(darwin?, do: :fs_poll, else: :fs_inotify)
+      nil -> if(darwin?, do: :fs_poll, else: :fs_inotify)
+      _ -> if(darwin?, do: :fs_poll, else: :fs_inotify)
+    end
+
   config :cadence_daemon,
     watch_debounce_ms: String.to_integer(System.get_env("CAD_WATCH_DEBOUNCE_MS", "2000")),
-    watch_backend:
-      (case System.get_env("CAD_WATCH_BACKEND", "fs_inotify") do
-         "fs_poll" -> :fs_poll
-         _ -> :fs_inotify
-       end),
+    watch_backend: watch_backend,
     local_user_id: System.get_env("CAD_LOCAL_USER_ID", "00000000-0000-0000-0000-000000000000"),
     git_author: %{
       name: System.get_env("CAD_GIT_AUTHOR_NAME", "cadence"),
@@ -70,9 +88,11 @@ if config_env() != :test do
     docs_max_file_bytes: String.to_integer(System.get_env("CAD_DOCS_MAX_FILE_BYTES", "262144")),
     docs_context_bytes: String.to_integer(System.get_env("CAD_DOCS_CONTEXT_BYTES", "65536")),
     docs_diff_max_bytes: String.to_integer(System.get_env("CAD_DOCS_DIFF_MAX_BYTES", "32768"))
+end
 
-  # -- Server ---------------------------------------------------------------
+# -- Server -----------------------------------------------------------------
 
+if config_env() != :test and server_artifact? do
   listen_port = String.to_integer(System.get_env("CAD_HTTP_PORT", "4000"))
 
   database_url =

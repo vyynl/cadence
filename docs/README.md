@@ -26,7 +26,7 @@ history, not current instructions.
 | Phase 5 — doc automation | Code complete (5a shared primitives, 5b daemon worker, 5c daemon API + Neovim, P4 deferred/pushed docs + docs badge); P5 release verification pending |
 | Phase 6 — Docker actions | Complete (6a manifest foundation, 6b runner, 6c web run experience, post-close run queue, retention and run/artifact paging); action log streaming remains a §16 delta |
 | Phase 7 — Storage engineering | Complete (7a pack layer, 7b repacker, 7c existence handshake, 7d multi-pack/index/delta-depth/repack verification + demo-stack smoke); pack consolidation remains a §16 delta |
-| Phase 8 — Release engineering | 8a complete (production server image, umbrella release, `Cadence.Server.Release.migrate/0`, prod compose, deploy docs); 8b daemon release pending |
+| Phase 8 — Release engineering | Complete (8a production server image, umbrella release, `Cadence.Server.Release.migrate/0`, prod compose, deploy docs; 8b `cadence_daemon` release with `Cadence.Daemon.Release.migrate/0`, release registration, systemd/install/upgrade docs) |
 
 ## Current docs
 
@@ -34,7 +34,7 @@ history, not current instructions.
 |---|---|
 | `spec.md` | Canonical product/technical contract |
 | `progress.md` | Current handoff and session summary |
-| `daemon-setup.md` | Local daemon setup: token, env file, migration, boot, registration |
+| `daemon-setup.md` | Local daemon setup: release or source install, token, env file, migration, boot, registration, upgrades |
 | `deploy.md` | Production server: release image, compose stack, migrations, volumes, actions |
 | `demo.md` | Local demo stack: compose, seed accounts, guided tour |
 | `phase-7-prep.md` | Phase 7 storage engineering: pack layer, repacker, existence handshake |

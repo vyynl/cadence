@@ -1,14 +1,13 @@
 # Cadence — Progress
 
 ## Current Phase
-**Phase 8a — production server release complete; DAG width defect fixed.** The
-planned build order (Phases 1–7) and 6c operational hardening were already
-complete; this session shipped the server artifact spec §12.8 had deferred (root
-`cadence` release, `Cadence.Server.Release.migrate/0`, `docker/Dockerfile`,
-`docker-compose.prod.yml`, `docs/deploy.md`) and then fixed the user-flagged
-project-home DAG overflow (`DAGLayout` now sizes to the columns actually used;
-`.dag-canvas` fills the rail). **Phase 8b (daemon release)** is the next slice;
-the remaining items are optional.
+**Phase 8 complete — daemon release shipped (8b).** The planned build order
+(spec §13, Phases 1–8) is now complete: 8a shipped the production server
+artifact, 8b ships `mix release cadence_daemon` with
+`Cadence.Daemon.Release.migrate/0`, release-time project registration, a
+distribution-free artifact, and install/upgrade docs. The next session starts
+the user-approved **closeout hardening** slice; every remaining item is
+optional or recorded in spec §16.
 
 ## Done (summary)
 
@@ -722,6 +721,32 @@ the remaining items are optional.
   §12.3/§12.4/§12.7/§12.8/§13/§16, `docs/README.md`, and `docs/demo.md` updated.
   Lesson:
   `.claude/solutions/docker/release-image-runtime-glibc-20261108.md`.
+- **Phase 8b (daemon release)** — `mix release cadence_daemon` ships. Root
+  `mix.exs` defines the release (`cadence_daemon` + `cadence_shared` only; no
+  server/Phoenix in `lib/`), and `Cadence.Daemon.Release` provides `migrate/0`
+  (creates the state dir `0700`, runs the SQLite migrations under
+  `Ecto.Migrator.with_repo/2`, idempotent), `repos/0`, `migrations_path/1`, and
+  `register/3` (release equivalent of `mix cad.register`).
+  `Dirs.ensure_repo_dir!/1` is shared with `Application` (no duplicated logic),
+  and `CAD_STATE_DIR` no longer eagerly requires `HOME`.
+  `config/runtime.exs` gates its server block on
+  `:code.lib_dir(:cadence_server)`, so the daemon runtime never needs
+  `CAD_DATABASE_URL`/`CAD_SECRET_KEY_BASE`/`CAD_PUBLIC_URL`; dev/test and the
+  `cadence` server release are unchanged. `rel/daemon/env.sh.eex` sets
+  `RELEASE_DISTRIBUTION=none` through a per-release `rel_templates_path`, so
+  there is no epmd, distribution cookie, or fixed node name (stop with SIGTERM;
+  `stop`/`remote` are gone). The watcher defaults to `fs_poll` on macOS and
+  `fs_inotify` on Linux, with symmetric fallback for an explicit wrong-OS
+  value. Docs: `docs/daemon-setup.md` gains release install/migrate/register,
+  a systemd user unit, upgrades, and prerequisites (per-OS build,
+  `inotify-tools`, `HOME`/`CAD_STATE_DIR`); spec §12.2/§12.6/§12.8/§13/§16
+  updated. Verified: 85 MB release (ERTS + `sqlite3_nif.so`), fresh HOME-less
+  migrate twice (`Migrations already up`), boot + socket `0600` +
+  `GET /projects` + `Release.register/3` + a watcher commit, `daemon` and
+  SIGTERM shutdown clean, server release guard checked both ways. 1116 tests
+  green (312 shared + 212 daemon + 592 server); format and dev/prod compile
+  clean. Review: REQUIRES CHANGES → fixes → PASS. Lesson:
+  `.claude/solutions/docker/umbrella-release-config-gating-20261111.md`.
 - **DAG width fix (2026-11-08, user-flagged)** — the project-home rail no longer
   overflows. `DAGLayout.layout/2` derives the SVG width from the columns
   actually occupied (capped by `max_columns`) instead of always reserving 10
@@ -747,20 +772,22 @@ the remaining items are optional.
 
 ## Next
 
-**Immediate step:** **8b — daemon release.** Add a `cadence_daemon` release to
-the root `mix.exs` (release name `cadence_daemon`), a
-`Cadence.Daemon.Release.migrate/0` that runs the SQLite
-`priv/repo/migrations`, and install/upgrade docs. Verify with
-`MIX_ENV=prod mix release cadence_daemon` and a migration run against a temp
-state dir. Spin up with `@phx-full`. The DAG width fix is complete; the planned
-build order (spec §13) is otherwise complete and every item below is optional
-and independent.
+**Immediate step:** **closeout hardening** (the next slice the user approved).
+Start with the `proposal_url` assumption: return the server's `public_url` in
+the `POST /sync/union` response and use it for the daemon journal and Neovim
+link, so a deployment whose `CAD_SERVER_URL` is internal no longer produces
+unreachable proposal links (spec §16). Then, in separate slices: remove or
+repurpose the unused `Project.actions_manifest` (model/implementation
+mismatch), decide the server-created meld node `docs_state` (`:skipped` at
+approval vs. a pulled-node generation flow), add a run-queue depth cap, and the
+remaining `docs/ui-notes.md` items (header-nav spacing, a seeded demo run, a
+raw-log affordance).
 
-Remaining optional work: the Phase 5 P5 docs live smoke with a real
-`CAD_LLM_API_KEY`, the rest of `docs/ui-notes.md` (header-nav spacing, a seeded
-run for the demo, raw-log affordance), and the 7b/7c residues below. If the run
-history ever needs stable paging, replace the offset with a `(created_at, id)`
-cursor (recorded in spec §16).
+The planned build order (spec §13, Phases 1–8) is complete. Remaining optional
+work is the Phase 5 P5 docs live smoke with a real `CAD_LLM_API_KEY`, the
+7b/7c residues below, action log streaming, burrito packaging, and CI/image
+publishing. If the run history ever needs stable paging, replace the offset
+with a `(created_at, id)` cursor (recorded in spec §16).
 
 **Integration contract (6c, for anything that touches runs):**
 `Actions.Runs.prepare/4` returns `{:ok, %ActionRun{}}` or
@@ -790,23 +817,47 @@ Carry-over (post-Phase-7, optional):
    repack threshold path was not exercised on the demo seed (its stores are
    below 1,000 objects — the manual two-run path was used, and the threshold is
    unit-tested). A hung repack is now bounded by `CAD_REPACK_TIMEOUT_MS`.
+4. **8b residues** (spec §16): a burrito single-file artifact is optional and
+   would need a §11 dependency row; CI/image publishing is still operator-side.
+   The daemon release was smoke-tested on Linux x86_64 only, with `fs_poll`
+   (the Linux `inotifywait` default is exercised by the dev daemon); macOS
+   defaults to `fs_poll` and `fs_mac` is untested on hardware.
 
-**Spin-up:** `@phx-full` for the docs live smoke (needs `CAD_LLM_API_KEY`) or if
-a `docs/ui-notes.md` item turns into a multi-file fix; `@phx-quick` for a
-single-file residue. The planned build order in spec §13 is complete except 8b;
-no new dependency is expected.
+**Spin-up:** `@phx-full` for the closeout slices (they touch the server,
+daemon, and Neovim) or the docs live smoke (needs `CAD_LLM_API_KEY`);
+`@phx-quick` for a single-file `docs/ui-notes.md` item. No new dependency is
+expected for the closeout slices.
 
 ## Blocked
 
 - (none). Phase 7 (7a–7d), the daemon boot guard, the demo-stack visual pass,
   `:CadProposals`, 6c M1 (run queue) / M2 (retention) / M3 (paging), Phase
-  8a (production server release), and the DAG width fix are complete, and every
-  review's must-fix item is applied and verified. Pre-existing follow-ups (unreadable-object
-  isolation, re-push of an existing row whose objects were later lost, the 8 MB
-  retry ceiling, pack consolidation) remain recorded below and in spec §16.
+  8a (production server release), Phase 8b (daemon release), and the DAG width
+  fix are complete, and every review's must-fix item is applied and verified.
+  Pre-existing follow-ups (unreadable-object isolation, re-push of an existing
+  row whose objects were later lost, the 8 MB retry ceiling, pack
+  consolidation) remain recorded below and in spec §16.
 
 ## Spec Deltas / Open Items
 
+- **8b release notes (2026-11-11)** — (a) The shared umbrella `runtime.exs`
+  gates its server block on `:code.lib_dir(:cadence_server)`; the check is
+  composition-based (not release-name-based), so revisit it only if a third
+  artifact is added. (b) The daemon release is built per target OS/arch
+  (`exqlite` precompiled NIF); it was smoke-tested on Linux x86_64 only, and
+  the release smoke used `CAD_WATCH_BACKEND=fs_poll` rather than the Linux
+  `inotifywait` default (the dev daemon exercises inotify). macOS defaults to
+  `fs_poll`; `fs_mac` is opt-in and untested on hardware. (c)
+  `RELEASE_DISTRIBUTION=none` is daemon-only via
+  `rel_templates_path: "rel/daemon"`; the server release keeps Mix's default,
+  and `bin/cadence_daemon stop/remote` therefore do not exist (SIGTERM /
+  systemd). (d) Optional Ecto adapters such as `postgrex` may still be
+  assembled into the daemon release by Mix; they are not daemon dependencies,
+  are never configured, and open no connection. (e) Burrito and CI/image
+  publishing remain open in §16; adopting Burrito needs a §11 dependency row.
+  (f) The 8a server image must be rebuilt on the next deploy to pick up the
+  shared `runtime.exs` change; old images keep requiring the server's prod
+  variables, which is still correct.
 - **8a release notes (2026-11-08)** — (a) the runtime image distro must match
   the `elixir` build image's glibc: `docker/Dockerfile` builds on
   `elixir:1.20-otp-29` (Debian trixie) and runs on `debian:trixie-slim`; bump
@@ -2013,3 +2064,21 @@ tests green (312 shared + 592 server + 207 daemon); the rebuilt demo at
 `docs/images/dag-width-{overflow,fixed}-*-20261108.png`. Spec §7.3 records the
 rule and `docs/ui-notes.md` moved the item to Done. Next: **8b — daemon
 release**; changes are uncommitted.
+
+2026-11-11 — **8b (daemon release) ships; Phase 8 and the planned build order
+are complete.** `mix release cadence_daemon` (daemon + shared only) with
+`Cadence.Daemon.Release.migrate/0`, `repos/0`, `migrations_path/1`, and
+`register/3`; the shared `runtime.exs` now gates its server block on
+`:code.lib_dir(:cadence_server)` so the daemon needs only `CAD_STATE_DIR`;
+`rel/daemon/env.sh.eex` disables distribution for the daemon artifact only;
+`CAD_STATE_DIR` no longer eagerly requires `HOME`; the watcher defaults are
+OS-aware (Linux `fs_inotify`, macOS `fs_poll`). `docs/daemon-setup.md` gained
+release install/migrate/register, a systemd unit, upgrades, and prerequisites.
+Verification: release built (85 MB, ERTS + `sqlite3_nif.so`), HOME-less migrate
+twice, boot + socket + `GET /projects` + register + watcher commit + `daemon`
+and SIGTERM shutdown, server release guard checked both ways, 1116 tests green
+(312 shared + 212 daemon + 592 server), format and dev/prod compile clean.
+Review: REQUIRES CHANGES → fixes → PASS (all findings resolved, no blockers).
+Next: closeout hardening (union `public_url`, `actions_manifest`, meld-node
+docs, queue depth, UI notes). Tree is formatted and compiled; changes are
+uncommitted.

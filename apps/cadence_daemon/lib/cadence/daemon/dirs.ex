@@ -6,7 +6,8 @@ defmodule Cadence.Daemon.Dirs do
   @doc "The daemon state directory (socket, cache, DB). Default: `~/.local/state/cadence`."
   @spec state_dir() :: Path.t()
   def state_dir do
-    System.get_env("CAD_STATE_DIR", Path.join(System.user_home!(), ".local/state/cadence"))
+    System.get_env("CAD_STATE_DIR") ||
+      Path.join(System.user_home!(), ".local/state/cadence")
   end
 
   @doc "Root under which per-project bare Git object stores live."
@@ -32,4 +33,22 @@ defmodule Cadence.Daemon.Dirs do
     File.chmod!(path, 0o700)
     :ok
   end
+
+  @doc """
+  Creates the parent directory of a configured SQLite database owner-only.
+
+  `:memory:` (tests), an unset database, and a bare relative filename (whose
+  `Path.dirname/1` is `"."`) are no-ops, so callers can pass
+  `repo.config()[:database]` without branching and never chmod the current
+  directory.
+  """
+  @spec ensure_repo_dir!(Path.t() | nil) :: :ok
+  def ensure_repo_dir!(path) when is_binary(path) and path != ":memory:" do
+    case Path.dirname(path) do
+      "." -> :ok
+      dir -> ensure!(dir)
+    end
+  end
+
+  def ensure_repo_dir!(_path), do: :ok
 end

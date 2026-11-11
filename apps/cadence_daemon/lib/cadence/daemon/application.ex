@@ -53,17 +53,12 @@ defmodule Cadence.Daemon.Application do
 
   # The SQLite database (and its WAL/SHM siblings) live inside a 0700
   # directory so only the owning user can reach them. Skipped for `:memory:`
-  # (test) databases.
+  # (test) databases. `Cadence.Daemon.Release.migrate/0` performs the same step
+  # before starting the repo against a fresh `CAD_STATE_DIR`.
   defp ensure_repo_dir! do
     case Application.fetch_env(:cadence_daemon, Cadence.Daemon.Repo) do
       {:ok, config} ->
-        case Keyword.get(config, :database) do
-          path when is_binary(path) and path != ":memory:" ->
-            path |> Path.dirname() |> Cadence.Daemon.Dirs.ensure!()
-
-          _ ->
-            :ok
-        end
+        Cadence.Daemon.Dirs.ensure_repo_dir!(Keyword.get(config, :database))
 
       :error ->
         :ok

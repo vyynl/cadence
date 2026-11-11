@@ -1536,23 +1536,49 @@ schemas, with different adapters (SQLite vs Postgres). Name them explicitly:
 
 ### 12.2 Daemon
 
-- Distributed as a `mix release` installed per dev machine.
-- No Phoenix, no Postgres, no LiveView.
+- Distributed as a `mix release` (`cadence_daemon`, §12.8) installed per dev
+  machine. The release contains the `cadence_daemon` + `cadence_shared`
+  application closure and excludes the server app: no Phoenix/LiveView, and no
+  Postgres server or connection (`Cadence.Daemon.Repo` is SQLite). Optional Ecto
+  adapter libraries may still be assembled into the release and started inert by
+  OTP, but they are never configured and open no connection.
+- The daemon release runs with Erlang distribution off
+  (`rel/daemon/env.sh.eex` sets `RELEASE_DISTRIBUTION=none`): no epmd or
+  distribution port, no distribution cookie is used, and there is no fixed node
+  name, so two daemons can run side by side with different `CAD_STATE_DIR`. It
+  is stopped with SIGTERM (systemd does this); `bin/cadence_daemon stop/remote`
+  do not exist.
 - SQLite via `ecto_sqlite3` for local metadata.
 - Unix socket API at `~/.local/state/cadence/daemon.sock`.
 - Configuration: environment variables only (see §12.6), supplied via the
   process environment; the `~/.config/cadence/env` file is sourced into it
   (chmod 600) — the daemon does not parse env files itself.
 - A new state dir is created with owner-only (`0700`) permissions. The SQLite
-  database is migrated once with `mix ecto.migrate -r Cadence.Daemon.Repo`.
-  Booting before that migration is safe: rehydration logs a
+  database is migrated once with `Cadence.Daemon.Release.migrate/0` in an
+  installed release
+  (`bin/cadence_daemon eval "Cadence.Daemon.Release.migrate()"`) or
+  `mix ecto.migrate -r Cadence.Daemon.Repo` from a source checkout.
+  Migrations stay explicit: boot never auto-migrates. Booting before that
+  migration is safe: rehydration logs a
   `… skipped before migrations: no such table: <table>` warning per queue and
   the daemon idles; sync rehydration runs after a restart against the migrated
   database. (`docs/daemon-setup.md` is the operator walkthrough.)
+- The release directory is disposable and separate from `CAD_STATE_DIR`, so
+  upgrades replace the artifact and leave SQLite/Git/ledger data untouched.
+  Build on the target OS/arch (`exqlite` ships a precompiled NIF). On Linux the
+  default watcher needs `inotifywait` from `inotify-tools`; on macOS the default
+  is `fs_poll` (the native `fs_mac` listener is opt-in and only bundled in a
+  macOS build). Setting `CAD_WATCH_BACKEND=fs_poll` removes the Linux
+  dependency. A release user registers projects with
+  `Cadence.Daemon.Release.register/3` instead of `mix cad.register`.
 - Communicates with the server via the HTTP sync protocol (§10) plus an optional
   notification-only Phoenix Channels connection (Phase 2b-4). The socket never
   carries DAG or preference state.
 - No distributed Erlang. No shared process tree with the server.
+- `config/runtime.exs` is shared by both release artifacts: the server block is
+  evaluated only when `cadence_server` is on the artifact's code path, so the
+  daemon release never requires `CAD_DATABASE_URL`, `CAD_SECRET_KEY_BASE`, or
+  `CAD_PUBLIC_URL`.
 
 ### 12.3 Server
 
@@ -1794,7 +1820,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_LLM_MODEL` | no | provider default | Same as server |
 | `CAD_LLM_BASE_URL` | no | provider default | Same as server |
 | `CAD_WATCH_DEBOUNCE_MS` | no | `2000` | Idle before commit |
-| `CAD_WATCH_BACKEND` | no | `fs_inotify` | `file_system` backend (`fs_poll` in tests) |
+| `CAD_WATCH_BACKEND` | no | `fs_inotify` (Linux), `fs_poll` (macOS) | `file_system` backend; `fs_poll` everywhere, `fs_mac` opt-in on macOS |
 | `CAD_LOCAL_USER_ID` | no | `00000000-0000-0000-0000-000000000000` | Local user UUID used for `created_by` and membership |
 | `CAD_GIT_AUTHOR_NAME` | no | `cadence` | Author name written into local Git commits |
 | `CAD_GIT_AUTHOR_EMAIL` | no | `cadence@local` | Author email written into local Git commits |
@@ -1868,9 +1894,23 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   `/data/git`, `/data/artifacts`, and `/data/actions`; the app listens on 4000
   inside the container. The reference stack is `docker-compose.prod.yml`
   (§12.4); operator steps are in `docs/deploy.md`.
-- **Daemon release (Phase 8b, pending):** `mix release cadence_daemon` per
-  target OS with its own SQLite migration entry point. Optionally wrapped by
-  `burrito` for a single-file binary.
+- **Daemon release (Phase 8b, shipped):** the root `mix.exs` defines a
+  `cadence_daemon` release containing the `cadence_daemon` + `cadence_shared`
+  application closure (no Phoenix/Postgres/LiveView); the entry point is
+  `bin/cadence_daemon`. `Cadence.Daemon.Release` provides `migrate/0` (creates
+  the state directory owner-only, then runs the SQLite migrations under
+  `Ecto.Migrator.with_repo/2`), `repos/0`, `migrations_path/1`, and
+  `register/3` (the release equivalent of `mix cad.register`). Migrations are
+  explicit; the release never auto-migrates on boot. The artifact bundles ERTS
+  and `exqlite`'s precompiled NIF, so it is built per target OS/arch.
+  `rel/daemon/env.sh.eex` sets `RELEASE_DISTRIBUTION=none` (no epmd, no
+  distribution cookie, no fixed node name; stop with SIGTERM). The umbrella's
+  `config/runtime.exs` is
+  shared: its server block is evaluated only when `cadence_server` is on the
+  artifact's code path, so a daemon runtime never requires the server's
+  prod-only variables. `docs/daemon-setup.md` documents install, migration,
+  registration, a systemd unit, and upgrades. A `burrito` single-file binary
+  remains optional and unimplemented.
 
 ### 12.9 Security notes
 
@@ -2117,9 +2157,14 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   auth; `docker-compose.prod.yml` is the §12.4 stack plus a one-shot `migrate`
   service; `docs/deploy.md` documents first boot, upgrades, volumes, actions,
   and security (§12.3/§12.4/§12.7/§12.8).
-- 8b — daemon release (pending): `mix release cadence_daemon` per target OS,
-  a SQLite migration entry point, and install/upgrade docs. Optionally a
-  single-file `burrito` binary.
+- 8b — daemon release (shipped): root `mix.exs` defines `cadence_daemon`
+  (daemon + shared only); `Cadence.Daemon.Release` provides `migrate/0`
+  (state-dir creation + SQLite migrations), `repos/0`, `migrations_path/1`, and
+  `register/3`; the shared `config/runtime.exs` evaluates its server block only
+  when `cadence_server` is in the artifact, so a daemon runtime needs none of
+  the server's prod variables; `docs/daemon-setup.md` covers release install,
+  migration, registration, systemd, and upgrades (§12.2/§12.8). A burrito
+  single-file binary remains optional and unimplemented.
 
 ---
 
@@ -2370,12 +2415,15 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       `POST /sync/projects` endpoint (`Cadence.Server.Projects.provision/2`).
       The first caller becomes the owner; existing owners/trusted members can
       re-provision.
-- [ ] **Daemon release packaging (Phase 8b):** the production server image,
-      release config, migration entry point, and compose stack ship in 8a
-      (§12.3, §12.8). The daemon still runs from a source checkout (`mix
-      ecto.migrate -r Cadence.Daemon.Repo`, `mix run --no-start …`; §12.2). A
-      `mix release cadence_daemon` needs its own SQLite migration entry point and
-      install/upgrade docs; a single-file `burrito` artifact is optional.
+- [x] **Daemon release packaging (Phase 8b):** resolved — the root `mix.exs`
+      defines a `cadence_daemon` release (daemon + shared only, no server),
+      `Cadence.Daemon.Release.migrate/0` is the explicit SQLite migration entry
+      point (plus `register/3` for project registration from a release), and
+      `docs/daemon-setup.md` documents install, upgrade, and a systemd unit
+      (§12.2, §12.8). Builds are per target OS/arch because `exqlite` ships a
+      precompiled NIF; Linux needs `inotifywait` (or
+      `CAD_WATCH_BACKEND=fs_poll`). A `burrito` single-file artifact remains
+      optional and unimplemented — adding it would need a §11 dependency row.
 - [ ] **Image publishing / CI:** `docker-compose.prod.yml` builds
       `cadence-server:prod` (or `CAD_SERVER_IMAGE`) locally and the image is
       otherwise operator-managed. Registry publishing, version pinning, and a

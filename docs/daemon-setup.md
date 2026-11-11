@@ -3,14 +3,32 @@
 The daemon is the local half of Cadence. It watches a project's working tree,
 commits snapshots to a local Git store, serves the Neovim plugin over a Unix
 socket, and — when configured — syncs nodes to a Cadence server. This guide
-takes a fresh checkout to a registered project.
+takes a machine to a registered project, either from a built release
+(recommended for daily use) or from a source checkout (development).
 
 The canonical configuration contract is spec §12.2/§12.6. The server side of
 the demo stack is in `demo.md`; this guide assumes a server is already running.
 
 ## 1. Prerequisites
 
-- Elixir 1.20+ and OTP (`mix` on `PATH`).
+**Release install (recommended):** the artifact bundles ERTS, so the target
+machine needs no Elixir or Erlang. Build it on the machine that will run it (or
+a matching OS/arch): `exqlite` ships a precompiled SQLite NIF, so a Linux
+x86_64 release does not run on macOS or arm64.
+
+- On Linux the default watcher needs `inotifywait` from `inotify-tools`
+  (`apt install inotify-tools`, `dnf install inotify-tools`, or the equivalent).
+  Set `CAD_WATCH_BACKEND=fs_poll` to run without it (the watcher polls every
+  second instead).
+- On macOS the default is `fs_poll` (also a 1 s poll), so no extra package is
+  needed. `CAD_WATCH_BACKEND=fs_mac` selects the native listener instead; it is
+  bundled only when the release is built on macOS with the Xcode command-line
+  tools installed.
+
+**Source checkout (development):** Elixir 1.20+ and OTP with `mix` on `PATH`.
+
+Both paths also need:
+
 - A Cadence server URL (optional: without one the daemon runs fully offline).
 - The working directory of the project you want to track.
 - Neovim 0.9+ if you want the plugin (`cadence.nvim/README.md`).
@@ -23,7 +41,7 @@ The daemon keeps everything under `CAD_STATE_DIR` (default
 | Path | Purpose |
 |---|---|
 | `cadence.db` | SQLite metadata (projects, nodes, sync ledger) |
-| `daemon.sock` | Unix socket used by the Neovim plugin and `mix cad.*` tasks |
+| `daemon.sock` | Unix socket used by the Neovim plugin (and `mix cad.*` tasks in a source checkout) |
 | `git/` | Per-project bare Git object stores |
 
 The directory is created with owner-only (`0700`) permissions on first boot.
@@ -82,16 +100,53 @@ set -a; . ~/.config/cadence/env; set +a
 - `CAD_SYNC_CHANNEL_ENABLED=false` disables only the optional notification
   socket; background polling continues.
 
-## 5. Migrate the local database once
+## 5. Install the daemon
+
+### Release (recommended)
+
+Build the artifact on the machine that will run it:
+
+```bash
+MIX_ENV=prod mix release cadence_daemon
+```
+
+The result is `_build/prod/rel/cadence_daemon` (`bin/cadence_daemon version`
+prints the release version). Install it under a stable path, for example
+`~/.local/share/cadence`:
+
+```bash
+mkdir -p ~/.local/share
+mv ~/.local/share/cadence ~/.local/share/cadence.bak 2>/dev/null || true
+cp -a _build/prod/rel/cadence_daemon ~/.local/share/cadence
+~/.local/share/cadence/bin/cadence_daemon version
+```
+
+The release directory is replaceable; `CAD_STATE_DIR` (SQLite, Git stores,
+socket) lives outside it and is never touched by an upgrade. A systemd user
+unit that uses the same env file is in §7.
+
+### Source checkout (development)
+
+Run the `mix` commands from the umbrella root with the same environment as the
+daemon.
+
+## 6. Migrate the local database once
+
+Release:
+
+```bash
+~/.local/share/cadence/bin/cadence_daemon eval "Cadence.Daemon.Release.migrate()"
+```
+
+Source checkout:
 
 ```bash
 mix ecto.migrate -r Cadence.Daemon.Repo
 ```
 
-Run this from the umbrella root with the same environment as the daemon (it
-resolves `CAD_STATE_DIR` through `config/runtime.exs`). A fresh state directory
-is created automatically; if you migrate before the first boot, create it
-owner-only first so there is no permissive window:
+Both resolve `CAD_STATE_DIR` through `config/runtime.exs`. A fresh state
+directory must exist first; create it owner-only so there is no permissive
+window (the release `migrate/0` creates it for you):
 
 ```bash
 mkdir -m 700 -p "${CAD_STATE_DIR:-$HOME/.local/state/cadence}"
@@ -99,14 +154,30 @@ mkdir -m 700 -p "${CAD_STATE_DIR:-$HOME/.local/state/cadence}"
 
 Re-run the migration after upgrading the daemon: migrations are additive and a
 new one (for example the `:CadProposals` journal) is not applied by a plain
-boot.
+boot. The release entry point is safe to run repeatedly — it reports
+`Migrations already up` and changes nothing.
 
 A daemon booted before migrating is safe: rehydration logs a
 `… skipped before migrations: no such table: <table>` warning for each queue,
 skips the sync backfill, and keeps idling. Nothing syncs until the database is
 migrated and the daemon is restarted.
 
-## 6. Start the daemon
+## 7. Start the daemon
+
+Release:
+
+```bash
+~/.local/share/cadence/bin/cadence_daemon start
+```
+
+`start` runs in the foreground and logs to stdout, which suits a process
+manager. `bin/cadence_daemon daemon` detaches instead. The daemon release runs
+without Erlang distribution (no epmd or distribution port, and no distribution
+cookie is used), so `bin/cadence_daemon stop`/`remote` are unavailable: stop it
+with SIGTERM — `systemctl --user stop cadence-daemon`, `kill <pid>`, or Ctrl-C
+in the foreground. The release shuts down gracefully on SIGTERM.
+
+Source checkout:
 
 ```bash
 mix run --no-start --no-halt -e '
@@ -124,30 +195,91 @@ mix run --no-start --no-halt -e '
   directory: a second instance removes and rebinds the socket, leaving the
   first without an API, and both would share `cadence.db` and `git/`.
 
-## 7. Register a project
+### systemd user unit
+
+`EnvironmentFile` reads the same `~/.config/cadence/env` file (systemd accepts
+`KEY=value` lines and `#` comments):
+
+```ini
+# ~/.config/systemd/user/cadence-daemon.service
+[Unit]
+Description=Cadence daemon
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/cadence/env
+Environment=CAD_STATE_DIR=%h/.local/state/cadence
+ExecStart=%h/.local/share/cadence/bin/cadence_daemon start
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now cadence-daemon
+journalctl --user -u cadence-daemon -f
+```
+
+A system service (`User=you`, unit in `/etc/systemd/system`) does not expand
+`%h` to the service user's home — it resolves to the service manager's home
+(usually `/root`). Use absolute paths (`/home/you/...`) and set
+`Environment=HOME=/home/you` there.
+
+## 8. Register a project
+
+Release (use an absolute work directory; the shell does not expand `~` inside
+the eval string; `IO.inspect` prints the created project):
+
+```bash
+~/.local/share/cadence/bin/cadence_daemon eval \
+  'IO.inspect(Cadence.Daemon.Release.register("My Project", "my-project", "/home/you/code/my-project"))'
+```
+
+Source checkout:
 
 ```bash
 mix cad.register "My Project" my-project ~/code/my-project
 ```
 
-- The daemon must be running; the task talks to `daemon.sock`.
-- `WORK_DIR` must exist. Registration starts the watcher; the first snapshot is
-  committed after `CAD_WATCH_DEBOUNCE_MS` (default 2 s) of idle time.
+- The daemon must be running; both forms talk to `daemon.sock`.
+- `WORK_DIR` must exist. Registration starts the watcher; the first **file
+  change** after registration is committed once the tree has been idle for
+  `CAD_WATCH_DEBOUNCE_MS` (default 2 s). Registering an unchanged project
+  produces no node — edit a file (or touch one) to start the history.
 - The same operation is available as `POST /projects` on the daemon socket.
 
-## 8. Neovim
+## 9. Neovim
 
 Install the plugin as described in `cadence.nvim/README.md`. It resolves the
 socket the same way (`$CAD_STATE_DIR/daemon.sock`) and auto-opens the DAG when
 Neovim starts inside a registered project.
 
+## Upgrading the daemon
+
+1. Stop the daemon (`systemctl --user stop cadence-daemon`; for a foreground
+   start use Ctrl-C, or `kill <pid>`).
+2. Replace the release directory (§5). Keep the old directory until the new
+   one starts.
+3. Run the migration entry point (§6). It is additive and a no-op when there is
+   nothing new.
+4. Start the daemon again.
+
+`CAD_STATE_DIR` is never inside the release directory, so project data, the
+socket, and the sync ledger survive an upgrade untouched.
+
 ## Troubleshooting
 
 | Symptom | Check |
 |---|---|
-| `no such table: …` warnings | The daemon database has not been migrated. Run step 5 and restart. |
+| `no such table: …` warnings | The daemon database has not been migrated. Run step 6 and restart. |
 | Socket missing / plugin cannot connect | `CAD_STATE_DIR` must match between the daemon shell and Neovim. Confirm the daemon is running and `daemon.sock` exists. |
+| Watcher logs a `file_system` bootstrap error | Linux needs `inotifywait` (`inotify-tools`); on any OS set `CAD_WATCH_BACKEND=fs_poll`. |
+| Release fails to start with a NIF / `Exec format` error | The artifact was built for another OS/arch. Rebuild on the target machine (§5). |
+| `could not find user home` on boot | The process has no `HOME`. Set `CAD_STATE_DIR` explicitly (or provide `HOME`). |
 | Sync never starts | `CAD_SYNC_ENABLED` must not be `false`, and both `CAD_SERVER_URL` and `CAD_AUTH_TOKEN` must be set in the daemon's environment. |
 | `401` from the server | The token was revoked, mistyped, or belongs to another server. Mint a new one at `/auth/tokens/new`. |
 | `mix ecto.migrate` uses the wrong database | Set `CAD_STATE_DIR` in the same shell; runtime config is read by the task too. |
-| Env file changes have no effect | The file is not read automatically. Source it (`set -a; . ~/.config/cadence/env; set +a`) before `mix run`. |
+| Env file changes have no effect | The file is not read automatically. Source it (`set -a; . ~/.config/cadence/env; set +a`) or use `EnvironmentFile` (§7). |
