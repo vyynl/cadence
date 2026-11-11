@@ -172,6 +172,9 @@ cd apps/cadence_daemon && mix compile
 # Run tests for one app
 cd apps/cadence_shared && mix test
 
+# Coverage gate (80% per-app floor; thresholds live in each app's mix.exs)
+mix test --cover
+
 # Format all code
 mix format
 
@@ -228,6 +231,12 @@ Flag atoms are the exact set: `:functioning`, `:in-progress`, `:broken`,
   for LiveViews.
 - No tests hit real LLM APIs. Inject a test module through `:meld_llm` or
   `:docs_llm` (`TestMeldLLM`, `TestDocsLLM`); do not add Mox.
+- `mix test --cover` must exit 0. The explicit floor is 80% per app
+  (`test_coverage: [summary: [threshold: 80]]` in each app's `mix.exs` and in
+  the umbrella root). Umbrella `mix test --cover` reads each child's config;
+  `mix test.coverage` reads the root config — both are set so neither path
+  falls back to Mix's 90% default. Mix exits `3` for a coverage miss, `1` for a
+  test failure.
 
 ---
 
