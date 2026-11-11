@@ -270,6 +270,7 @@ defmodule Cadence.Shared.GitStore.Pack do
   defp stored_type_name(1), do: :commit
   defp stored_type_name(2), do: :tree
   defp stored_type_name(3), do: :blob
+  defp stored_type_name(4), do: :tag
 
   defp encode_ofs(value, acc) do
     shifted = value >>> 7

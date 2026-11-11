@@ -3,10 +3,13 @@ defmodule Cadence.Shared.GitStore do
   A content-addressed Git object store (blob/tree/commit), specialized for
   Cadence's DAG-of-session-nodes model.
 
-  Cadence has no branches, refs, or tags: every session is an immutable commit
-  addressed by its SHA, and parent links live in the `Node` schema rather than
-  in the object store. This module implements the object layer only, with a
-  ref-less commit writer and no history/ref machinery.
+  Cadence has no branches, refs, or tags of its own: every session is an
+  immutable commit addressed by its SHA, and parent links live in the `Node`
+  schema rather than in the object store. This module implements the object
+  layer only, with a ref-less commit writer. A separate read-only import layer
+  (`detect_repository/1`, `read_ref/2`, `resolve_revision/2`, `walk_commits/3`,
+  `copy_commit_objects/4`) can inspect an existing Git repository and copy its
+  history into a Cadence store; it never writes refs into the destination.
 
   Objects are written loose (zlib-compressed files under `objects/<2>/<38>`),
   as Git does. Reads also consult packfiles (`objects/pack/*.pack` plus their
@@ -26,8 +29,10 @@ defmodule Cadence.Shared.GitStore do
   @type t :: %__MODULE__{home_dir: Path.t()}
   @type sha :: String.t()
   @type author :: %{name: String.t(), email: String.t()}
-  @type entry :: %{name: String.t(), mode: String.t(), type: :blob | :tree, ref: sha()}
+  @type entry :: %{name: String.t(), mode: String.t(), type: :blob | :tree | :commit, ref: sha()}
   @type object :: %{sha: sha(), type: :blob | :tree | :commit, data: binary()}
+  @type repository :: %{kind: :worktree | :bare, path: Path.t(), git_dir: Path.t()}
+  @type walk_result :: %{commits: [commit()], truncated: boolean(), shallow: boolean()}
   @type commit :: %{
           hash: sha(),
           tree: sha(),
@@ -38,6 +43,7 @@ defmodule Cadence.Shared.GitStore do
         }
 
   @dir_mode "40000"
+  @gitlink_mode "160000"
   @file_mode "100644"
 
   # Never snapshotted: Cadence's own store lives outside the work tree, but a
@@ -76,6 +82,179 @@ defmodule Cadence.Shared.GitStore do
     home_dir = if bare, do: Path.expand(path), else: Path.expand(Path.join(path, ".git"))
     %__MODULE__{home_dir: home_dir}
   end
+
+  ## Read-only repository import layer
+
+  @doc """
+  Locate the Git directory for a repository at `path`.
+
+  Accepts a worktree (a `.git` directory or a `.git` redirect file) and a bare
+  repository. Nothing is created or changed. Returns
+  `{:error, :not_a_repository}` or `{:error, :invalid_gitfile}`.
+  """
+  @spec detect_repository(Path.t()) :: {:ok, repository()} | {:error, term()}
+  def detect_repository(path) when is_binary(path) do
+    root = Path.expand(path)
+    dot_git = Path.join(root, ".git")
+
+    cond do
+      File.dir?(dot_git) ->
+        {:ok, %{kind: :worktree, path: root, git_dir: dot_git}}
+
+      File.regular?(dot_git) ->
+        resolve_gitfile(root, dot_git)
+
+      repository_dir?(root) ->
+        {:ok, %{kind: :bare, path: root, git_dir: root}}
+
+      true ->
+        {:error, :not_a_repository}
+    end
+  end
+
+  def detect_repository(_path), do: {:error, :not_a_repository}
+
+  @doc """
+  Resolve `HEAD` or a full ref name to a SHA.
+
+  Loose refs are read first, then `packed-refs`. Only refs under `refs/` are
+  accepted (no traversal). Returns `{:error, :not_found}` for a missing ref.
+  """
+  @spec read_ref(t(), String.t()) :: {:ok, sha()} | {:error, :not_found}
+  def read_ref(repo, ref) when is_binary(ref) do
+    case resolve_ref(repo, ref, 0) do
+      {:ok, sha} -> {:ok, sha}
+      :error -> {:error, :not_found}
+    end
+  end
+
+  def read_ref(_repo, _ref), do: {:error, :not_found}
+
+  @doc """
+  Resolve a revision to a commit SHA.
+
+  Accepts a 40-hex SHA, `HEAD`, a local branch, or a tag name. Annotated tags
+  are peeled to the commit they point at.
+  """
+  @spec resolve_revision(t(), String.t()) :: {:ok, sha()} | {:error, term()}
+  def resolve_revision(repo, rev) when is_binary(rev) do
+    cond do
+      valid_sha?(rev) ->
+        peel_to_commit(repo, rev)
+
+      rev == "HEAD" ->
+        case read_ref(repo, "HEAD") do
+          {:ok, sha} -> peel_to_commit(repo, sha)
+          {:error, :not_found} -> {:error, :not_found}
+        end
+
+      true ->
+        ["refs/heads/#{rev}", "refs/tags/#{rev}", "refs/remotes/#{rev}"]
+        |> Enum.find_value({:error, :not_found}, fn ref ->
+          case read_ref(repo, ref) do
+            {:ok, sha} -> peel_to_commit(repo, sha)
+            {:error, :not_found} -> nil
+          end
+        end)
+    end
+  end
+
+  def resolve_revision(_repo, _rev), do: {:error, :not_found}
+
+  @doc """
+  The commit SHAs listed in the repository's `shallow` file.
+
+  A shallow clone stores its boundary commits there; their parents are absent.
+  """
+  @spec shallow_commits(t()) :: MapSet.t(sha())
+  def shallow_commits(repo) do
+    case File.read(Path.join(repo.home_dir, "shallow")) do
+      {:ok, contents} ->
+        contents
+        |> String.split("\n", trim: true)
+        |> Enum.map(&String.trim/1)
+        |> Enum.filter(&valid_sha?/1)
+        |> MapSet.new()
+
+      _ ->
+        MapSet.new()
+    end
+  end
+
+  @doc """
+  Walk the commit graph reachable from `tips` in parents-first order.
+
+  Bounded by `:max` (default 1,000). A walk that would exceed it returns
+  `{:error, {:too_many_commits, max}}` unless `:truncate` is true; in that case
+  the collected subset is returned with `truncated: true` and boundary commits
+  become roots. Shallow boundaries are always treated as roots and reported as
+  `shallow: true`. Any other missing object is an error.
+  """
+  @spec walk_commits(t(), [sha()], keyword()) :: {:ok, walk_result()} | {:error, term()}
+  def walk_commits(repo, tips, opts \\ [])
+
+  def walk_commits(repo, tips, opts) when is_list(tips) do
+    max = Keyword.get(opts, :max, 1_000)
+    truncate? = Keyword.get(opts, :truncate, false) == true
+    shallow = shallow_commits(repo)
+
+    tips =
+      tips
+      |> Enum.filter(&valid_sha?/1)
+      |> Enum.uniq()
+
+    queue = Enum.reduce(tips, :queue.new(), fn sha, q -> :queue.in(sha, q) end)
+    acc = %{commits: %{}, truncated: false, shallow: false}
+
+    with {:ok, acc} <- collect_commits(repo, queue, MapSet.new(), max, truncate?, shallow, acc),
+         {:ok, commits} <- sort_commits(acc.commits) do
+      {:ok, %{commits: commits, truncated: acc.truncated, shallow: acc.shallow}}
+    end
+  end
+
+  def walk_commits(_repo, _tips, _opts), do: {:error, :invalid_tips}
+
+  @doc """
+  Copy commits and their tree/blob closure from `source` into `target`.
+
+  `commits` may be decoded commit maps (from `walk_commits/3`) or SHAs. Shared
+  trees are walked once per call and objects already in `target` are skipped.
+  Gitlinks (submodule entries) are not copied; their targets live in another
+  repository.
+
+  Options:
+    * `:max_blob_bytes` — reject larger blobs with
+      `{:error, {:blob_too_large, sha, size}}` (default `:infinity`).
+  """
+  @spec copy_commit_objects(t(), t(), [commit() | sha()], keyword()) ::
+          {:ok, %{objects: non_neg_integer(), bytes: non_neg_integer()}} | {:error, term()}
+  def copy_commit_objects(source, target, commits, opts \\ [])
+
+  def copy_commit_objects(source, target, commits, opts) when is_list(commits) do
+    acc = %{
+      objects: 0,
+      bytes: 0,
+      trees: MapSet.new(),
+      max_blob: Keyword.get(opts, :max_blob_bytes, :infinity)
+    }
+
+    commits
+    |> Enum.reduce_while({:ok, acc}, fn commit, {:ok, acc} ->
+      with {:ok, sha, tree} <- commit_target(source, commit),
+           {:ok, acc} <- copy_commit(source, target, sha, acc),
+           {:ok, acc} <- copy_tree(source, target, tree, acc) do
+        {:cont, {:ok, acc}}
+      else
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, acc} -> {:ok, %{objects: acc.objects, bytes: acc.bytes}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def copy_commit_objects(_source, _target, _commits, _opts), do: {:error, :invalid_commits}
 
   @doc "Store a blob and return its SHA."
   @spec write_blob(t(), iodata()) :: sha()
@@ -398,6 +577,9 @@ defmodule Cadence.Shared.GitStore do
       %{type: :tree} ->
         {:error, :not_a_file}
 
+      %{type: :commit} ->
+        {:error, :not_a_file}
+
       nil ->
         {:error, :not_found}
     end
@@ -407,6 +589,7 @@ defmodule Cadence.Shared.GitStore do
     case find_entry(repo, tree_sha, name) do
       %{type: :tree, ref: ref} -> read_path_segments(repo, ref, rest, max_bytes)
       %{type: :blob} -> {:error, :not_found}
+      %{type: :commit} -> {:error, :not_a_file}
       nil -> {:error, :not_found}
     end
   end
@@ -512,6 +695,10 @@ defmodule Cadence.Shared.GitStore do
                 error -> {:halt, error}
               end
 
+            :commit ->
+              # A submodule (gitlink) is not a file in this repository.
+              {:cont, {:ok, acc, count, bytes}}
+
             :blob ->
               case read_blob(repo, entry.ref) do
                 nil ->
@@ -555,6 +742,7 @@ defmodule Cadence.Shared.GitStore do
     case find_entry(repo, tree_sha, name) do
       %{type: :tree, ref: ref} -> resolve_dir(repo, ref, rest)
       %{type: :blob} -> {:error, :not_a_directory}
+      %{type: :commit} -> {:error, :not_a_directory}
       nil -> {:error, :not_found}
     end
   end
@@ -614,8 +802,9 @@ defmodule Cadence.Shared.GitStore do
   Write a raw object payload (`data` excludes the Git header) and return its
   SHA. This is the low-level primitive used by sync imports.
   """
-  @spec write_raw(t(), :blob | :tree | :commit, binary()) :: sha()
-  def write_raw(repo, type, data) when type in [:blob, :tree, :commit] and is_binary(data) do
+  @spec write_raw(t(), :blob | :tree | :commit | :tag, binary()) :: sha()
+  def write_raw(repo, type, data)
+      when type in [:blob, :tree, :commit, :tag] and is_binary(data) do
     write_object(repo, Atom.to_string(type), data)
   end
 
@@ -1057,7 +1246,7 @@ defmodule Cadence.Shared.GitStore do
           children =
             case type do
               :commit -> [%{ref: decode_commit(data, sha).tree}]
-              :tree -> decode_tree(data)
+              :tree -> decode_tree(data) |> Enum.reject(&(&1.type == :commit))
               :blob -> []
             end
 
@@ -1298,6 +1487,7 @@ defmodule Cadence.Shared.GitStore do
   defp existing_object_type("blob"), do: {:ok, :blob}
   defp existing_object_type("tree"), do: {:ok, :tree}
   defp existing_object_type("commit"), do: {:ok, :commit}
+  defp existing_object_type("tag"), do: {:ok, :tag}
   defp existing_object_type(_type), do: :error
 
   ## Tree encoding
@@ -1319,7 +1509,13 @@ defmodule Cadence.Shared.GitStore do
   defp decode_tree(bin) do
     [mode_name, <<sha::binary-size(20)>> <> rest] = String.split(bin, <<0>>, parts: 2)
     [mode, name] = String.split(mode_name, " ", parts: 2)
-    type = if mode == @dir_mode, do: :tree, else: :blob
+
+    type =
+      cond do
+        mode == @dir_mode -> :tree
+        mode == @gitlink_mode -> :commit
+        true -> :blob
+      end
 
     [
       %{name: name, mode: mode, type: type, ref: Base.encode16(sha, case: :lower)}
@@ -1378,6 +1574,329 @@ defmodule Cadence.Shared.GitStore do
       Regex.run(~r/(.*) <([^><]*)> (\d+) ([+-]\d{4})/, value)
 
     %{name: name, email: email, timestamp: String.to_integer(timestamp), timezone: timezone}
+  end
+
+  ## Import helpers
+
+  defp resolve_gitfile(root, dot_git) do
+    with {:ok, contents} <- File.read(dot_git),
+         [line | _] <- String.split(contents, "\n", trim: true),
+         "gitdir:" <> raw <- String.trim(line),
+         dir = raw |> String.trim() |> Path.expand(root),
+         true <- repository_dir?(dir) do
+      {:ok, %{kind: :worktree, path: root, git_dir: dir}}
+    else
+      _ -> {:error, :invalid_gitfile}
+    end
+  end
+
+  defp repository_dir?(dir) do
+    File.dir?(Path.join(dir, "objects")) and File.regular?(Path.join(dir, "HEAD"))
+  end
+
+  defp resolve_ref(_repo, _ref, depth) when depth > 8, do: :error
+
+  defp resolve_ref(repo, "HEAD", depth) do
+    case File.read(Path.join(repo.home_dir, "HEAD")) do
+      {:ok, contents} ->
+        case String.trim(contents) do
+          "ref:" <> target -> resolve_ref(repo, String.trim(target), depth + 1)
+          sha -> if valid_sha?(sha), do: {:ok, sha}, else: :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp resolve_ref(repo, ref, _depth) do
+    if valid_ref_name?(ref) do
+      case read_ref_file(Path.join(repo.home_dir, ref)) do
+        {:ok, sha} -> {:ok, sha}
+        :error -> read_packed_ref(repo, ref)
+      end
+    else
+      :error
+    end
+  end
+
+  defp read_ref_file(path) do
+    case File.read(path) do
+      {:ok, contents} ->
+        sha = String.trim(contents)
+        if valid_sha?(sha), do: {:ok, sha}, else: :error
+
+      _ ->
+        :error
+    end
+  end
+
+  defp read_packed_ref(repo, ref) do
+    case File.read(Path.join(repo.home_dir, "packed-refs")) do
+      {:ok, contents} ->
+        contents
+        |> String.split("\n", trim: true)
+        |> Enum.find_value(:error, fn line ->
+          case String.split(String.trim(line), " ", parts: 2) do
+            [sha, ^ref] -> if valid_sha?(sha), do: {:ok, sha}
+            _ -> nil
+          end
+        end)
+
+      _ ->
+        :error
+    end
+  end
+
+  defp valid_ref_name?("refs/" <> rest) when rest != "" do
+    rest
+    |> String.split("/")
+    |> Enum.all?(fn segment ->
+      segment not in ["", ".", ".."] and
+        not String.contains?(segment, "\\") and
+        not String.contains?(segment, <<0>>)
+    end)
+  end
+
+  defp valid_ref_name?(_ref), do: false
+
+  defp peel_to_commit(repo, sha, depth \\ 0)
+  defp peel_to_commit(_repo, _sha, depth) when depth > 8, do: {:error, :tag_chain_too_deep}
+
+  defp peel_to_commit(repo, sha, depth) do
+    case read_commit(repo, sha) do
+      %{hash: ^sha} ->
+        {:ok, sha}
+
+      nil ->
+        case read_object(repo, sha) do
+          {:tag, data} ->
+            case tag_target(data) do
+              {:ok, target} -> peel_to_commit(repo, target, depth + 1)
+              :error -> {:error, :not_a_commit}
+            end
+
+          {_type, _data} ->
+            {:error, :not_a_commit}
+
+          nil ->
+            {:error, :not_found}
+        end
+    end
+  end
+
+  defp tag_target(data) do
+    data
+    |> String.split("\n\n", parts: 2)
+    |> hd()
+    |> String.split("\n")
+    |> Enum.find_value(:error, fn line ->
+      case String.split(line, " ", parts: 2) do
+        ["object", sha] -> if valid_sha?(sha), do: {:ok, sha}
+        _ -> nil
+      end
+    end)
+  end
+
+  defp collect_commits(repo, queue, seen, max, truncate?, shallow, acc) do
+    case :queue.out(queue) do
+      {:empty, _} ->
+        {:ok, acc}
+
+      {{:value, sha}, queue} ->
+        cond do
+          MapSet.member?(seen, sha) ->
+            collect_commits(repo, queue, seen, max, truncate?, shallow, acc)
+
+          map_size(acc.commits) >= max and truncate? ->
+            {:ok, %{acc | truncated: true}}
+
+          map_size(acc.commits) >= max ->
+            {:error, {:too_many_commits, max}}
+
+          true ->
+            case read_commit(repo, sha) do
+              nil ->
+                {:error, {:missing_object, sha}}
+
+              commit ->
+                boundary? = MapSet.member?(shallow, sha) and commit.parent != []
+                parents = if boundary?, do: [], else: commit.parent
+                queue = Enum.reduce(parents, queue, fn parent, q -> :queue.in(parent, q) end)
+
+                acc = %{
+                  acc
+                  | commits: Map.put(acc.commits, sha, commit),
+                    shallow: acc.shallow or boundary?
+                }
+
+                collect_commits(repo, queue, MapSet.put(seen, sha), max, truncate?, shallow, acc)
+            end
+        end
+    end
+  end
+
+  defp sort_commits(commits) when map_size(commits) == 0, do: {:ok, []}
+
+  defp sort_commits(commits) do
+    parents =
+      Map.new(commits, fn {sha, commit} ->
+        {sha, Enum.filter(commit.parent, &Map.has_key?(commits, &1))}
+      end)
+
+    indegree = Map.new(parents, fn {sha, ps} -> {sha, length(ps)} end)
+
+    children =
+      Enum.reduce(parents, %{}, fn {sha, ps}, acc ->
+        Enum.reduce(ps, acc, fn parent, acc2 ->
+          Map.update(acc2, parent, [sha], &[sha | &1])
+        end)
+      end)
+
+    ready =
+      commits
+      |> Map.values()
+      |> Enum.filter(&(indegree[&1.hash] == 0))
+      |> Enum.map(&sort_key/1)
+      |> :gb_sets.from_list()
+
+    drain_commits(ready, indegree, children, commits, [])
+  end
+
+  defp drain_commits(ready, indegree, children, commits, acc) do
+    if :gb_sets.is_empty(ready) do
+      if length(acc) == map_size(commits), do: {:ok, Enum.reverse(acc)}, else: {:error, :cycle}
+    else
+      {key, ready} = :gb_sets.take_smallest(ready)
+      sha = elem(key, 1)
+      commit = Map.fetch!(commits, sha)
+
+      {indegree, ready} =
+        Enum.reduce(Map.get(children, sha, []), {indegree, ready}, fn child, {indegree, ready} ->
+          remaining = Map.fetch!(indegree, child) - 1
+          indegree = Map.put(indegree, child, remaining)
+
+          ready =
+            if remaining == 0 do
+              :gb_sets.add(sort_key(Map.fetch!(commits, child)), ready)
+            else
+              ready
+            end
+
+          {indegree, ready}
+        end)
+
+      drain_commits(ready, indegree, children, commits, [commit | acc])
+    end
+  end
+
+  defp sort_key(commit) do
+    timestamp =
+      case commit.author do
+        %{timestamp: ts} when is_integer(ts) -> ts
+        _ -> 0
+      end
+
+    {timestamp, commit.hash}
+  end
+
+  defp commit_target(source, %{hash: sha, tree: tree})
+       when is_binary(sha) and is_binary(tree) do
+    case read_raw(source, sha) do
+      {:ok, {:commit, _data}} -> {:ok, sha, tree}
+      {:ok, _other} -> {:error, {:not_a_commit, sha}}
+      {:error, :not_found} -> {:error, {:missing_object, sha}}
+    end
+  end
+
+  defp commit_target(source, sha) when is_binary(sha) do
+    case read_commit(source, sha) do
+      %{tree: tree} -> {:ok, sha, tree}
+      nil -> {:error, {:missing_object, sha}}
+    end
+  end
+
+  defp commit_target(_source, _other), do: {:error, :invalid_commit}
+
+  defp copy_commit(source, target, sha, acc) do
+    case read_raw(source, sha) do
+      {:ok, {:commit, data}} ->
+        write_object_counted(target, :commit, data, sha, acc)
+
+      {:ok, _other} ->
+        {:error, {:not_a_commit, sha}}
+
+      {:error, :not_found} ->
+        {:error, {:missing_object, sha}}
+    end
+  end
+
+  defp copy_tree(source, target, sha, acc) do
+    if MapSet.member?(acc.trees, sha) do
+      {:ok, acc}
+    else
+      case read_raw(source, sha) do
+        {:ok, {:tree, data}} ->
+          with {:ok, acc} <- write_object_counted(target, :tree, data, sha, acc) do
+            acc = %{acc | trees: MapSet.put(acc.trees, sha)}
+
+            data
+            |> decode_tree()
+            |> Enum.reduce_while({:ok, acc}, fn entry, {:ok, acc} ->
+              case copy_entry(source, target, entry, acc) do
+                {:ok, acc} -> {:cont, {:ok, acc}}
+                {:error, reason} -> {:halt, {:error, reason}}
+              end
+            end)
+          end
+
+        {:ok, _other} ->
+          {:error, {:not_a_tree, sha}}
+
+        {:error, :not_found} ->
+          {:error, {:missing_object, sha}}
+      end
+    end
+  end
+
+  # A submodule (gitlink, mode 160000) points at a commit in another
+  # repository; it stays an entry in the imported tree but its object is not
+  # copied here.
+  defp copy_entry(_source, _target, %{mode: "160000"}, acc), do: {:ok, acc}
+
+  defp copy_entry(source, target, %{type: :tree, ref: sha}, acc) do
+    copy_tree(source, target, sha, acc)
+  end
+
+  defp copy_entry(source, target, %{type: :blob, ref: sha}, acc) do
+    case read_raw(source, sha) do
+      {:ok, {:blob, data}} ->
+        if acc.max_blob != :infinity and byte_size(data) > acc.max_blob do
+          {:error, {:blob_too_large, sha, byte_size(data)}}
+        else
+          write_object_counted(target, :blob, data, sha, acc)
+        end
+
+      {:ok, _other} ->
+        {:error, {:not_a_blob, sha}}
+
+      {:error, :not_found} ->
+        {:error, {:missing_object, sha}}
+    end
+  end
+
+  defp write_object_counted(target, type, data, expected, acc) do
+    if has_object?(target, expected) do
+      {:ok, acc}
+    else
+      case write_raw(target, type, data) do
+        ^expected ->
+          {:ok, %{acc | objects: acc.objects + 1, bytes: acc.bytes + byte_size(data)}}
+
+        _other ->
+          {:error, {:hash_mismatch, expected}}
+      end
+    end
   end
 
   ## Checkout

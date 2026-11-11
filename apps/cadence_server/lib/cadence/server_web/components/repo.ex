@@ -49,12 +49,17 @@ defmodule Cadence.ServerWeb.Components.Repo do
       <ul class="file-tree">
         <li :for={entry <- @entries}>
           <.link
+            :if={entry.type != :commit}
             patch={entry_path(@project_slug, @node_id, entry)}
             class="file-row"
           >
             <span class="file-kind">{entry_kind(entry.type)}</span>
             <span class="file-name">{entry.name}</span>
           </.link>
+          <span :if={entry.type == :commit} class="file-row">
+            <span class="file-kind">{entry_kind(entry.type)}</span>
+            <span class="file-name">{entry.name}</span>
+          </span>
         </li>
       </ul>
 
@@ -142,6 +147,7 @@ defmodule Cadence.ServerWeb.Components.Repo do
 
   defp entry_kind(:tree), do: "dir"
   defp entry_kind(:blob), do: "file"
+  defp entry_kind(:commit), do: "submodule"
 
   defp entry_path(project_slug, node_id, %{type: :tree, path: path}) do
     tree_path(project_slug, node_id, path)
