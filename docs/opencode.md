@@ -58,6 +58,21 @@ on `/phx-plan`-style slash commands — this target does not install them.
 | Pre-PR gate | `phx-verify`, `phx-review` |
 | Slow code / call chains | `phx-perf`, `phx-trace` |
 
+## Project commands
+
+Unlike the plugin's skills, commands live in this repository and work as
+ordinary OpenCode slash commands.
+
+| Command | Purpose |
+|---|---|
+| `/audit-100 [ids\|quick] [--auto-approve\|--plan-only\|--max-items N]` | Supervise the `docs/audit-100-plan.md` work: one child session per item, sequential integration, per-item gate + read-only review, commit only on approval, then refresh the audit and the handoff. Defined in `.opencode/commands/audit-100.md`. |
+
+Project commands are discovered from `.opencode/commands/` and reload without a
+restart. Editing the file changes the command immediately. Commands are
+prompts, not hooks: the supervisor's rules (serial writers, approval gates, no
+pushes) are enforced by the command text and by OpenCode permissions, not by a
+plugin.
+
 ## State and artifact conventions
 
 Two different things are called "progress" — keep them apart:
