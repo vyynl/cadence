@@ -1,6 +1,11 @@
 defmodule Cadence.ServerWeb.Components.DAG do
   @moduledoc """
   Server-rendered SVG DAG for the project home.
+
+  The graph is drawn in two layers: a non-interactive visual layer (edges,
+  dots, rings) and a final overlay layer holding one link per node. Each link
+  owns a transparent hit circle and the hover card, so the card is painted
+  after every node graphic and can never be hidden underneath a later node.
   """
 
   use Cadence.ServerWeb, :html
@@ -20,11 +25,9 @@ defmodule Cadence.ServerWeb.Components.DAG do
             viewBox={"0 0 #{@layout.width} #{@layout.height}"}
             width={@layout.width}
             height={@layout.height}
-            role="img"
-            aria-labelledby="cadence-dag-title"
+            role="group"
+            aria-label="Project session graph"
           >
-            <title id="cadence-dag-title">Project session graph</title>
-
             <line
               :for={y <- @layout.break_lines}
               class="dag-break"
@@ -44,14 +47,11 @@ defmodule Cadence.ServerWeb.Components.DAG do
               />
             </g>
 
-            <g class="dag-nodes">
-              <.link
+            <g class="dag-nodes" aria-hidden="true">
+              <g
                 :for={node <- @layout.nodes}
-                patch={~p"/p/#{@project_slug}/n/#{node.id}"}
                 class={node_classes(node, @selected_id, @layout.default_id)}
                 style={node_style(node, @layout)}
-                aria-label={node_label(node)}
-                aria-current={if node.id == @selected_id, do: "true"}
               >
                 <circle
                   class={"node-dot flag-#{node.flag || "unknown"}"}
@@ -67,12 +67,28 @@ defmodule Cadence.ServerWeb.Components.DAG do
                   cy={node.y}
                   r="14"
                 />
+              </g>
+            </g>
+
+            <%!-- Interaction and hover cards last: nothing below this layer may
+                 paint over a card. The hit circle is transparent; only the
+                 hovered node's card is opaque. --%>
+            <g class="dag-overlay">
+              <.link
+                :for={node <- @layout.nodes}
+                patch={~p"/p/#{@project_slug}/n/#{node.id}"}
+                class="dag-node-hit"
+                aria-label={node_label(node)}
+                aria-current={if node.id == @selected_id, do: "true"}
+              >
+                <circle class="node-hit" cx={node.x} cy={node.y} r="15" />
                 <foreignObject
                   class="dag-tooltip"
                   x={tooltip_x(node, @layout.width)}
                   y={tooltip_y(node)}
                   width="240"
                   height="58"
+                  aria-hidden="true"
                 >
                   <div xmlns="http://www.w3.org/1999/xhtml" class="dag-tooltip-body">
                     <strong>{node.message || "(no message)"}</strong>

@@ -257,14 +257,22 @@ code {
   overflow: visible;
 }
 
-.dag-node {
+.dag-node-hit {
   cursor: pointer;
   outline: none;
 }
 
-.dag-node:focus-visible .node-dot {
+.node-hit {
+  fill: transparent;
+  stroke: transparent;
+  stroke-width: 1.5;
+  pointer-events: all;
+  transition: stroke 120ms ease;
+}
+
+.dag-node-hit:hover .node-hit,
+.dag-node-hit:focus-visible .node-hit {
   stroke: var(--accent);
-  stroke-width: 2;
 }
 
 .node-dot {
@@ -273,12 +281,6 @@ code {
   transform-box: fill-box;
   transform-origin: center;
   transition: transform 120ms ease, filter 120ms ease;
-}
-
-.dag-node:hover .node-dot,
-.dag-node:focus-visible .node-dot {
-  transform: scale(1.25);
-  filter: brightness(1.12);
 }
 
 .flag-functioning .node-dot {
@@ -364,8 +366,8 @@ code {
   transition: opacity 120ms ease;
 }
 
-.dag-node:hover .dag-tooltip,
-.dag-node:focus-visible .dag-tooltip {
+.dag-node-hit:hover .dag-tooltip,
+.dag-node-hit:focus-visible .dag-tooltip {
   opacity: 1;
 }
 
