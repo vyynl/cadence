@@ -901,6 +901,26 @@ is optional and recorded in spec §16.
   limit, CSP, sleeps/coverage/CI, `mix_audit`, `libgraph`), with acceptance
   criteria, effort, and the rubric-only items that should stay documented
   exemptions (Mox, streams, the Phoenix endpoint/router compile cycle).
+- **Audit 100 slice, wave 1 (2026-11-11)** — **T1 + T2 shipped.**
+  **T1:** 36 of 42 fixed `Process.sleep` sites were removed from the daemon and
+  server suites; `Cadence.{Daemon,Server}.TestHelpers` now provides bounded
+  `eventually/2` / `await/2` polling, an `:fs_poll` baseline barrier
+  (`await_poll_baseline/2`), and a nil-safe `watcher_backend_down?/1`. The six
+  remaining sleeps are deliberate and commented (one genuine 400 ms debounce
+  window, four fake-LLM latency injections, one infinite blocking importer
+  runner). The sweep also fixed three false-green tests it exposed: both
+  watcher event tests addressed `{:file_event, …}` to the test process instead
+  of the backend pid (so the handler never ran), and the repacker
+  "queued once" test could no longer fail once its sleep was replaced.
+  **T2:** coverage has an explicit 80% floor
+  (`test_coverage: [summary: [threshold: 80]]`) in all three apps **and** the
+  umbrella root — `mix test --cover` reads the child config while
+  `mix test.coverage` reads the root config, so both are required. Measured
+  87.98 shared / 82.06 server / 82.09 daemon; aggregated `mix test.coverage`
+  83.36 (export the results first). AGENTS.md §6/§8 documents the floor and the
+  Mix exit codes (3 = coverage miss, 1 = test failure). Gate: 1190 tests
+  (332 + 615 + 243), format and dev/prod compile clean. Remaining audit items:
+  S1/S2/S3, P1/P2/P3, A1/A2, D1/D2, T4, and the exemption notes.
 - **Closeout slice 3 (final audit + 1.0.0, 2026-11-11)** — five-track audit
   (architecture/performance/security/tests/dependencies; per-track reports in
   the git-ignored `.claude/audit/`, durable summary in
@@ -937,7 +957,13 @@ is optional and recorded in spec §16.
 
 ## Next
 
-**Immediate step:** **Phase 9d — web scale and provenance.** 9a–9c are shipped,
+**Audit 100 cleanup is in progress** (see `docs/audit-100-plan.md`). Wave 1
+shipped: T1 (fixed sleeps) and T2 (80% coverage floor). Next in this run:
+S1 (Sobelow), S2 (`/sync` rate limit), S3 (CSP), then P1 (users batching);
+the session cap is 6 committed items. Remaining after that: P2/P3, A2/A1,
+D1/D2, T4, and the A3/P4/T3 exemption notes.
+
+**Immediate product step:** **Phase 9d — web scale and provenance.** 9a–9c are shipped,
 so an imported merge history can publish. The full plan is
 `docs/phase-9-prep.md` (D1–D10 approved). 9d must:
 
@@ -1137,9 +1163,9 @@ expected for the closeout follow-ups.
   backend and project supervisors are `restart: :transient`: a missing project
   directory no longer crash-loops into the registry; a project whose own
   supervision collapses is dropped until re-registration or the next boot (by
-  design). (c) `mix test --cover` exits 3 because Mix's default 90% threshold
-  is not met (84.34 daemon / 81.89 server / 88.85 shared); no project threshold
-  is configured. (d) 1.0.0 is the first release; the version lives in the four
+  design). (c) **Resolved by audit T2:** the 90% default is no longer in
+  effect — every coverage entry point uses the explicit 80% floor (see the
+  wave 1 note above). (d) 1.0.0 is the first release; the version lives in the four
   `mix.exs` files and `docs/release-notes.md` is the release record. (e)
   `docs/phase-{4,6,7}-prep.md` are archived. (f) `/favicon.ico` still 404s on
   every first page load (ui-notes). (g) The smoke's `opencode-smoke` project
@@ -1632,6 +1658,14 @@ expected for the closeout follow-ups.
   the review UI (optional 4d/UI-pass work).
 
 ## Last Updated
+2026-11-11 (audit 100, wave 1) — **T1 + T2 shipped** (`73c9d65` and the T2
+commit). 36 fixed sleeps removed via shared polling/barrier helpers; three
+false-green tests fixed in the process. Coverage now has an explicit 80% floor
+in each app and the umbrella root, documented in AGENTS.md §6/§8; `mix
+test --cover` exits 0 (87.98 shared / 82.06 server / 82.09 daemon) and
+`mix test.coverage` aggregates 83.36 after exporting. Gate: 1190 tests
+(332 + 615 + 243), format and dev/prod compile clean. Next: S1 (Sobelow, dep
+approved), S2 (`/sync` rate limit), S3 (CSP), P1 (batch `users_by_ids/1`).
 2026-11-11 (Phase 9b) — **daemon importer, job API, and CLI.** Added
 `Cadence.Daemon.Importer` (one job at a time under
 `Cadence.Daemon.ImportTasks`, bounded by `CAD_IMPORT_MAX_SECONDS`, in-memory
