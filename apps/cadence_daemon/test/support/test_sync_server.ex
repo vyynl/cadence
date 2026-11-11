@@ -167,9 +167,12 @@ defmodule Cadence.Daemon.TestSyncServer do
           }
         end)
 
+        token = "proposal-token-#{System.unique_integer([:positive])}"
+
         json(conn, 201, %{
           "proposal_id" => Ecto.UUID.generate(),
-          "proposal_token" => "proposal-token-#{System.unique_integer([:positive])}",
+          "proposal_token" => token,
+          "proposal_url" => "https://public.example/proposals/#{token}",
           "status" => "pending",
           "kind" => "meld"
         })

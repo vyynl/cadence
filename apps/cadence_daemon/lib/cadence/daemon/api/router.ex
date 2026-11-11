@@ -310,7 +310,7 @@ defmodule Cadence.Daemon.API.Router do
     %{
       proposal_id: proposal.proposal_id,
       proposal_token: proposal.proposal_token,
-      proposal_url: proposal_url(proposal.proposal_token),
+      proposal_url: present_url(proposal.proposal_url, proposal.proposal_token),
       status: proposal.status,
       kind: proposal.kind
     }
@@ -332,7 +332,7 @@ defmodule Cadence.Daemon.API.Router do
     %{
       id: proposal.id,
       token: proposal.token,
-      url: proposal_url(proposal.token),
+      url: present_url(proposal.url, proposal.token),
       kind: proposal.kind,
       status: proposal.status,
       parent_node_ids: proposal.parent_node_ids,
@@ -349,6 +349,12 @@ defmodule Cadence.Daemon.API.Router do
   end
 
   defp age_seconds(_created_at), do: 0
+
+  # The server returns the public link (built from CAD_PUBLIC_URL). Fall back to
+  # the daemon's API base for an older server, a pre-migration journal row, or a
+  # malformed/empty value — never return an empty link.
+  defp present_url(url, _token) when is_binary(url) and url != "", do: url
+  defp present_url(_url, token), do: proposal_url(token)
 
   defp proposal_url(token) when is_binary(token) do
     case Env.server_url() do

@@ -1,13 +1,14 @@
 # Cadence — Progress
 
 ## Current Phase
-**Phase 8 complete — daemon release shipped (8b).** The planned build order
-(spec §13, Phases 1–8) is now complete: 8a shipped the production server
-artifact, 8b ships `mix release cadence_daemon` with
-`Cadence.Daemon.Release.migrate/0`, release-time project registration, a
-distribution-free artifact, and install/upgrade docs. The next session starts
-the user-approved **closeout hardening** slice; every remaining item is
-optional or recorded in spec §16.
+**Closeout hardening — slice 1 (contract cleanup) complete.** Phase 8 and the
+planned build order are done; this slice resolved three recorded mismatches:
+union proposal links now come from the server (`proposal_url` in the sync
+response, persisted in the daemon journal), the unused
+`Project.actions_manifest` column is gone from the shared schema and both
+databases, and server-created meld nodes record `docs_state: :skipped` instead
+of pending forever. Next is closeout slice 2 (run-queue depth cap plus the
+remaining `docs/ui-notes.md` items), then the final audit.
 
 ## Done (summary)
 
@@ -747,6 +748,25 @@ optional or recorded in spec §16.
   green (312 shared + 212 daemon + 592 server); format and dev/prod compile
   clean. Review: REQUIRES CHANGES → fixes → PASS. Lesson:
   `.claude/solutions/docker/umbrella-release-config-gating-20261111.md`.
+- **Closeout slice 1 (contract cleanup, 2026-11-11)** — three recorded
+  mismatches resolved. **Proposal links:** `UnionResponse` carries
+  `proposal_url` built by `Metadata.canonical/1` from `CAD_PUBLIC_URL`;
+  `SyncClient` passes it through, `union_proposals.url` (new nullable column)
+  stores it, `Unions.record/3` upserts it, and the local `POST /union` /
+  `GET /proposals` responses prefer it. An older server, a pre-migration row,
+  or an empty value falls back to the `CAD_SERVER_URL` derivation.
+  **`actions_manifest`:** removed from the shared `Project` schema and both
+  databases via reversible migrations (server Postgres and daemon SQLite,
+  `DROP COLUMN`); the manifest is read from the selected node snapshot.
+  **Meld docs:** approval records `docs_state: :skipped` (pre-8b rows keep
+  `:pending`; no backfill because nodes are immutable). Spec
+  §4.2/§5.1/§6.5/§9.4/§10.6/§16 and the `daemon-setup`/`deploy` notes updated.
+  Verified: SQLite upgrade (`--to` the previous migration, then forward) and
+  rollback re-adds the column, server test-DB migrate + rollback, full suite
+  1122 tests (313 shared + 217 daemon + 592 server), format/dev/prod compile
+  clean. Review: PASS WITH WARNINGS; all findings fixed (journal contract text,
+  non-additive migration warning, historical meld rows, empty-URL fallback,
+  test URL source).
 - **DAG width fix (2026-11-08, user-flagged)** — the project-home rail no longer
   overflows. `DAGLayout.layout/2` derives the SVG width from the columns
   actually occupied (capped by `max_columns`) instead of always reserving 10
@@ -772,16 +792,12 @@ optional or recorded in spec §16.
 
 ## Next
 
-**Immediate step:** **closeout hardening** (the next slice the user approved).
-Start with the `proposal_url` assumption: return the server's `public_url` in
-the `POST /sync/union` response and use it for the daemon journal and Neovim
-link, so a deployment whose `CAD_SERVER_URL` is internal no longer produces
-unreachable proposal links (spec §16). Then, in separate slices: remove or
-repurpose the unused `Project.actions_manifest` (model/implementation
-mismatch), decide the server-created meld node `docs_state` (`:skipped` at
-approval vs. a pulled-node generation flow), add a run-queue depth cap, and the
-remaining `docs/ui-notes.md` items (header-nav spacing, a seeded demo run, a
-raw-log affordance).
+**Immediate step:** **closeout slice 2** — add a run-queue depth cap
+(`CAD_ACTIONS_MAX_QUEUED_RUNS`, a refusal error and flash) and the remaining
+`docs/ui-notes.md` items (header-nav spacing, a seeded demo run so
+`/p/cadence-demo/runs/:id` is exercised, and a raw-log affordance). Then the
+final audit/docs pass (health audit, archive the phase briefs, version/release
+notes).
 
 The planned build order (spec §13, Phases 1–8) is complete. Remaining optional
 work is the Phase 5 P5 docs live smoke with a real `CAD_LLM_API_KEY`, the
@@ -832,7 +848,8 @@ expected for the closeout slices.
 
 - (none). Phase 7 (7a–7d), the daemon boot guard, the demo-stack visual pass,
   `:CadProposals`, 6c M1 (run queue) / M2 (retention) / M3 (paging), Phase
-  8a (production server release), Phase 8b (daemon release), and the DAG width
+  8a (production server release), Phase 8b (daemon release), closeout slice 1
+  (proposal links, `actions_manifest`, meld docs state), and the DAG width
   fix are complete, and every review's must-fix item is applied and verified.
   Pre-existing follow-ups (unreadable-object isolation, re-push of an existing
   row whose objects were later lost, the 8 MB retry ceiling, pack
@@ -840,6 +857,18 @@ expected for the closeout slices.
 
 ## Spec Deltas / Open Items
 
+- **Closeout slice 1 notes (2026-11-11)** — (a) `union_proposals.url` is
+  nullable: rows written before the migration (or by an older server) fall back
+  to `CAD_SERVER_URL`; the daemon also falls back on an empty/malformed value.
+  (b) The `actions_manifest` removal drops a column on both databases, so the
+  schema is no longer purely additive for that release: back up `CAD_STATE_DIR`
+  before upgrading, and roll the release and database back together (a rollback
+  needs a source checkout; `docs/daemon-setup.md`). SQLite `DROP COLUMN`
+  requires ≥ 3.35 (the bundled engine is 3.53.4); forward and rollback were both
+  exercised. (c) Meld nodes approved before this change keep `:pending`; no
+  backfill is attempted because immutable nodes are not rewritten, and daemons
+  apply only `pinned` to a re-pulled row. (d) `Project.docker_image` still has no
+  writer (separate §16 item).
 - **8b release notes (2026-11-11)** — (a) The shared umbrella `runtime.exs`
   gates its server block on `:code.lib_dir(:cadence_server)`; the check is
   composition-based (not release-name-based), so revisit it only if a third
@@ -906,11 +935,12 @@ expected for the closeout slices.
   unmigrated database the query raises, is logged by shape, and the pass idles.
   Queued rows drain on the next `start/4` or the next restart after
   `mix ecto.migrate` (the same accepted pattern as the daemon boot guard).
-- **`:CadProposals` journal scope (2026-11-08)** — the local journal only records
-  unions submitted from that daemon/state dir, and `status` is the creation-time
-  value (never refreshed). The review hub/public page remains the complete,
-  live list. Copied URLs inherit the `CAD_SERVER_URL`-must-be-public assumption
-  recorded in spec §16.
+- **`:CadProposals` journal scope (2026-11-08; URL note updated 2026-11-11)** —
+  the local journal only records unions submitted from that daemon/state dir,
+  and `status` is the creation-time value (never refreshed). The review
+  hub/public page remains the complete, live list. The journal now also stores
+  the server-provided public URL (8b closeout); rows written before that
+  migration fall back to `CAD_SERVER_URL`.
 - **Union smoke result shape (2026-11-08)** — the two parents had identical
   trees (`branch-b` was spawned from the first node), so the approved meld
   reports "No file changes" despite `file_count: 1`; a divergent branch would
@@ -1009,7 +1039,8 @@ expected for the closeout slices.
   tree on every navigation (one bounded blob read; no extra query); callers own
   quarantine (the LiveView hides the panel, 6b must re-check at the run
   boundary); the manifest file itself remains publicly browsable repository
-  content; `Project.actions_manifest` is still unused; `expose` is parsed and
+  content; `Project.actions_manifest` was unused and has been removed (2026-11-11
+  closeout); `expose` is parsed and
   reserved — 6c resolved it as unhonored while the panel stays members-only
   (§16). 6b resolved run durability with a durable row; artifact and image
   retention remain open (§16).
@@ -1089,14 +1120,14 @@ expected for the closeout slices.
   server-side `docs_state: :pending` forever (its snapshot is immutable) — the
   docs child carries `:current`; P4-T3 renders the node's own state and links
   the child node.
-- **Server-created meld nodes never reach docs `:current` (P4-T3 review W1,
-  2026-11-06)** — approval inserts a meld node with `docs_state: :pending`
-  (§6.5), but doc generation requires local provenance (a `SyncPending` row or
-  a pushed-SHA stamp) and a pulled node is `:legacy` on the daemon, so no job
-  will ever move that row to `:current`. The badge therefore shows "docs
-  pending" indefinitely for such nodes. Recorded in spec §9.4 and §16 as an
-  open decision (`:skipped` at approval vs. an explicit pulled-node generation
-  flow); not fixed in the badge slice.
+- **Server-created meld nodes are `:skipped` (resolved 2026-11-11, was P4-T3 W1)**
+  — approval now inserts a meld node with `docs_state: :skipped` because doc
+  generation requires local provenance (a `SyncPending` row or a pushed-SHA
+  stamp) and a pulled node is `:legacy` on the daemon, so no job would ever move
+  that row to `:current`. The read-only badge therefore says "docs skipped"
+  instead of pending forever. Meld nodes approved before this change keep their
+  stored `:pending` (no backfill; nodes are immutable). Spec §6.5/§9.4/§16
+  updated.
 - **Reconnect doc retries while the server is still down (P4-T1)** — the
   trigger is `last_status != :ok`, so a project that keeps failing every pass
   re-asks `DocQueue.retry_pending/1` on each pass (30 s at defaults). That is
@@ -1131,11 +1162,12 @@ expected for the closeout slices.
   required-heading check does not enforce a word count. Revisit if docs grow
   unbounded.
 
-- **`proposal_url` assumes `CAD_SERVER_URL` is public (4d-3)** — the daemon
-  builds the link from its API base. If a deployment points the daemon at an
-  internal/docker URL while `CAD_PUBLIC_URL` differs, the notification link is
-  unreachable. The server already knows `public_url`; returning it in the union
-  response would remove the assumption.
+- **Proposal links come from the server (resolved 2026-11-11, was 4d-3)** —
+  `POST /sync/union` returns `proposal_url` built from `CAD_PUBLIC_URL`, the
+  daemon journal stores it, and the local `POST /union`/`GET /proposals`
+  responses prefer it. An older server, a pre-migration journal row, or an empty
+  value falls back to `CAD_SERVER_URL`, so mixed versions keep working. Spec
+  §6.5/§10.6/§16 updated.
 - **The union picker is not live-smoke tested (4d-3)** — `ui.lua`,
   `client.lua`, and the plugin pass `luac -p` and the daemon API is covered by
   tests, but no Neovim instance was driven against a daemon/server for this
@@ -2080,5 +2112,19 @@ and SIGTERM shutdown, server release guard checked both ways, 1116 tests green
 (312 shared + 212 daemon + 592 server), format and dev/prod compile clean.
 Review: REQUIRES CHANGES → fixes → PASS (all findings resolved, no blockers).
 Next: closeout hardening (union `public_url`, `actions_manifest`, meld-node
-docs, queue depth, UI notes). Tree is formatted and compiled; changes are
-uncommitted.
+docs, queue depth, UI notes). Tree is formatted and compiled; shipped in
+commit 1906803.
+
+2026-11-11 — **Closeout slice 1 (contract cleanup) shipped.** `UnionResponse`
+now carries `proposal_url` built from `CAD_PUBLIC_URL`; the daemon journal
+stores it (`union_proposals.url` migration) and the local API prefers it with a
+`CAD_SERVER_URL` fallback for older servers/rows/empty values.
+`Project.actions_manifest` is removed from the shared schema and both databases
+(reversible migrations; SQLite forward + rollback verified). Meld approval
+records `docs_state: :skipped` (pre-8b rows keep `:pending`; no backfill).
+Spec §4.2/§5.1/§6.5/§9.4/§10.6/§16, `docs/daemon-setup.md`, `docs/deploy.md`,
+and `docs/phase-6-prep.md` updated. Verification: 1122 tests green (313 shared
++ 217 daemon + 592 server), test-DB migration applied and rolled back, format
+and dev/prod compile clean. Review: PASS WITH WARNINGS; all findings fixed.
+Next: closeout slice 2 (run-queue depth cap + UI notes), then the final audit.
+Tree is formatted and compiled; shipped with this commit.

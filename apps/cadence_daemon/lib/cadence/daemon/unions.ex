@@ -40,6 +40,7 @@ defmodule Cadence.Daemon.Unions do
         id: proposal_id,
         project_id: project_id,
         token: token,
+        url: string_field(proposal, :proposal_url),
         kind: string_field(proposal, :kind),
         status: string_field(proposal, :status),
         parent_node_ids: parents,
@@ -50,7 +51,7 @@ defmodule Cadence.Daemon.Unions do
         case %UnionProposal{}
              |> UnionProposal.changeset(attrs)
              |> Repo.insert(
-               on_conflict: {:replace, [:token, :kind, :status, :parent_node_ids]},
+               on_conflict: {:replace, [:token, :url, :kind, :status, :parent_node_ids]},
                conflict_target: :id,
                log: false
              ) do

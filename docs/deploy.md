@@ -72,7 +72,9 @@ curl -fsS https://cadence.example.com/health   # {"status":"ok"}
 ```
 
 Then sign in at `/sign-in` and register a project from the daemon
-(`docs/daemon-setup.md`). The daemon's `CAD_SERVER_URL` must be the public URL.
+(`docs/daemon-setup.md`). The daemon's `CAD_SERVER_URL` must be reachable **by
+the daemon**; public proposal links come from the server's `CAD_PUBLIC_URL`, so
+an internal daemon URL is fine.
 
 The compose app listens on 4000 inside the container and publishes
 `CAD_HTTP_PORT` (default 4000). Point the reverse proxy at that port. Running the

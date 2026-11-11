@@ -200,7 +200,6 @@ Project
   owner_id          :uuid
   docs_schema       :map             # see §9
   docker_image      :string | nil
-  actions_manifest  :map | nil
   created_at        :utc_datetime
 ```
 
@@ -273,8 +272,10 @@ and how credit is displayed.
 - Serve a Unix socket / local HTTP API to the Neovim plugin.
 - Maintain a sync ledger for pending pushes, per-project pull cursors, and
   small sync metadata (server user ID, provisioning/backfill markers).
-- Keep a small recent-union journal (proposal id/token/kind/parents) so the
-  Neovim `:CadProposals` list can recover a proposal's public link (§6.1).
+- Keep a small recent-union journal (proposal id/token/public url/kind/parents)
+  so the Neovim `:CadProposals` list can recover a proposal's public link
+  (§6.1). The url is the server's `CAD_PUBLIC_URL` link; older rows fall back to
+  `CAD_SERVER_URL`.
 
 ### 5.2 Supervision tree
 
@@ -477,9 +478,12 @@ always `in-progress`; `functioning` remains validator-owned (§3.1). Approval
 pointer does not move.
 
 The daemon records each successful union response in a small local journal
-(newest 20 per project: proposal id, token, kind, status, parent ids,
-created-at) so `:CadProposals` can recover the public token after the one-shot
-notification or an editor/daemon restart. The journal stores the status **at
+(newest 20 per project: proposal id, token, public url, kind, status, parent
+ids, created-at) so `:CadProposals` can recover the public link after the
+one-shot notification or an editor/daemon restart. The `url` is the
+server-provided public link (built from `CAD_PUBLIC_URL`); a row written before
+the URL column existed (or by an older server) is nil, and the daemon derives
+the link from `CAD_SERVER_URL` as a fallback. The journal stores the status **at
 creation** only; the server review hub and public proposal page remain the live
 source of truth.
 
@@ -532,7 +536,8 @@ human approves it.
   an unverifiable result is never approvable. A meld approval then attaches the
   node carrying the result commit — reusing the existing node for that commit
   when there is one — with `parents = parent_ids`, flags `[in-progress]`,
-  `pinned: true`, and `docs_state: pending`; a promotion approval pins its
+  `pinned: true`, and `docs_state: :skipped` (a server-created node has no local
+  session that could generate docs; §9.4); a promotion approval pins its
   target node. Both fail closed (`blocked`) when an open critical node incident
   quarantines the node. Approval never sets `functioning` (§3.1): approval moves
   the line, validation sets the flag.
@@ -1189,8 +1194,11 @@ a docs child node instead of rewriting the snapshot (§9.5).
   commit is code-only. A node pushed before its docs resolved keeps the
   `docs_state` it was pushed with; the project page then also links the docs
   child node, so the snapshot's badge never claims docs its immutable tree does
-  not contain. A server-created meld node is recorded `:pending` at approval
-  (§6.5) even though no daemon-side job exists for it; §16 tracks that gap.
+  not contain. A server-created meld node is recorded `:skipped` at approval
+  (§6.5): no local session can generate docs for it, so the badge does not claim
+  pending work that can never run. Meld nodes approved before the 8b cleanup
+  keep their stored `:pending` state (the badge shows the approval-time state);
+  no backfill is attempted because immutable nodes are not rewritten.
 - Web approve/reject for pending docs is deferred: nodes are immutable, so
   "reject" needs a review object that does not exist yet. Recorded in §16.
 - Reverting docs does not revert code — they're separate commits under one
@@ -1434,9 +1442,11 @@ SyncMessage.Union
   # returned instead of running a duplicate union.
 
 SyncMessage.UnionResponse
-  proposal_id, proposal_token, status, kind
+  proposal_id, proposal_token, proposal_url, status, kind
   # Union creates a *proposal*, not a node. The meld node is created only if
-  # the proposal is approved. 201 on success; 403 not a proposer, 404 unknown
+  # the proposal is approved. `proposal_url` is the public review link built
+  # from CAD_PUBLIC_URL §6.5 (nil from an older server; the daemon then derives
+  # it from CAD_SERVER_URL). 201 on success; 403 not a proposer, 404 unknown
   # project, 422 invalid/too many parents or payload, 429 meld rate limited
   # (with Retry-After), 502 meld/model failure, 500 server object corruption.
   # The synchronous call can take up to
@@ -2251,14 +2261,13 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       read-only `docs_state` badge (linking the docs child node when the
       generation happened after the snapshot was pushed), and review happens in
       Neovim via `:CadDocDiff` (§9.4).
-- [ ] **Docs for server-created meld nodes:** an approved meld node is inserted
-      with `docs_state: :pending` (§6.5), but doc generation requires local
-      provenance (a `SyncPending` row or a pushed-SHA stamp) and a pulled node
-      is `:legacy`, so no daemon job will ever move that node to `:current`.
-      Decide whether approval should record `:skipped` instead, or whether an
-      explicit daemon action may generate docs for a pulled node (which would
-      need its own review/revert path). Until then the badge shows the
-      approval-time state (§9.4).
+- [x] **Docs for server-created meld nodes:** resolved — meld approval records
+      `docs_state: :skipped` (§6.5/§9.4) because no local session can generate
+      docs for a server-created node. The alternative (an explicit pulled-node
+      generation flow) is not adopted: it would need its own review/revert path.
+      The badge therefore shows "docs skipped" instead of pending work that can
+      never run. Meld nodes approved before this change keep their stored
+      `:pending` state (no backfill; immutable nodes are not rewritten).
 - [ ] **Local store:** SQLite via `ecto_sqlite3` is the obvious pick; confirm
       it fits the daemon's needs.
 - [ ] **Neovim plugin distribution:** plain Lua files, or a proper plugin with
@@ -2335,16 +2344,15 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       the Docker client; until then the page shows status live and output at the
       end. Logs contain terminal/ANSI escapes and are stripped before rendering
       (§8.3).
-- [ ] **`Project.actions_manifest` is unused:** the data model still has the
-      column (§4.2), but 6a reads the manifest from the selected node snapshot.
-      Repurpose it as a cache or remove it in a schema slice so the model and
-      the implementation agree.
-- [ ] **Proposal links assume `CAD_SERVER_URL` is public:** `:CadUnion` and
-      `:CadProposals` build the public link from the daemon's API base
-      (`proposal_url/1`). A deployment that points the daemon at an
-      internal/docker URL while `CAD_PUBLIC_URL` differs produces an unreachable
-      copied/notified link. Return the server's `public_url` in the union
-      response to remove the assumption.
+- [x] **`Project.actions_manifest` is unused:** resolved — removed from the
+      shared schema and from both databases (server and daemon migrations).
+      The action manifest is read from the selected node snapshot (§4.2, §8.1).
+- [x] **Proposal links assume `CAD_SERVER_URL` is public:** resolved —
+      `POST /sync/union` returns `proposal_url` built from the server's
+      `CAD_PUBLIC_URL` (`Metadata.canonical/1`); the daemon journal stores it
+      and `:CadProposals` returns the stored link. Rows written before the
+      upgrade and older servers fall back to deriving it from
+      `CAD_SERVER_URL` (§6.1, §6.5, §10.6).
 - [ ] **Public preview auth:** fully anonymous, or require a lightweight
       signed-URL / API key to avoid scraping.
 - [ ] **Backup strategy for the cloud server:** Postgres WAL archiving +

@@ -143,6 +143,7 @@ defmodule Cadence.Daemon.API.RouterTest do
       Req.Test.json(conn, %{
         proposal_id: proposal_id,
         proposal_token: "tok",
+        proposal_url: "https://public.example/proposals/tok",
         status: "pending",
         kind: "meld"
       })
@@ -155,7 +156,7 @@ defmodule Cadence.Daemon.API.RouterTest do
     body = Jason.decode!(conn.resp_body)
     assert body["proposal_id"] == proposal_id
     assert body["proposal_token"] == "tok"
-    assert body["proposal_url"] == "http://server.test/proposals/tok"
+    assert body["proposal_url"] == "https://public.example/proposals/tok"
     assert body["status"] == "pending"
 
     proposals_conn = get_conn("/proposals?project_id=#{project.id}")
@@ -164,12 +165,68 @@ defmodule Cadence.Daemon.API.RouterTest do
     assert [proposal] = Jason.decode!(proposals_conn.resp_body)["proposals"]
     assert proposal["id"] == proposal_id
     assert proposal["token"] == "tok"
-    assert proposal["url"] == "http://server.test/proposals/tok"
+    assert proposal["url"] == "https://public.example/proposals/tok"
     assert proposal["kind"] == "meld"
     assert proposal["status"] == "pending"
     assert proposal["parent_node_ids"] == parent_ids
     assert proposal["age_seconds"] >= 0
     assert is_binary(proposal["created_at"])
+  end
+
+  test "POST /union falls back to the daemon's server URL when the server omits one" do
+    project = insert_local_project()
+    configure_sync!(project)
+    Req.Test.verify_on_exit!()
+
+    parent_ids = [Ecto.UUID.generate(), Ecto.UUID.generate()]
+
+    Req.Test.expect(__MODULE__, fn conn ->
+      Req.Test.json(conn, %{
+        proposal_id: Ecto.UUID.generate(),
+        proposal_token: "tok-old-server",
+        status: "pending",
+        kind: "meld"
+      })
+    end)
+
+    conn =
+      post_json("/union", %{"project_id" => project.id, "parent_node_ids" => parent_ids})
+
+    assert conn.status == 201
+
+    assert Jason.decode!(conn.resp_body)["proposal_url"] ==
+             "http://server.test/proposals/tok-old-server"
+
+    [proposal] =
+      Jason.decode!(get_conn("/proposals?project_id=#{project.id}").resp_body)["proposals"]
+
+    assert proposal["url"] == "http://server.test/proposals/tok-old-server"
+  end
+
+  test "POST /union falls back when the server returns an empty proposal_url" do
+    project = insert_local_project()
+    configure_sync!(project)
+    Req.Test.verify_on_exit!()
+
+    parent_ids = [Ecto.UUID.generate(), Ecto.UUID.generate()]
+
+    Req.Test.expect(__MODULE__, fn conn ->
+      Req.Test.json(conn, %{
+        proposal_id: Ecto.UUID.generate(),
+        proposal_token: "tok-empty-url",
+        proposal_url: "",
+        status: "pending",
+        kind: "meld"
+      })
+    end)
+
+    conn =
+      post_json("/union", %{"project_id" => project.id, "parent_node_ids" => parent_ids})
+
+    assert conn.status == 201
+
+    assert Jason.decode!(conn.resp_body)["proposal_url"] ==
+             "http://server.test/proposals/tok-empty-url"
   end
 
   test "GET /proposals validates the project and returns an empty list" do

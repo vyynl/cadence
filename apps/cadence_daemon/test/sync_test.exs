@@ -314,6 +314,7 @@ defmodule Cadence.Daemon.SyncTest do
     assert proposal.status == "pending"
     assert proposal.kind == "meld"
     assert is_binary(proposal.proposal_token)
+    assert proposal.proposal_url == "https://public.example/proposals/#{proposal.proposal_token}"
 
     assert TestSyncServer.last_union(server) == %{
              project_id: project.id,

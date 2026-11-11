@@ -161,7 +161,13 @@ defmodule Cadence.Daemon.SyncClient do
   """
   @spec union(Ecto.UUID.t(), [Ecto.UUID.t()], keyword()) ::
           {:ok,
-           %{proposal_id: String.t(), proposal_token: String.t(), status: term(), kind: term()}}
+           %{
+             proposal_id: String.t(),
+             proposal_token: String.t(),
+             proposal_url: String.t() | nil,
+             status: term(),
+             kind: term()
+           }}
           | {:error, term()}
   def union(project_id, parent_node_ids, opts \\ []) when is_list(parent_node_ids) do
     payload = %{project_id: project_id, parent_node_ids: parent_node_ids}
@@ -175,6 +181,7 @@ defmodule Cadence.Daemon.SyncClient do
            %{
              proposal_id: proposal_id,
              proposal_token: proposal_token,
+             proposal_url: Map.get(body, "proposal_url"),
              status: Map.get(body, "status"),
              kind: Map.get(body, "kind")
            }}

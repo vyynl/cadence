@@ -51,7 +51,12 @@ defmodule Cadence.Server.Proposals do
 
   alias Cadence.Shared.{GitStore, Meld, Node, Project, UUID}
 
-  @docs_state :pending
+  # A meld node is created server-side, but doc generation requires local
+  # provenance (a SyncPending row or a pushed-SHA stamp) and a pulled node is
+  # `:legacy` on a daemon, so no job will ever move this row to `:current`.
+  # Recording `:skipped` keeps the read-only badge honest; §9.4/§16 record the
+  # alternative (an explicit pulled-node generation flow) as not chosen.
+  @docs_state :skipped
 
   @create_fields [
     :project_id,

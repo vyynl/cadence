@@ -61,6 +61,10 @@ defmodule Cadence.ServerWeb.SyncUnionTest do
     assert body["kind"] == "meld"
     assert is_binary(body["proposal_id"])
     assert is_binary(body["proposal_token"])
+
+    assert body["proposal_url"] ==
+             Cadence.ServerWeb.Metadata.canonical("/proposals/#{body["proposal_token"]}")
+
     assert TestMeldLLM.calls() == 0
 
     proposal = Repo.get!(Cadence.Server.Proposal, body["proposal_id"])

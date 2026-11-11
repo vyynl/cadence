@@ -19,7 +19,6 @@ defmodule Cadence.Shared.Project do
     field(:owner_id, Ecto.UUID)
     field(:docs_schema, :map, default: %{})
     field(:docker_image, :string)
-    field(:actions_manifest, :map)
     field(:created_at, :utc_datetime)
   end
 
@@ -38,7 +37,6 @@ defmodule Cadence.Shared.Project do
       :owner_id,
       :docs_schema,
       :docker_image,
-      :actions_manifest,
       :created_at
     ])
     |> put_default_created_at()

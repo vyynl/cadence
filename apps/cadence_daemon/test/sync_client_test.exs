@@ -204,13 +204,37 @@ defmodule Cadence.Daemon.SyncClientTest do
       Req.Test.json(conn, %{
         proposal_id: "p1",
         proposal_token: "tok",
+        proposal_url: "https://cadence.example/proposals/tok",
         status: "pending",
         kind: "meld"
       })
     end)
 
     assert SyncClient.union(project_id, parents) ==
-             {:ok, %{proposal_id: "p1", proposal_token: "tok", status: "pending", kind: "meld"}}
+             {:ok,
+              %{
+                proposal_id: "p1",
+                proposal_token: "tok",
+                proposal_url: "https://cadence.example/proposals/tok",
+                status: "pending",
+                kind: "meld"
+              }}
+  end
+
+  test "union/3 tolerates a server that omits proposal_url" do
+    configure()
+    parents = [Ecto.UUID.generate(), Ecto.UUID.generate()]
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      Req.Test.json(conn, %{
+        proposal_id: "p1",
+        proposal_token: "tok",
+        status: "pending",
+        kind: "meld"
+      })
+    end)
+
+    assert {:ok, %{proposal_url: nil}} = SyncClient.union(Ecto.UUID.generate(), parents)
   end
 
   test "union/3 rejects a malformed response and surfaces HTTP errors" do

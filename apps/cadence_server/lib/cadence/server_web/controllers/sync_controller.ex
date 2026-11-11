@@ -7,6 +7,7 @@ defmodule Cadence.ServerWeb.SyncController do
   use Cadence.ServerWeb, :controller
 
   alias Cadence.Server.{Projects, Sync}
+  alias Cadence.ServerWeb.Metadata
 
   def me(conn, _params) do
     user = conn.assigns.current_user
@@ -77,6 +78,7 @@ defmodule Cadence.ServerWeb.SyncController do
     %Cadence.Shared.Sync.UnionResponse{
       proposal_id: proposal.id,
       proposal_token: proposal.token,
+      proposal_url: Metadata.canonical("/proposals/#{proposal.token}"),
       status: Atom.to_string(proposal.status),
       kind: Atom.to_string(proposal.kind)
     }

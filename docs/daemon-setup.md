@@ -152,10 +152,16 @@ window (the release `migrate/0` creates it for you):
 mkdir -m 700 -p "${CAD_STATE_DIR:-$HOME/.local/state/cadence}"
 ```
 
-Re-run the migration after upgrading the daemon: migrations are additive and a
-new one (for example the `:CadProposals` journal) is not applied by a plain
-boot. The release entry point is safe to run repeatedly — it reports
+Re-run the migration after upgrading the daemon: a new one is not applied by a
+plain boot. The release entry point is safe to run repeatedly — it reports
 `Migrations already up` and changes nothing.
+
+Migrations are **not** guaranteed to be additive: a release that removes a
+schema field also drops the column (8b removes `Project.actions_manifest`), and
+an older release cannot read a newer schema. Back up `CAD_STATE_DIR` before an
+upgrade — SQLite is `cadence.db` plus its `-wal`/`-shm` siblings — and roll the
+release and the database back together. A migration rollback needs a source
+checkout (`mix ecto.rollback -r Cadence.Daemon.Repo --step 1`).
 
 A daemon booted before migrating is safe: rehydration logs a
 `… skipped before migrations: no such table: <table>` warning for each queue,
@@ -263,8 +269,8 @@ Neovim starts inside a registered project.
    start use Ctrl-C, or `kill <pid>`).
 2. Replace the release directory (§5). Keep the old directory until the new
    one starts.
-3. Run the migration entry point (§6). It is additive and a no-op when there is
-   nothing new.
+3. Run the migration entry point (§6). It is a no-op when there is nothing new;
+   it is not necessarily additive (see the note in §6).
 4. Start the daemon again.
 
 `CAD_STATE_DIR` is never inside the release directory, so project data, the

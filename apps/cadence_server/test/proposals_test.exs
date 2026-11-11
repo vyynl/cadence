@@ -355,7 +355,7 @@ defmodule Cadence.Server.ProposalsTest do
       assert node.parents == [parent_a.id, parent_b.id]
       assert node.flags == [:"in-progress"]
       assert node.pinned
-      assert node.docs_state == :pending
+      assert node.docs_state == :skipped
       assert node.created_by == owner
       assert node.message == "Meld of 2 sessions"
 

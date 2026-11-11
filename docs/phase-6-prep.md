@@ -14,7 +14,8 @@ as an artifact attached to that node (captured post-exit).
 ## Verified starting state
 
 - `Project.docker_image` and `Project.actions_manifest` columns exist but
-  nothing populates or reads them.
+  nothing populates or reads them. (`actions_manifest` was removed in the
+  closeout cleanup; the manifest is read from the selected snapshot.)
 - No action/runtime modules exist on the daemon or server.
 - `GitStore.read_path/4` reads a single path from a commit tree with a byte cap
   and path-escape guards — the safe way to load a manifest from a snapshot.

@@ -18,6 +18,7 @@ defmodule Cadence.Daemon.UnionProposal do
   schema "union_proposals" do
     field(:project_id, Ecto.UUID)
     field(:token, :string)
+    field(:url, :string)
     field(:kind, :string)
     field(:status, :string)
     field(:parent_node_ids, {:array, Ecto.UUID}, default: [])
@@ -28,6 +29,7 @@ defmodule Cadence.Daemon.UnionProposal do
           id: Ecto.UUID.t() | nil,
           project_id: Ecto.UUID.t() | nil,
           token: String.t() | nil,
+          url: String.t() | nil,
           kind: String.t() | nil,
           status: String.t() | nil,
           parent_node_ids: [Ecto.UUID.t()],
@@ -37,7 +39,7 @@ defmodule Cadence.Daemon.UnionProposal do
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(proposal \\ %__MODULE__{}, attrs) do
     proposal
-    |> cast(attrs, [:id, :project_id, :token, :kind, :status, :parent_node_ids, :created_at])
+    |> cast(attrs, [:id, :project_id, :token, :url, :kind, :status, :parent_node_ids, :created_at])
     |> validate_required([:id, :project_id, :token, :created_at])
     |> validate_length(:token, min: 1, max: 255)
   end

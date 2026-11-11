@@ -27,22 +27,86 @@ defmodule Cadence.Daemon.UnionsTest do
     {:ok, first} =
       Unions.record(
         project.id,
-        %{proposal_id: id, proposal_token: "tok-1", status: "pending", kind: "meld"},
+        %{
+          proposal_id: id,
+          proposal_token: "tok-1",
+          proposal_url: "https://public.example/proposals/tok-1",
+          status: "pending",
+          kind: "meld"
+        },
         [hd(parents)]
       )
 
     {:ok, second} =
       Unions.record(
         project.id,
-        %{proposal_id: id, proposal_token: "tok-2", status: "pending", kind: "meld"},
+        %{
+          proposal_id: id,
+          proposal_token: "tok-2",
+          proposal_url: "https://public.example/proposals/tok-2",
+          status: "pending",
+          kind: "meld"
+        },
         parents
       )
 
     assert second.id == id
     assert second.token == "tok-2"
+    assert second.url == "https://public.example/proposals/tok-2"
+    assert first.url == "https://public.example/proposals/tok-1"
     assert second.parent_node_ids == parents
     assert second.created_at == first.created_at
     assert [%{token: "tok-2"}] = Unions.list(project.id)
+  end
+
+  test "record ignores a non-binary url from a malformed response" do
+    project = insert_project()
+
+    {:ok, row} =
+      Unions.record(
+        project.id,
+        %{
+          proposal_id: Ecto.UUID.generate(),
+          proposal_token: "tok",
+          proposal_url: %{"unexpected" => "map"},
+          status: "pending",
+          kind: "meld"
+        },
+        []
+      )
+
+    assert row.url == nil
+  end
+
+  test "record never logs the token or public url" do
+    project = insert_project()
+    previous = Logger.level()
+    Logger.configure(level: :debug)
+    on_exit(fn -> Logger.configure(level: previous) end)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        {:ok, _row} =
+          Unions.record(
+            project.id,
+            %{
+              proposal_id: Ecto.UUID.generate(),
+              proposal_token: "secret-token",
+              proposal_url: "https://public.example/proposals/secret-token",
+              status: "pending",
+              kind: "meld"
+            },
+            []
+          )
+      end)
+
+    refute log =~ "secret-token"
+    refute log =~ "public.example"
+
+    # Positive control: at :debug an ordinary query is captured, so the refutes
+    # above prove the insert really suppressed its SQL (not just the log level).
+    control = ExUnit.CaptureLog.capture_log(fn -> Repo.all(UnionProposal) end)
+    assert control =~ "union_proposals"
   end
 
   test "record keeps the newest 20 per project and leaves other projects alone" do

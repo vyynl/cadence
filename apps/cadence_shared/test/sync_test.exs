@@ -80,10 +80,11 @@ defmodule Cadence.Shared.SyncTest do
   end
 
   describe "UnionResponse" do
-    test "carries the pending proposal reference" do
+    test "carries the pending proposal reference and its public URL" do
       response = %UnionResponse{
         proposal_id: "p1",
         proposal_token: "tok",
+        proposal_url: "https://cadence.example/proposals/tok",
         status: "pending",
         kind: "meld"
       }
@@ -91,9 +92,16 @@ defmodule Cadence.Shared.SyncTest do
       assert decode(response) == %{
                "proposal_id" => "p1",
                "proposal_token" => "tok",
+               "proposal_url" => "https://cadence.example/proposals/tok",
                "status" => "pending",
                "kind" => "meld"
              }
+    end
+
+    test "leaves proposal_url nullable for older servers" do
+      response = %UnionResponse{proposal_id: "p1", proposal_token: "tok"}
+
+      assert decode(response)["proposal_url"] == nil
     end
   end
 
