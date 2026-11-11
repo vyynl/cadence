@@ -47,6 +47,7 @@ is complete; remaining work is optional and recorded in spec §16 and
 | `demo.md` | Local demo stack: compose, seed accounts, guided tour |
 | `ui-notes.md` | UI/tuning backlog — drop observations here between sessions |
 | `opencode.md` | Agent tooling: skills, formatter, gates, artifact conventions |
+| `phase-9-prep.md` | Phase 9 import brief: Git history → Cadence DAG (proposed) |
 | `archive/` | Completed-phase briefs and historical progress log |
 
 ## Adding a phase brief

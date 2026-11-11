@@ -10,7 +10,9 @@ daemon convergence. The completed phase briefs are archived and
 `docs/release-notes.md` records 1.0.0, upgrade notes, and known limitations.
 A post-release DAG fix corrected the hover-card layering and removed the native
 SVG "Project session graph" tooltip; the rubric-specific path from 87 to 100 is
-`docs/audit-100-plan.md`. Remaining work is optional and recorded in spec §16.
+`docs/audit-100-plan.md`. Phase 9 (import a local Git repository) is approved;
+slice **9a** (shared read-only Git primitives) shipped, and 9b (daemon
+importer/API/CLI) is next. Remaining work is optional and recorded in spec §16.
 
 ## Done (summary)
 
@@ -806,6 +808,31 @@ SVG "Project session graph" tooltip; the rubric-specific path from 87 to 100 is
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
   `AshAuthentication.Info.strategy(User, :demo) == :error`.
+- **Phase 9a (shared Git import primitives, 2026-11-11)** — the read-only half
+  of Git import. `GitStore.detect_repository/1` (worktree, `.git` redirect,
+  bare), `read_ref/2` (HEAD/loose/`packed-refs`, traversal-guarded),
+  `resolve_revision/2` (branch/tag/HEAD/SHA, annotated-tag peel),
+  `shallow_commits/1`, `walk_commits/3` (bounded BFS, parents-first Kahn order,
+  `:max`/`:truncate`, shallow boundaries, typed missing-object errors), and
+  `copy_commit_objects/4` (shared-tree visited set, per-object re-hash, blob
+  cap, gitlink skip). Tag objects are readable from loose files and packs
+  (type 4) and `write_raw/3` accepts `:tag` for fixtures. The tree decoder now
+  marks submodule gitlinks (mode `160000`) as `:commit`: `objects_from/2`,
+  `walk_blobs/3`, and secret scans skip them, `read_path/4` returns
+  `:not_a_file`, and the repository browser renders a non-clickable
+  `submodule` row. 14 new shared tests + a component test; full gate 1150 tests
+  green (327 shared + 603 server + 220 daemon). No config, API, or user-facing
+  import yet — 9b is next.
+- **Phase 9 import brief (approved 2026-11-11)** — `docs/phase-9-prep.md`
+  specifies migrating a local Git repository into Cadence: one node per commit
+  with the original SHA, full message, author timestamp, and parents (merges
+  preserved), flags empty, docs skipped, tip pinned, pointer moved, and
+  publication through the existing sync ledger. It defines the missing shared
+  primitives (ref resolution, commit walk, object copy), the daemon importer +
+  job API + `mix cad.import`, the server's owner-only multi-parent push
+  exception and sync body limit, and the web's newest-N DAG cap + paged
+  History. The recommended defaults D1–D10 are approved; 9a shipped and 9b–9e
+  remain.
 - **DAG hover-card layering fix (2026-11-11)** — the web DAG's node card was
   part of the node's `<a>`, so a later node's dot painted over a card extending
   below/right of the hovered node and the top layers were unreadable. The SVG
@@ -861,10 +888,25 @@ SVG "Project session graph" tooltip; the rubric-specific path from 87 to 100 is
 
 ## Next
 
-**Immediate step:** none required — 1.0.0 is released, the audit is written,
-and the tree is clean. The items below are optional and gated only by interest.
+**Immediate step:** **Phase 9b — daemon importer, job API, and CLI.** 9a is
+shipped: `GitStore.detect_repository/1`, `read_ref/2`, `resolve_revision/2`,
+`shallow_commits/1`, `walk_commits/3`, and `copy_commit_objects/4` are tested.
+The full plan is `docs/phase-9-prep.md` (D1–D10 approved). 9b must:
 
-Optional follow-ups, roughly in priority order:
+1. Add `Cadence.Daemon.Importer` (one job at a time, supervised): validate the
+   source, resolve the selected refs, walk commits, copy objects, insert nodes
+   parents-first in batches (each with a `SyncPending` row), pin the tip, move
+   the session pointer, resume the watcher, and commit a dirty tree once.
+2. Add `POST /import` (202 + job id) and `GET /import/:id` with progress and
+   typed errors, plus `mix cad.import` and `Cadence.Daemon.Release.import/…`.
+3. Add the `CAD_IMPORT_*` keys to `runtime.exs`, `.env.example`, and spec
+   §12.6; tests for linear/root/merge/tag/idempotent/shallow/large-blob/dirty
+   tree/job/API paths.
+
+Then 9c (server owner-only multi-parent push + sync-scoped body limit), 9d
+(newest-N DAG + paged History + provenance), and 9e (docs/spec/live smoke).
+
+After that, optional follow-ups, roughly in priority order:
 
 0. **Audit 100 plan** — `docs/audit-100-plan.md` lists every remaining rubric
    deduction with a fix and acceptance criteria. The sensible subset is CI +
@@ -946,6 +988,27 @@ expected for the closeout follow-ups.
 
 ## Spec Deltas / Open Items
 
+- **Phase 9a implementation notes (2026-11-11)** — (a) Submodule gitlinks
+  (tree mode `160000`) are now `:commit` entries, not blobs: `objects_from/2`,
+  `walk_blobs/3`, and secret scans skip them, `read_path/4` returns
+  `:not_a_file`, and the repository browser renders a non-clickable
+  `submodule` row. A copied tree keeps the gitlink entry but its target object
+  is not in the Cadence store. (b) Annotated tag objects are readable from
+  loose files and packs (pack type 4) and `write_raw/3` accepts `:tag` (used
+  by fixtures); the importer only copies commit/tree/blob objects, so tag
+  objects are not stored in the destination. (c) `objects/info/alternates` is
+  not followed; a missing object is a typed error. (d) `walk_commits/3` uses
+  breadth-first collection for the cap and a parents-first Kahn sort; with
+  `truncate: true`, boundary commits become roots and the result reports
+  `truncated: true`. (e) `copy_commit_objects/4` re-hashes each written object
+  (a mismatch is `{:hash_mismatch, sha}`) and skips objects already present in
+  the target. These become normative spec text in 9e.
+- **Phase 9 import (approved 2026-11-11)** — the brief records the decisions
+  that will become spec text if approved: §5.7 (import pipeline), §7.3 (DAG
+  render cap + History), §10.2 (owner-only multi-parent push for imported
+  nodes), §12.6 (new `CAD_IMPORT_*`/`CAD_DAG_MAX_NODES`/
+  `CAD_SYNC_MAX_BODY_BYTES` keys), §13 Phase 9, §16 (merge topology, large
+  blobs, history browsing). Nothing is normative until approval.
 - **DAG hover-card layering (2026-11-11)** — the web DAG draws in three layers
   (break lines/edges, non-interactive node graphics, then the interaction layer
   with the focusable links and cards). Any future node decoration must stay in
@@ -1454,6 +1517,22 @@ expected for the closeout follow-ups.
   the review UI (optional 4d/UI-pass work).
 
 ## Last Updated
+2026-11-11 (Phase 9a) — **shared Git import primitives.** Added
+`GitStore.detect_repository/1`, `read_ref/2`, `resolve_revision/2` (annotated
+tags peel), `shallow_commits/1`, `walk_commits/3` (bounded, parents-first,
+shallow-aware), and `copy_commit_objects/4` (shared-tree dedupe, re-hash,
+blob cap). Gitlinks are now `:commit` entries skipped by scans/pushes and
+rendered as a non-clickable `submodule` row; tag objects are readable (loose +
+pack type 4). 14 new shared tests + a repo component test; gate green at 1150
+(327 shared + 603 server + 220 daemon). 9b (daemon importer/API/CLI) is next.
+
+2026-11-11 (later still) — **Phase 9 import brief (planning).** Added
+`docs/phase-9-prep.md`: local Git repo → Cadence DAG (one node per commit,
+original SHAs, merges preserved, capped import + newest-N DAG + paged history,
+daemon job/API/CLI, owner-only multi-parent push, sync body limit, secrets
+quarantine preserved). No code written; `docs/progress.md` Next asks for
+approval of D1/D2/D5.
+
 2026-11-11 (later) — **DAG hover fix + audit 100 plan.** The web DAG's node card
 was painted inside each node's link, so later nodes covered it; the SVG now
 renders a non-interactive visual layer and a final interaction layer (link +
