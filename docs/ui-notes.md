@@ -13,6 +13,11 @@ styling pass is planned after 4c-3 (incident panel) unless a demo is imminent.
 
 ## Open
 
+- **`/favicon.ico` returns 404 (2026-11-11, audit smoke).** Every first page
+  load logs one `404 Not Found` in the console (the browser's automatic
+  favicon request); the server log shows `no route found for GET /favicon.ico`.
+  Expected: either a real favicon route or a `<link rel="icon">` pointing at an
+  inline SVG, so the public pages are console-clean. No visual impact today.
 - **Right-edge project metadata rail (GitHub-style; future idea, user-suggested
   2026-11-08).** Consider a narrow column on the right of the repository pane on
   `/p/:slug`, with GitHub-About-style blocks. Map it to Cadence concepts rather
@@ -39,6 +44,18 @@ styling pass is planned after 4c-3 (incident panel) unless a demo is imminent.
 
 ## Done
 
+- **DAG hover card layering (2026-11-11):** the node card was rendered inside
+  each node's link, so a later node's dot painted over a card that extended
+  below/right of the hovered node (the top layers were unreadable). The SVG now
+  paints edges and non-interactive node graphics first, then a final interaction
+  layer with one focusable link per node (transparent hit circle + card), so a
+  card is always above the graphics. The hover scale was replaced by an accent
+  ring on the hit circle (the dot is no longer a descendant of the link), and
+  the SVG's "Project session graph" `<title>` was replaced with an `aria-label`
+  so the browser no longer shows a native tooltip on every hover. Verified
+  headlessly: hovering the top node at 1440×1000 shows the card with
+  `elementFromPoint` resolving to the card body. Spec §7.3 records the layer
+  rule; `dag_component_test.exs` pins the order and the label.
 - **Raw log download (2026-11-11, closeout slice 2):** the run page's Output
   section links **Download raw log** (`/p/:slug/runs/:run_id/log`). The
   controller is member-only (`Runs.get/3` re-checks), reads the recorded

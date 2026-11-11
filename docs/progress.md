@@ -1,14 +1,16 @@
 # Cadence — Progress
 
 ## Current Phase
-**Closeout hardening — slice 2 complete.** Phase 8 and the planned build order
-are done; slices 1–2 resolved the recorded contract mismatches and UI notes:
-union proposal links come from the server, `Project.actions_manifest` is gone,
-meld nodes record `docs_state: :skipped`, the action run queue is capped, the
-header nav is grouped and wrapping, the demo seeds a finished run, and the run
-page offers a raw-log download. Next is the final audit/docs pass (health audit,
-archive the phase briefs, release notes/versioning); the remaining items are
-optional and recorded in spec §16.
+**1.0.0 shipped (2026-11-11).** Phase 8, the closeout slices, and the final
+audit pass are complete. The five-track health audit scored 87/B and found two
+P1 issues — retired `ash_postgres` and the watcher/registry crash cascade — both
+now fixed. A full non-Neovim live smoke proved editor-independent node creation,
+automatic pushing, union submission over the socket API, server approval, and
+daemon convergence. The completed phase briefs are archived and
+`docs/release-notes.md` records 1.0.0, upgrade notes, and known limitations.
+A post-release DAG fix corrected the hover-card layering and removed the native
+SVG "Project session graph" tooltip; the rubric-specific path from 87 to 100 is
+`docs/audit-100-plan.md`. Remaining work is optional and recorded in spec §16.
 
 ## Done (summary)
 
@@ -804,6 +806,52 @@ optional and recorded in spec §16.
   `mix format --check-formatted`, `mix compile --warnings-as-errors`, and
   `MIX_ENV=prod mix compile --warnings-as-errors` clean; prod build reports
   `AshAuthentication.Info.strategy(User, :demo) == :error`.
+- **DAG hover-card layering fix (2026-11-11)** — the web DAG's node card was
+  part of the node's `<a>`, so a later node's dot painted over a card extending
+  below/right of the hovered node and the top layers were unreadable. The SVG
+  now paints edges and non-interactive node graphics first, then a final
+  `.dag-overlay` interaction layer with one focusable link per node (transparent
+  hit circle `r=15` + `foreignObject` card). Cards always paint above the
+  graphics; the hover scale became an accent ring on the hit circle; the SVG's
+  native `<title>` ("Project session graph") was replaced with
+  `aria-label="Project session graph"` so the browser no longer shows a hover
+  tooltip. Verified headlessly (hover the top node; `elementFromPoint` resolves
+  to the card body, no node layer above it) and pinned by
+  `dag_component_test.exs` (no `<title>`, overlay after `dag-nodes`, one link
+  per node). Spec §7.3 records the layer rule; ui-notes moved to Done.
+- **Audit 87→100 plan (2026-11-11)** — `docs/audit-100-plan.md` turns each
+  remaining rubric deduction into a concrete task (ProjectLive split, result
+  component, users N+1, preview query, proposal cache, Sobelow, `/sync` rate
+  limit, CSP, sleeps/coverage/CI, `mix_audit`, `libgraph`), with acceptance
+  criteria, effort, and the rubric-only items that should stay documented
+  exemptions (Mox, streams, the Phoenix endpoint/router compile cycle).
+- **Closeout slice 3 (final audit + 1.0.0, 2026-11-11)** — five-track audit
+  (architecture/performance/security/tests/dependencies; per-track reports in
+  the git-ignored `.claude/audit/`, durable summary in
+  `docs/audit-2026-11-11.md`; 87/B) plus the full no-Neovim live smoke. Two P1
+  fixes: `ash_postgres` 2.14.5 was **retired** by Hex (delete statements can
+  remove too many rows) → 2.15.2 + the remaining patch/minor batch
+  (`ash`, `ash_authentication`, `bandit`, `ecto`, `ecto_sqlite3`, `hammer`,
+  `mdex`, `phoenix`, `phoenix_html`, `phoenix_live_view`, `slipstream`); a
+  registered project directory that disappears no longer crash-loops the
+  watcher and can no longer take the `ProjectRegistry` (and every other
+  project's queue) down — the watcher owns/retries its `file_system` backend
+  and project supervisors are `restart: :transient`, with a regression test.
+  The resulting flaky `doc_queue_test` cascade was fixed (API test stops its
+  project in `on_exit`). All child `mix.exs` files gained the standard umbrella
+  paths, so `cd apps/<app> && mix test` now works as AGENTS.md documents.
+  Workspace debris removed (30 MB `erl_crash.dump`, stale prod `epmd`).
+  Docs: `docs/release-notes.md` (1.0.0 + upgrade notes + known limitations),
+  version 1.0.0 in all four `mix.exs`, phase briefs 4/6/7 archived, README and
+  `docs/README.md` refreshed, `docs/daemon-setup.md` §9 documents editor
+  independence and the shell equivalents, ui-notes gained the favicon 404.
+  Live smoke: PAT via the real sign-in/token form → fresh daemon state →
+  register → `printf`-only writes (2 nodes) → socket `switch`/`spawn` branch →
+  `POST /union` → public pages 200 → server approval → daemon converged on the
+  meld node (same SHA/parents/pinned; 5 nodes). Headless Chromium at
+  1440×1000/390×844: no horizontal overflow. Final gate: 1134 tests green
+  (313 shared + 601 server + 220 daemon), format and dev/prod compile clean.
+  Spec §16 records the release versioning.
 - **Tooling (OpenCode)** — vendored skill checkout + restore script
   (`scripts/setup-opencode.sh`, 51 skills), project `opencode.jsonc` (mix
   formatter, destructive-command guards), AGENTS.md §12 (routing, Iron Laws,
@@ -813,19 +861,35 @@ optional and recorded in spec §16.
 
 ## Next
 
-**Immediate step:** **final audit/docs pass.** Run the project health audit
-(architecture, tests, dependencies, docs), then archive the completed phase
-briefs (`phase-4-prep.md`, `phase-6-prep.md`, `phase-7-prep.md`) and write
-release notes / decide the version (currently `0.1.0` in the root and app
-`mix.exs` files). Confirm every §16 item is either resolved or explicitly
-deferred, and refresh `docs/README.md` if the doc index shifts.
+**Immediate step:** none required — 1.0.0 is released, the audit is written,
+and the tree is clean. The items below are optional and gated only by interest.
 
-The planned build order (spec §13, Phases 1–8) is complete and the closeout
-slices are done. Remaining optional work is the Phase 5 P5 docs live smoke with
-a real `CAD_LLM_API_KEY`, the 7b/7c residues below, action log streaming,
-burrito packaging, and CI/image publishing. If the run history ever needs
-stable paging, replace the offset with a `(created_at, id)` cursor (recorded in
-spec §16).
+Optional follow-ups, roughly in priority order:
+
+0. **Audit 100 plan** — `docs/audit-100-plan.md` lists every remaining rubric
+   deduction with a fix and acceptance criteria. The sensible subset is CI +
+   the sleep cleanup, then security (Sobelow, `/sync` rate limit, CSP), then
+   the performance fixes, then the `ProjectLive` split; the Mox/streams/compile-
+   cycle lines stay documented exemptions.
+1. **Audit P3 cleanups** — batch `Accounts.users_by_ids/1` into one query; fold
+   `Portfolio.preview_node/1` into one `ORDER BY`; add a Hammer plug for
+   `/sync/*` and a CSP if the server is exposed beyond a trusted network.
+2. **Phase 5 P5 docs live smoke** — with a real `CAD_LLM_API_KEY`; this and
+   conflict-bearing melds are the only server paths not yet exercised live.
+3. **Spec §16 backlog** — action log streaming, pack consolidation /
+   multi-pack index, web docs review, burrito packaging, CI/image publishing,
+   `Project.docker_image` writer, public-preview auth, multi-node fan-out, and
+   the cloud backup strategy.
+4. **CI** — add `mix_audit` and a workflow running format, dev+prod compile,
+   and the full suite against a Postgres service; run the suite twice before a
+   release to catch timing flakes.
+
+Before every release: bump the four `mix.exs` versions, add a
+`docs/release-notes.md` entry, run `mix hex.audit`, and run the full gate twice.
+
+The planned build order (spec §13, Phases 1–8) is complete. If the run history
+ever needs stable paging, replace the offset with a `(created_at, id)` cursor
+(recorded in spec §16).
 
 **Integration contract (6c, for anything that touches runs):**
 `Actions.Runs.prepare/4` returns `{:ok, %ActionRun{}}` or
@@ -845,28 +909,25 @@ pages redirect, the nav link hides, and artifact downloads 404. `Runs.list/3`
 takes `:limit`/`:offset`; `Runs.page/3` returns
 `%{runs, offset, limit, has_prev, has_next}` for the paged list.
 
-Carry-over (post-Phase-7, optional):
+Carry-over (post-1.0.0, optional):
 
-1. **Phase 5 P5 docs live smoke** — with a real `CAD_LLM_API_KEY`.
-2. **6c residues** (spec §16): action log streaming remains post-exit; run
+1. **6c residues** (spec §16): action log streaming remains post-exit; run
    paging is offset-based (a cursor is the fix if the window shift ever
-   matters). Per-project run concurrency, queue depth, artifact/image
-   retention, and run/artifact paging are resolved by M1/M2/M3 and closeout
-   slice 2.
-3. **7b/7c residues** (spec §16): pack consolidation / multi-pack index; the
+   matters).
+2. **7b/7c residues** (spec §16): pack consolidation / multi-pack index; the
    repack threshold path was not exercised on the demo seed (its stores are
    below 1,000 objects — the manual two-run path was used, and the threshold is
-   unit-tested). A hung repack is now bounded by `CAD_REPACK_TIMEOUT_MS`.
-4. **8b residues** (spec §16): a burrito single-file artifact is optional and
+   unit-tested). A hung repack is bounded by `CAD_REPACK_TIMEOUT_MS`.
+3. **8b residues** (spec §16): a burrito single-file artifact is optional and
    would need a §11 dependency row; CI/image publishing is still operator-side.
    The daemon release was smoke-tested on Linux x86_64 only, with `fs_poll`
    (the Linux `inotifywait` default is exercised by the dev daemon); macOS
    defaults to `fs_poll` and `fs_mac` is untested on hardware.
 
-**Spin-up:** `@phx-full` for the closeout slices (they touch the server,
-daemon, and Neovim) or the docs live smoke (needs `CAD_LLM_API_KEY`);
-`@phx-quick` for a single-file `docs/ui-notes.md` item. No new dependency is
-expected for the closeout slices.
+**Spin-up:** `@phx-full` for a multi-surface change (server + daemon + plugin)
+or the docs live smoke (needs `CAD_LLM_API_KEY`); `@phx-quick` for a single
+`docs/ui-notes.md` item (for example the favicon 404). No new dependency is
+expected for the closeout follow-ups.
 
 ## Blocked
 
@@ -874,14 +935,41 @@ expected for the closeout slices.
   `:CadProposals`, 6c M1 (run queue) / M2 (retention) / M3 (paging), Phase
   8a (production server release), Phase 8b (daemon release), closeout slice 1
   (proposal links, `actions_manifest`, meld docs state), closeout slice 2 (run
-  queue cap, header nav, seeded run, raw-log download), and the DAG width fix
-  are complete, and every review's must-fix item is applied and verified.
-  Pre-existing follow-ups (unreadable-object isolation, re-push of an existing
-  row whose objects were later lost, the 8 MB retry ceiling, pack
-  consolidation) remain recorded below and in spec §16.
+  queue cap, header nav, seeded run, raw-log download), the DAG width fix, and
+  closeout slice 3 (final audit, P1 fixes, 1.0.0 release) are complete, and
+  every review's must-fix item is applied and verified. The audit's remaining
+  P3 items are optional improvements, not blockers (see `Next` and
+  `docs/audit-2026-11-11.md`). Pre-existing
+  follow-ups (unreadable-object isolation, re-push of an existing row whose
+  objects were later lost, the 8 MB retry ceiling, pack consolidation) remain
+  recorded below and in spec §16.
 
 ## Spec Deltas / Open Items
 
+- **DAG hover-card layering (2026-11-11)** — the web DAG draws in three layers
+  (break lines/edges, non-interactive node graphics, then the interaction layer
+  with the focusable links and cards). Any future node decoration must stay in
+  the visual layer; anything that can appear on hover belongs in the overlay.
+  The SVG's accessible name is an `aria-label`, never a `<title>` (browsers show
+  titles as native hover tooltips). Recorded in spec §7.3.
+- **Closeout slice 3 notes (2026-11-11)** — (a) `ash_postgres` moved to 2.15.2
+  (Hex retired 2.14.5); after any Ecto bump, rebuild `ecto` and `ecto_sql`
+  together in every MIX_ENV or the test build loses the Postgres adapter
+  connection module. (b) The watcher now owns/retries its `file_system`
+  backend and project supervisors are `restart: :transient`: a missing project
+  directory no longer crash-loops into the registry; a project whose own
+  supervision collapses is dropped until re-registration or the next boot (by
+  design). (c) `mix test --cover` exits 3 because Mix's default 90% threshold
+  is not met (84.34 daemon / 81.89 server / 88.85 shared); no project threshold
+  is configured. (d) 1.0.0 is the first release; the version lives in the four
+  `mix.exs` files and `docs/release-notes.md` is the release record. (e)
+  `docs/phase-{4,6,7}-prep.md` are archived. (f) `/favicon.ico` still 404s on
+  every first page load (ui-notes). (g) The smoke's `opencode-smoke` project
+  remains on the demo server as demo data; `--reset` recreates users, so a
+  stale smoke project must be deleted before a re-run (the smoke script does
+  this). (h) The audit's P3 items (users N+1, `/sync` rate limit, CSP, uncached
+  proposal rendering, `libgraph` pin, no CVE scanner) are recorded in the
+  health summary and `Next`.
 - **Closeout slice 2 notes (2026-11-11)** — (a) The queue-depth check holds a
   **blocking** `pg_advisory_xact_lock` on the run-claim key while inserting; a
   concurrent dispatcher's `pg_try_...` claim skips and retries on the next
@@ -1366,6 +1454,28 @@ expected for the closeout slices.
   the review UI (optional 4d/UI-pass work).
 
 ## Last Updated
+2026-11-11 (later) — **DAG hover fix + audit 100 plan.** The web DAG's node card
+was painted inside each node's link, so later nodes covered it; the SVG now
+renders a non-interactive visual layer and a final interaction layer (link +
+transparent hit circle + card), and the native "Project session graph" `<title>`
+is gone in favour of an `aria-label`. Headless hover check passes; component
+tests updated. `docs/audit-100-plan.md` maps every remaining rubric deduction
+(ProjectLive split, performance N+1/cache, Sobelow/rate limit/CSP, sleeps/CI,
+`mix_audit`/`libgraph`) with acceptance criteria, and `docs/progress.md` points
+at it.
+
+2026-11-11 — **final audit + 1.0.0 closeout.** Five-track health audit (87/B;
+reports under `.claude/audit/`). Two P1 fixes: retired `ash_postgres` → 2.15.2,
+and the watcher/registry crash cascade (backend retry + `:transient` project
+supervisors + regression tests); the flaky-test cascade was fixed with it. Full
+non-Neovim live smoke: PAT via the real sign-in/token form → fresh daemon →
+`printf`-only writes → socket `switch`/`spawn` branch → `POST /union` →
+public pages 200 → server approval → daemon converged on the meld node; no
+horizontal overflow at 1440×1000/390×844. Child-app `mix` paths fixed, phase
+briefs archived, `docs/release-notes.md` written, all versions 1.0.0,
+README/daemon-setup/ui-notes/spec §16 refreshed. Final gate: 1134 tests green,
+format and dev/prod compile clean. Only optional work remains.
+
 2026-11-05 — 4c-3 (incident panel + resolution) shipped from
 `.claude/plans/review-ui-4c/plan.md` P2-T9..P3-T2: incident panel on the review
 hub, `resolve_incident` with a fresh role check, `ProposalView.verify_resolution/1`

@@ -257,11 +257,44 @@ mix cad.register "My Project" my-project ~/code/my-project
   produces no node — edit a file (or touch one) to start the history.
 - The same operation is available as `POST /projects` on the daemon socket.
 
-## 9. Neovim
+## 9. Neovim (optional)
 
 Install the plugin as described in `cadence.nvim/README.md`. It resolves the
 socket the same way (`$CAD_STATE_DIR/daemon.sock`) and auto-opens the DAG when
 Neovim starts inside a registered project.
+
+**Neovim is not required to create or push nodes.** Nodes come from the
+daemon's watcher, not the plugin: a file change in a registered project is
+debounced, snapshotted into the local Git store, committed as a node, and
+enqueued for sync (`apps/cadence_daemon/lib/cadence/daemon/watcher.ex` →
+`commit_queue.ex` → `sync_ledger.ex` → `sync_worker.ex`). Any writer works — an
+IDE, `vim`, a shell script, a build tool, or an AI agent such as OpenCode.
+
+The plugin adds the DAG picker and these conveniences. Every one has a socket
+or `mix` equivalent, so the same operations are scriptable without Neovim:
+
+| Plugin command | Without Neovim |
+|---|---|
+| `:CadOpen` / `:CadSwitch` | `mix cad.switch SLUG NODE_ID`, or `POST /switch` on `daemon.sock` |
+| `:CadSpawn` | `mix cad.spawn SLUG [NAME]`, or `POST /spawn` |
+| `:CadUnion` | `POST /union` with `{"project_id", "parent_node_ids"}` |
+| `:CadProposals` | `GET /proposals?project_id=…` |
+| `:CadDocSync` | `POST /docs/sync` |
+| `:CadDocDiff` | `GET /docs/diff?project_id=…&node_id=…` |
+
+```bash
+# Write through the socket without any editor plugin.
+curl -sS --unix-socket "$CAD_STATE_DIR/daemon.sock" \
+  http://localhost/union -H 'content-type: application/json' \
+  -d '{"project_id":"…","parent_node_ids":["…","…"]}'
+```
+
+Pushes are automatic when the daemon is configured (`CAD_SYNC_ENABLED`,
+`CAD_SERVER_URL`, `CAD_AUTH_TOKEN`). Enqueueing a node wakes the sync worker;
+there is no separate "push now" command, and a project with no file changes
+creates no node. `CAD_IGNORE` keeps build directories (`_build`, `deps`,
+`node_modules`, …) out of history, which matters when an agent's tooling writes
+inside the project.
 
 ## Upgrading the daemon
 

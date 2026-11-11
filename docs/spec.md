@@ -752,6 +752,13 @@ and swaps the right pane to that node's snapshot with a short crossfade. The
 selected default node is marked. Nodes are focusable links so keyboard users get
 the same behavior. In union mode (Phase 4), click toggles `✓` instead.
 
+**Hover-card layering:** the SVG paints in three layers — break lines, edges,
+non-interactive node graphics, then a final interaction layer holding one
+focusable link per node with a transparent hit circle and the hover card. Cards
+are therefore painted above every node graphic and cannot be covered by a later
+node. The SVG's accessible name is an `aria-label`; it must not use a `<title>`,
+because browsers surface that as a native tooltip on every hover.
+
 **Intro animation:** on the first full page load only, animate the default
 node's ancestor lineage from its root(s) down to the default node along the
 actual elbow paths (including the horizontal trajectory — not just a vertical
@@ -2451,6 +2458,11 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       precompiled NIF; Linux needs `inotifywait` (or
       `CAD_WATCH_BACKEND=fs_poll`). A `burrito` single-file artifact remains
       optional and unimplemented — adding it would need a §11 dependency row.
+- [x] **Release versioning:** resolved for 1.0.0 — the planned build order is
+      complete, all apps and both releases report `1.0.0`, and
+      `docs/release-notes.md` is the release summary, upgrade note, and
+      known-limitation list. Bump the version and add an entry there for every
+      release; CI and image publishing remain open below.
 - [ ] **Image publishing / CI:** `docker-compose.prod.yml` builds
       `cadence-server:prod` (or `CAD_SERVER_IMAGE`) locally and the image is
       otherwise operator-managed. Registry publishing, version pinning, and a

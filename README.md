@@ -5,7 +5,9 @@ session nodes rather than Git branches.
 
 - **Canonical spec:** [docs/spec.md](docs/spec.md)
 - **Agent conventions:** [AGENTS.md](AGENTS.md)
-- **Status:** early scaffolding
+- **Status:** 1.0.0 — the planned build order is complete; see
+  [docs/release-notes.md](docs/release-notes.md) for the release summary,
+  upgrade notes, and known limitations.
 
 ## Quick overview
 

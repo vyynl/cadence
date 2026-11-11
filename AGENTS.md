@@ -70,7 +70,7 @@ cadence/                        (umbrella root)
 │   ├── demo.md                 local demo stack + guided tour
 │   ├── ui-notes.md             UI tuning backlog
 │   ├── opencode.md             agent tooling: skills, gates, artifacts
-│   ├── phase-4-prep.md         completed Phase 4 brief (history)
+│   ├── release-notes.md        release history, upgrade notes, known limitations
 │   └── archive/                completed briefs + full session history
 ├── docker/                     Dockerfile.demo (dev demo image)
 ├── scripts/
