@@ -396,6 +396,9 @@ defmodule Cadence.Daemon.ImporterTest do
 
     Application.put_env(:cadence_daemon, :import_runner, fn plan, _progress ->
       Cadence.Daemon.Watcher.suspend(plan.project_id, {:import, plan.job_id})
+
+      # Deliberate blocking runner: this job must still be running when the
+      # import time bound fires, so sleep forever and let the supervisor kill it.
       Process.sleep(:infinity)
     end)
 
@@ -470,23 +473,21 @@ defmodule Cadence.Daemon.ImporterTest do
   end
 
   defp await(job_id, timeout \\ 15_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    do_await(job_id, deadline)
-  end
+    Cadence.Daemon.TestHelpers.await(fn -> terminal_job(job_id) end, timeout)
 
-  defp do_await(job_id, deadline) do
-    {:ok, job} = Importer.status(job_id)
-
-    cond do
-      job.status in [:completed, :failed] ->
+    case Importer.status(job_id) do
+      {:ok, %{status: status} = job} when status in [:completed, :failed] ->
         job
 
-      System.monotonic_time(:millisecond) > deadline ->
+      {:ok, job} ->
         flunk("import #{job_id} did not finish (status: #{job.status})")
+    end
+  end
 
-      true ->
-        Process.sleep(10)
-        do_await(job_id, deadline)
+  defp terminal_job(job_id) do
+    case Importer.status(job_id) do
+      {:ok, %{status: status} = job} when status in [:completed, :failed] -> job
+      _ -> nil
     end
   end
 

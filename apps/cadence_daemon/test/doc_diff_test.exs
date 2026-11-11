@@ -144,21 +144,5 @@ defmodule Cadence.Daemon.DocDiffTest do
 
   defp author, do: %{name: "cadence", email: "cadence@local"}
 
-  defp eventually(fun, timeout \\ 5_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    try_until(fun, deadline)
-  end
-
-  defp try_until(fun, deadline) do
-    if fun.() do
-      true
-    else
-      if System.monotonic_time(:millisecond) >= deadline do
-        flunk("condition not met within timeout")
-      else
-        Process.sleep(20)
-        try_until(fun, deadline)
-      end
-    end
-  end
+  defp eventually(fun), do: Cadence.Daemon.TestHelpers.eventually(fun, 5_000)
 end

@@ -77,21 +77,5 @@ defmodule Cadence.Daemon.MessageQueueTest do
     assert loaded.session_metadata == %{"model" => "test-model"}
   end
 
-  defp eventually(fun, timeout \\ 3000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    try_until(fun, deadline)
-  end
-
-  defp try_until(fun, deadline) do
-    if fun.() do
-      true
-    else
-      if System.monotonic_time(:millisecond) >= deadline do
-        flunk("condition not met within timeout")
-      else
-        Process.sleep(20)
-        try_until(fun, deadline)
-      end
-    end
-  end
+  defp eventually(fun), do: Cadence.Daemon.TestHelpers.eventually(fun, 3000)
 end

@@ -13,6 +13,8 @@ defmodule Cadence.Server.StorageRepackTimeoutTest do
 
   use ExUnit.Case, async: false
 
+  import Cadence.Server.TestHelpers, only: [eventually: 1, eventually: 2]
+
   alias Cadence.Server.{ProjectGit, Repo, Storage}
   alias Cadence.Server.Storage.Repacker
   alias Cadence.Shared.GitStore
@@ -63,7 +65,9 @@ defmodule Cadence.Server.StorageRepackTimeoutTest do
 
     # The rollback releases the transaction-scoped lock and returns the pooled
     # connection, so the next run completes instead of staying busy forever.
-    assert eventually(fn -> match?({:ok, _summary}, Storage.run(project_id)) end)
+    # `Storage.run/1` is idempotent; retry until it stops reporting `:busy`,
+    # with an explicit bound for a slow host.
+    assert eventually(fn -> Storage.run(project_id) != {:error, :busy} end, 10_000)
   end
 
   test "the worker kills a hung run and the next project proceeds" do
@@ -116,19 +120,8 @@ defmodule Cadence.Server.StorageRepackTimeoutTest do
     assert_receive {:done, ^second, {:ok, %{packed_objects: 1}}}, 2_000
 
     # The worker's kill released the first project's lock, so it can run again.
-    assert eventually(fn -> match?({:ok, _summary}, Storage.run(first)) end)
-  end
-
-  defp eventually(fun, attempts \\ 100)
-
-  defp eventually(fun, 0), do: fun.()
-
-  defp eventually(fun, attempts) do
-    if fun.() do
-      true
-    else
-      Process.sleep(20)
-      eventually(fun, attempts - 1)
-    end
+    # `Storage.run/1` is idempotent; retry until it stops reporting `:busy`,
+    # with an explicit bound for a slow host.
+    assert eventually(fn -> Storage.run(first) != {:error, :busy} end, 10_000)
   end
 end

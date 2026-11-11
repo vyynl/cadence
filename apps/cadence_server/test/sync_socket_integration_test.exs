@@ -66,17 +66,18 @@ defmodule Cadence.ServerWeb.SyncSocketIntegrationTest do
     port
   end
 
-  defp wait_for_port(port, attempts \\ 50) do
+  defp wait_for_port(port) do
+    Cadence.Server.TestHelpers.eventually(fn -> port_open?(port) end)
+  end
+
+  defp port_open?(port) do
     case :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false], 100) do
       {:ok, socket} ->
         :ok = :gen_tcp.close(socket)
+        true
 
-      {:error, _reason} when attempts > 0 ->
-        Process.sleep(20)
-        wait_for_port(port, attempts - 1)
-
-      {:error, reason} ->
-        flunk("test socket endpoint did not start: #{inspect(reason)}")
+      {:error, _reason} ->
+        false
     end
   end
 end

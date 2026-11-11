@@ -40,10 +40,14 @@ defmodule Cadence.Daemon.TestDocsLLM do
         {:error, reason}
 
       {:sleep, ms} ->
+        # Deliberate latency injection: the timeout path needs a call still in
+        # flight when the docs worker's deadline fires.
         Process.sleep(ms)
         {:ok, @valid}
 
       {:slow, ms, text} ->
+        # Deliberate latency injection: keeps the docs job running so a test can
+        # observe intermediate state before the completion returns.
         Process.sleep(ms)
         {:ok, text}
 

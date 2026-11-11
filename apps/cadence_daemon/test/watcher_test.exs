@@ -3,7 +3,10 @@ defmodule Cadence.Daemon.WatcherTest do
 
   import Ecto.Query
 
+  import Cadence.Daemon.TestHelpers, only: [eventually: 1]
+
   alias Cadence.Daemon.{CommitQueue, Repo, Watcher}
+  alias Cadence.Daemon.TestHelpers
   alias Cadence.Shared.{Node, Project}
 
   setup do
@@ -26,18 +29,22 @@ defmodule Cadence.Daemon.WatcherTest do
 
   test "a file change triggers a debounced commit",
        %{work_dir: work_dir, git_dir: git_dir, project: project} do
+    baseline = Path.join(work_dir, "baseline.txt")
+    File.write!(baseline, "baseline\n")
+
     queue =
       start_supervised!(
         {CommitQueue, [project_id: project.id, work_dir: work_dir, git_dir: git_dir]}
       )
 
-    start_supervised!(
-      {Watcher,
-       [dir: work_dir, commit_queue: queue, backend: :fs_poll, interval: 50, debounce_ms: 50]}
-    )
+    watcher =
+      start_supervised!(
+        {Watcher,
+         [dir: work_dir, commit_queue: queue, backend: :fs_poll, interval: 50, debounce_ms: 50]}
+      )
 
-    # Let the poller establish its baseline before writing.
-    Process.sleep(300)
+    # Wait until the poller has taken its baseline, so the next write is an event.
+    TestHelpers.await_poll_baseline(watcher, baseline)
 
     File.write!(Path.join(work_dir, "hello.txt"), "hi\n")
 
@@ -54,30 +61,39 @@ defmodule Cadence.Daemon.WatcherTest do
       )
 
     name = {:via, Registry, {Cadence.Daemon.Queues, {:watcher, project.id}}}
+    baseline = Path.join(work_dir, "baseline.txt")
+    File.write!(baseline, "baseline\n")
 
-    start_supervised!(
-      {Watcher,
-       [
-         dir: work_dir,
-         commit_queue: queue,
-         backend: :fs_poll,
-         interval: 50,
-         debounce_ms: 50,
-         name: name
-       ]}
-    )
+    watcher =
+      start_supervised!(
+        {Watcher,
+         [
+           dir: work_dir,
+           commit_queue: queue,
+           backend: :fs_poll,
+           interval: 50,
+           debounce_ms: 50,
+           name: name
+         ]}
+      )
 
-    Process.sleep(300)
+    TestHelpers.await_poll_baseline(watcher, baseline)
 
     assert :ok = Watcher.suspend(project.id)
     assert Watcher.suspended?(project.id)
 
-    send(
-      GenServer.whereis(name),
-      {:file_event, self(), {Path.join(work_dir, "a.txt"), [:created]}}
-    )
+    pid = GenServer.whereis(name)
+    %{worker: worker} = :sys.get_state(pid)
 
-    Process.sleep(200)
+    send(pid, {:file_event, worker, {Path.join(work_dir, "a.txt"), [:created]}})
+
+    # Barrier: the event has been handled once the call returns. The matching
+    # `handle_info/2` clause requires the backend pid, so a suspended watcher
+    # must have hit the suspension branch and dropped it: no timer, no pending
+    # commit.
+    state = :sys.get_state(pid)
+    assert state.timer == nil
+    refute state.pending
 
     assert count_nodes(project) == 0
 
@@ -96,26 +112,31 @@ defmodule Cadence.Daemon.WatcherTest do
       )
 
     name = {:via, Registry, {Cadence.Daemon.Queues, {:watcher, project.id}}}
+    baseline = Path.join(work_dir, "baseline.txt")
+    File.write!(baseline, "baseline\n")
 
-    start_supervised!(
-      {Watcher,
-       [
-         dir: work_dir,
-         commit_queue: queue,
-         backend: :fs_poll,
-         interval: 50,
-         debounce_ms: 400,
-         name: name
-       ]}
-    )
+    watcher =
+      start_supervised!(
+        {Watcher,
+         [
+           dir: work_dir,
+           commit_queue: queue,
+           backend: :fs_poll,
+           interval: 50,
+           debounce_ms: 400,
+           name: name
+         ]}
+      )
 
-    Process.sleep(300)
+    TestHelpers.await_poll_baseline(watcher, baseline)
     File.write!(Path.join(work_dir, "a.txt"), "hi\n")
 
     # The poller sees the write and arms the debounce; suspend before it fires.
-    Process.sleep(150)
+    assert eventually(fn -> :sys.get_state(watcher).timer != nil end)
     assert :ok = Watcher.suspend(project.id)
 
+    # Genuine debounce window: outlast the 400 ms debounce, so a timer that
+    # escaped `cancel_timer/1` would have fired and created a node by now.
     Process.sleep(500)
     assert count_nodes(project) == 0
 
@@ -162,6 +183,8 @@ defmodule Cadence.Daemon.WatcherTest do
       )
 
     name = {:via, Registry, {Cadence.Daemon.Queues, {:watcher, project.id}}}
+    baseline = Path.join(work_dir, "baseline.txt")
+    File.write!(baseline, "baseline\n")
 
     pid =
       start_supervised!(
@@ -177,45 +200,37 @@ defmodule Cadence.Daemon.WatcherTest do
          ]}
       )
 
-    # Let the poller establish its baseline before removing the directory.
-    Process.sleep(300)
+    # Wait until the poller has taken its baseline before removing the directory.
+    TestHelpers.await_poll_baseline(pid, baseline)
 
     File.rm_rf!(work_dir)
 
     # The backend crashes on its next poll. The watcher must stay up (that is
     # what keeps the project supervisor from restarting it in a loop) and no
-    # commit may be attempted against the missing tree.
-    Process.sleep(400)
+    # commit may be attempted against the missing tree. Wait for the backend
+    # exit itself instead of assuming a poll interval.
+    assert eventually(fn -> TestHelpers.watcher_backend_down?(pid) end)
     assert Process.alive?(pid)
     refute Watcher.suspended?(project.id)
     assert count_nodes(project) == 0
 
-    File.mkdir_p!(work_dir)
-    Process.sleep(300)
+    # Recreate the directory with the baseline marker already inside, in one
+    # rename: the reconnected poller takes its baseline with the marker present,
+    # so recovery cannot create a node of its own and the next write is the only
+    # commit this assertion can see.
+    recovered = work_dir <> ".recovered"
+    File.mkdir_p!(recovered)
+    File.write!(Path.join(recovered, "baseline.txt"), "baseline\n")
+    File.rename!(recovered, work_dir)
+    TestHelpers.await_poll_baseline(pid, baseline)
+
+    before_count = count_nodes(project)
     File.write!(Path.join(work_dir, "back.txt"), "hi\n")
 
-    assert eventually(fn -> count_nodes(project) == 1 end)
+    assert eventually(fn -> count_nodes(project) == before_count + 1 end)
   end
 
   defp count_nodes(project) do
     Repo.aggregate(where(Node, [n], n.project_id == ^project.id), :count)
-  end
-
-  defp eventually(fun, timeout \\ 3000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    try_until(fun, deadline)
-  end
-
-  defp try_until(fun, deadline) do
-    if fun.() do
-      true
-    else
-      if System.monotonic_time(:millisecond) >= deadline do
-        flunk("condition not met within timeout")
-      else
-        Process.sleep(50)
-        try_until(fun, deadline)
-      end
-    end
   end
 end

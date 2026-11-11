@@ -24,6 +24,8 @@ defmodule Cadence.Daemon.TestLLM do
         {:error, reason}
 
       {:sleep, ms} ->
+        # Deliberate latency injection: timeout tests need a completion that is
+        # still running when the worker's deadline fires.
         Process.sleep(ms)
         {:ok, @valid}
     end

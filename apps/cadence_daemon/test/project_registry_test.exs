@@ -1,7 +1,10 @@
 defmodule Cadence.Daemon.ProjectRegistryTest do
   use ExUnit.Case, async: false
 
+  import Cadence.Daemon.TestHelpers, only: [eventually: 1]
+
   alias Cadence.Daemon.{CommitQueue, ProjectRegistry, Repo}
+  alias Cadence.Daemon.TestHelpers
   alias Cadence.Shared.Project
 
   setup do
@@ -48,13 +51,13 @@ defmodule Cadence.Daemon.ProjectRegistryTest do
     assert is_pid(first_queue)
     assert is_pid(second_queue)
 
-    Process.sleep(150)
-
     # The poller's next cycle crashes once the directory is gone. Under the old
     # linked-watcher layout this restarted the project supervisor until the
     # registry itself was terminated (dropping every project).
     File.rm_rf!(first_dir)
-    Process.sleep(500)
+
+    first_watcher = {:via, Registry, {Cadence.Daemon.Queues, {:watcher, first.id}}}
+    assert eventually(fn -> TestHelpers.watcher_backend_down?(first_watcher) end)
 
     assert Process.alive?(first_sup)
     assert Process.alive?(first_queue)
@@ -66,15 +69,26 @@ defmodule Cadence.Daemon.ProjectRegistryTest do
   end
 
   defp start_project(project, work_dir, root) do
-    ProjectRegistry.start_project(
-      project_id: project.id,
-      work_dir: work_dir,
-      git_dir: Path.join(root, "git-#{project.id}"),
-      backend: :fs_poll,
-      interval: 20,
-      debounce_ms: 20,
-      reconnect_ms: 20
+    baseline = Path.join(work_dir, "baseline.txt")
+    File.write!(baseline, "baseline\n")
+
+    {:ok, sup} =
+      ProjectRegistry.start_project(
+        project_id: project.id,
+        work_dir: work_dir,
+        git_dir: Path.join(root, "git-#{project.id}"),
+        backend: :fs_poll,
+        interval: 20,
+        debounce_ms: 20,
+        reconnect_ms: 20
+      )
+
+    TestHelpers.await_poll_baseline(
+      {:via, Registry, {Cadence.Daemon.Queues, {:watcher, project.id}}},
+      baseline
     )
+
+    {:ok, sup}
   end
 
   defp insert_project do
@@ -85,23 +99,5 @@ defmodule Cadence.Daemon.ProjectRegistryTest do
     }
     |> Project.changeset()
     |> Repo.insert!()
-  end
-
-  defp eventually(fun, timeout \\ 1_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    try_until(fun, deadline)
-  end
-
-  defp try_until(fun, deadline) do
-    if fun.() do
-      true
-    else
-      if System.monotonic_time(:millisecond) >= deadline do
-        flunk("condition not met within timeout")
-      else
-        Process.sleep(20)
-        try_until(fun, deadline)
-      end
-    end
   end
 end

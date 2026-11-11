@@ -1,6 +1,8 @@
 defmodule Cadence.Daemon.CommitQueueTest do
   use ExUnit.Case, async: false
 
+  import Cadence.Daemon.TestHelpers, only: [eventually: 1]
+
   alias Cadence.Daemon.{CommitQueue, ProjectLocation, Repo, Session, SyncLedger, SyncPending}
   alias Cadence.Shared.{GitStore, Node, Project}
 
@@ -347,23 +349,5 @@ defmodule Cadence.Daemon.CommitQueueTest do
     }
     |> Node.changeset()
     |> Repo.insert!()
-  end
-
-  defp eventually(fun, timeout \\ 3000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    try_until(fun, deadline)
-  end
-
-  defp try_until(fun, deadline) do
-    if fun.() do
-      true
-    else
-      if System.monotonic_time(:millisecond) >= deadline do
-        flunk("condition not met within timeout")
-      else
-        Process.sleep(20)
-        try_until(fun, deadline)
-      end
-    end
   end
 end

@@ -1020,23 +1020,21 @@ defmodule Cadence.Daemon.API.RouterTest do
   end
 
   defp drain_doc_queue do
-    deadline = System.monotonic_time(:millisecond) + 5_000
-    do_drain_doc_queue(deadline)
+    Cadence.Daemon.TestHelpers.await(fn -> doc_queue_idle?() end, 5_000)
   end
 
-  defp do_drain_doc_queue(deadline) do
-    state =
-      try do
-        :sys.get_state(DocQueue, 2_000)
-      catch
-        :exit, _reason -> %{}
-      end
+  defp doc_queue_idle? do
+    # An unexpected shape is not evidence of idleness: only a map with an empty
+    # `entries` map counts. `:exit` (busy/timeout or shutdown) keeps polling;
+    # a `KeyError` from a renamed field is left to fail the test.
+    match?(%{entries: entries} when entries == %{}, doc_queue_state())
+  end
 
-    if Map.get(state, :entries) == %{} or System.monotonic_time(:millisecond) >= deadline do
-      :ok
-    else
-      Process.sleep(20)
-      do_drain_doc_queue(deadline)
+  defp doc_queue_state do
+    try do
+      :sys.get_state(DocQueue, 2_000)
+    catch
+      :exit, _reason -> :unknown
     end
   end
 

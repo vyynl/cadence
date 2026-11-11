@@ -383,9 +383,16 @@ defmodule Cadence.Server.StorageRepackerTest do
     test "a project is queued once while a run is in flight", %{project: project} do
       parent = self()
 
+      # The runner blocks until released, so the second `schedule/2` genuinely
+      # arrives while the first run is in flight.
       runner = fn id ->
-        send(parent, {:ran, id})
-        Process.sleep(100)
+        send(parent, {:ran, id, self()})
+
+        receive do
+          {:release, ^id} -> :ok
+        after
+          5_000 -> :ok
+        end
       end
 
       start_supervised!(
@@ -395,9 +402,20 @@ defmodule Cadence.Server.StorageRepackerTest do
       Repacker.schedule(project.id, server: :test_repacker)
       Repacker.schedule(project.id, server: :test_repacker)
 
-      assert_receive {:ran, id}, 1_000
+      assert_receive {:ran, id, runner_pid}, 1_000
       assert id == project.id
-      refute_receive {:ran, _}, 200
+
+      # Dedupe proof: the second schedule ran while the first was in flight, so
+      # it must have been ignored rather than queued.
+      state = :sys.get_state(:test_repacker)
+      assert :queue.len(state.queue) == 0
+      assert state.queued == MapSet.new()
+
+      refute_receive {:ran, _, _}, 200
+
+      send(runner_pid, {:release, id})
+      await_idle(:test_repacker)
+      refute_receive {:ran, _, _}, 200
     end
 
     test "the backstop retries a failed project despite the push cooldown", %{
@@ -613,17 +631,13 @@ defmodule Cadence.Server.StorageRepackerTest do
     prefix <> :binary.copy(<<0>>, take) <> rest
   end
 
+  # Idle is a precondition for the assertions that follow, so fail loud rather
+  # than tolerating a timeout (unlike the on_exit drains that use `await/2`).
   defp await_idle(name) do
-    Enum.reduce_while(1..100, :ok, fn _attempt, _acc ->
-      case :sys.get_state(name) do
-        %{running: nil} ->
-          {:halt, :ok}
-
-        _state ->
-          Process.sleep(10)
-          {:cont, :ok}
-      end
-    end)
+    Cadence.Server.TestHelpers.eventually(
+      fn -> match?(%{running: nil}, :sys.get_state(name)) end,
+      1_000
+    )
   end
 
   defp put_env(key, value) do

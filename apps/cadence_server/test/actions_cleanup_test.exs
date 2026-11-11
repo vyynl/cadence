@@ -289,16 +289,23 @@ defmodule Cadence.Server.Actions.CleanupTest do
 
     test "a crashing sweep is contained and the process stays up" do
       name = :"retention_#{System.unique_integer([:positive])}"
+      parent = self()
 
       {:ok, pid} =
         Retention.start_link(
           name: name,
           enabled: true,
           interval_ms: 20,
-          runner: fn -> raise "boom" end
+          runner: fn ->
+            send(parent, :retention_swept)
+            raise "boom"
+          end
         )
 
-      Process.sleep(60)
+      # Two sweeps: the second proves the loop re-armed its timer after the first
+      # runner raised, not merely that one sweep ran.
+      assert_receive :retention_swept, 1_000
+      assert_receive :retention_swept, 1_000
       assert Process.alive?(pid)
       GenServer.stop(pid)
     end

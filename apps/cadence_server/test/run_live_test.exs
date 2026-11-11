@@ -2,6 +2,7 @@ defmodule Cadence.ServerWeb.RunLiveTest do
   use Cadence.ServerWeb.ConnCase, async: false
 
   import Cadence.ServerFixtures
+  import Cadence.Server.TestHelpers, only: [eventually: 1]
   import Phoenix.LiveViewTest
 
   alias Cadence.Server.{ActionRun, Repo}
@@ -901,18 +902,5 @@ defmodule Cadence.ServerWeb.RunLiveTest do
     conn
     |> init_test_session(%{})
     |> put_session(to_string(subject_name), claims["jti"] <> ":" <> claims["sub"])
-  end
-
-  defp eventually(fun, attempts \\ 100)
-
-  defp eventually(fun, 0), do: fun.()
-
-  defp eventually(fun, attempts) do
-    if fun.() do
-      true
-    else
-      Process.sleep(20)
-      eventually(fun, attempts - 1)
-    end
   end
 end

@@ -5,6 +5,8 @@ defmodule Cadence.Server.Actions.RunsTest do
 
   import Ecto.Query
 
+  import Cadence.Server.TestHelpers, only: [eventually: 1]
+
   alias Cadence.Server.{ActionRun, Incidents, Repo}
   alias Cadence.Server.Actions.Runs
   alias Cadence.Server.Accounts.User
@@ -1015,19 +1017,6 @@ defmodule Cadence.Server.Actions.RunsTest do
   end
 
   ## Helpers
-
-  defp eventually(fun, attempts \\ 100)
-
-  defp eventually(fun, 0), do: fun.()
-
-  defp eventually(fun, attempts) do
-    if fun.() do
-      true
-    else
-      Process.sleep(20)
-      eventually(fun, attempts - 1)
-    end
-  end
 
   defp prepare(user, project, node) do
     Runs.prepare(%{id: user.id}, project.id, node.id, "run_analysis")

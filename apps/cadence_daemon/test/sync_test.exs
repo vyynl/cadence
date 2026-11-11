@@ -1,6 +1,8 @@
 defmodule Cadence.Daemon.SyncTest do
   use ExUnit.Case, async: false
 
+  import Cadence.Daemon.TestHelpers, only: [eventually: 1]
+
   alias Cadence.Daemon.{
     CommitQueue,
     Env,
@@ -831,41 +833,38 @@ defmodule Cadence.Daemon.SyncTest do
   end
 
   defp wait_for_sync_idle(timeout \\ 3_000) do
-    Process.sleep(20)
-    deadline = System.monotonic_time(:millisecond) + timeout
-    do_wait_for_sync_idle(deadline)
+    # Barrier: a wake cast this process sent earlier is handled before we look,
+    # so a pass that has just started is visible as in flight. `:sys.get_state/1`
+    # orders only messages from this process; it is not a global idle barrier.
+    # Tasks spawned by the worker are polled below until they finish.
+    _ = :sys.get_state(SyncWorker)
+    Cadence.Daemon.TestHelpers.await(fn -> not sync_busy?() end, timeout)
   end
 
-  defp do_wait_for_sync_idle(deadline) do
-    cond do
-      not sync_busy?() ->
-        :ok
-
-      System.monotonic_time(:millisecond) >= deadline ->
-        :ok
-
-      true ->
-        Process.sleep(20)
-        do_wait_for_sync_idle(deadline)
+  # A busy/timeout `:sys.get_state/1` is not evidence of idleness: treat an
+  # unknown shape as busy and keep polling. Only `:exit` is swallowed; a
+  # `KeyError` from a renamed field is left to fail the test.
+  defp sync_busy? do
+    case sync_in_flight() do
+      :unknown -> true
+      in_flight -> in_flight != %{} or sync_children_busy?()
     end
   end
 
-  defp sync_busy? do
-    in_flight =
-      try do
-        :sys.get_state(SyncWorker).in_flight
-      catch
-        _kind, _reason -> %{}
-      end
+  defp sync_in_flight do
+    try do
+      :sys.get_state(SyncWorker).in_flight
+    catch
+      :exit, _reason -> :unknown
+    end
+  end
 
-    children =
-      try do
-        Task.Supervisor.children(Cadence.Daemon.SyncTasks)
-      catch
-        _kind, _reason -> []
-      end
-
-    in_flight != %{} or children != []
+  defp sync_children_busy? do
+    try do
+      Task.Supervisor.children(Cadence.Daemon.SyncTasks) != []
+    catch
+      :exit, _reason -> true
+    end
   end
 
   defp membership(project_id) do
@@ -987,23 +986,5 @@ defmodule Cadence.Daemon.SyncTest do
     }
     |> Node.changeset()
     |> Repo.insert!()
-  end
-
-  defp eventually(fun, timeout \\ 3_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    try_until(fun, deadline)
-  end
-
-  defp try_until(fun, deadline) do
-    if fun.() do
-      true
-    else
-      if System.monotonic_time(:millisecond) >= deadline do
-        flunk("condition not met within timeout")
-      else
-        Process.sleep(20)
-        try_until(fun, deadline)
-      end
-    end
   end
 end

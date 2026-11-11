@@ -14,6 +14,7 @@ defmodule Cadence.Daemon.DocQueueTest do
     SyncLedger
   }
 
+  alias Cadence.Daemon.TestHelpers
   alias Cadence.Shared.{GitStore, Node, Project}
 
   @schema """
@@ -339,7 +340,10 @@ defmodule Cadence.Daemon.DocQueueTest do
       |> Repo.insert!()
 
     assert :ok = DocQueue.retry_pending(ctx.project.id)
-    Process.sleep(100)
+
+    # `retry_pending/1` decides synchronously; the sys call is a mailbox
+    # barrier so any enqueue cast it made has been processed before we look.
+    _state = :sys.get_state(DocQueue)
 
     loaded = Repo.get!(Node, node.id)
     assert loaded.git_commit_sha == code_sha
@@ -831,7 +835,9 @@ defmodule Cadence.Daemon.DocQueueTest do
         git_dir: ctx.git_dir,
         backend: :fs_poll,
         interval: 50,
-        debounce_ms: 50
+        # A long debounce keeps the armed timer observable (and distinguishable
+        # from an event that was dropped), so the event path is actually proven.
+        debounce_ms: 400
       )
 
     on_exit(fn ->
@@ -841,16 +847,31 @@ defmodule Cadence.Daemon.DocQueueTest do
     queue = ProjectRegistry.lookup_queue(ctx.project.id)
     watcher = {:via, Registry, {Cadence.Daemon.Queues, {:watcher, ctx.project.id}}}
 
-    Process.sleep(300)
+    # The trigger files predate the watcher, so they are part of its baseline.
+    TestHelpers.await_poll_baseline(watcher, Path.join(ctx.work_dir, "lib/demo.ex"))
 
     {:ok, node} = CommitQueue.commit(queue, "code change")
 
     assert eventually(fn -> Repo.get!(Node, node.id).docs_state == :current end)
 
+    watcher_pid = GenServer.whereis(watcher)
+
+    # `record_result` writes `:current` before `Watcher.resume` runs in the
+    # `after` block, so wait for the suspension to clear before injecting.
+    assert eventually(fn -> MapSet.size(:sys.get_state(watcher_pid).suspensions) == 0 end)
+
     # Simulate the poller reporting the doc write after `resume`: the tree
-    # equals the node's docs commit, so the watcher commit is a no-op.
-    send(GenServer.whereis(watcher), {:file_event, self(), {"README.md", [:modified]}})
-    Process.sleep(200)
+    # equals the node's docs commit, so the watcher commit is a no-op. Address
+    # the event to the watcher's real backend pid: the matching clause requires
+    # `%{worker: worker}`, and any other sender is silently ignored.
+    %{worker: worker} = :sys.get_state(watcher_pid)
+    send(watcher_pid, {:file_event, worker, {Path.join(ctx.work_dir, "README.md"), [:modified]}})
+
+    # Barrier: the event is handled (and the debounce armed) once this returns.
+    assert :sys.get_state(watcher_pid).timer != nil
+
+    # Wait for the debounce to fire and the unchanged-tree guard to run.
+    assert eventually(fn -> :sys.get_state(watcher_pid).timer == nil end)
 
     count =
       Repo.aggregate(
@@ -862,23 +883,21 @@ defmodule Cadence.Daemon.DocQueueTest do
   end
 
   defp drain_doc_queue do
-    deadline = System.monotonic_time(:millisecond) + 5_000
-    do_drain(deadline)
+    TestHelpers.await(fn -> doc_queue_idle?() end, 5_000)
   end
 
-  defp do_drain(deadline) do
-    state =
-      try do
-        :sys.get_state(DocQueue, 2_000)
-      catch
-        :exit, _reason -> %{}
-      end
+  defp doc_queue_idle? do
+    # An unexpected shape is not evidence of idleness: only a map with an empty
+    # `entries` map counts. `:exit` (busy/timeout or shutdown) keeps polling;
+    # a `KeyError` from a renamed field is left to fail the test.
+    match?(%{entries: entries} when entries == %{}, doc_queue_state())
+  end
 
-    if Map.get(state, :entries) == %{} or System.monotonic_time(:millisecond) >= deadline do
-      :ok
-    else
-      Process.sleep(20)
-      do_drain(deadline)
+  defp doc_queue_state do
+    try do
+      :sys.get_state(DocQueue, 2_000)
+    catch
+      :exit, _reason -> :unknown
     end
   end
 
@@ -894,21 +913,5 @@ defmodule Cadence.Daemon.DocQueueTest do
     File.write!(Path.join(ctx.work_dir, "lib/demo.ex"), @code)
   end
 
-  defp eventually(fun, timeout \\ 5_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    try_until(fun, deadline)
-  end
-
-  defp try_until(fun, deadline) do
-    if fun.() do
-      true
-    else
-      if System.monotonic_time(:millisecond) >= deadline do
-        flunk("condition not met within timeout")
-      else
-        Process.sleep(20)
-        try_until(fun, deadline)
-      end
-    end
-  end
+  defp eventually(fun), do: TestHelpers.eventually(fun, 5_000)
 end

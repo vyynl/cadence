@@ -94,6 +94,8 @@ defmodule Cadence.Server.TestMeldLLM do
   defp respond({:error, reason}), do: {:error, reason}
 
   defp respond({:sleep, ms}) do
+    # Deliberate latency injection: keeps a meld call in flight so the worker's
+    # timeout and retry paths can be observed.
     Process.sleep(ms)
     {:ok, @empty_response}
   end

@@ -23,6 +23,7 @@ defmodule Cadence.Daemon.DocReconnectTest do
   }
 
   alias Cadence.Daemon.TestSyncServer
+  alias Cadence.Daemon.TestHelpers
   alias Cadence.Shared.{GitStore, Node, Project}
 
   @server_user "11111111-1111-4111-8111-111111111111"
@@ -258,79 +259,57 @@ defmodule Cadence.Daemon.DocReconnectTest do
   end
 
   defp drain_doc_queue do
-    deadline = System.monotonic_time(:millisecond) + 5_000
-    do_drain(deadline)
+    TestHelpers.await(fn -> doc_queue_idle?() end, 5_000)
   end
 
-  defp do_drain(deadline) do
-    state =
-      try do
-        :sys.get_state(DocQueue, 2_000)
-      catch
-        :exit, _reason -> %{}
-      end
+  defp doc_queue_idle? do
+    # An unexpected shape is not evidence of idleness: only a map with an empty
+    # `entries` map counts. `:exit` (busy/timeout or shutdown) keeps polling;
+    # a `KeyError` from a renamed field is left to fail the test.
+    match?(%{entries: entries} when entries == %{}, doc_queue_state())
+  end
 
-    if Map.get(state, :entries) == %{} or System.monotonic_time(:millisecond) >= deadline do
-      :ok
-    else
-      Process.sleep(20)
-      do_drain(deadline)
+  defp doc_queue_state do
+    try do
+      :sys.get_state(DocQueue, 2_000)
+    catch
+      :exit, _reason -> :unknown
     end
   end
 
   defp wait_for_sync_idle(timeout \\ 3_000) do
-    Process.sleep(20)
-    deadline = System.monotonic_time(:millisecond) + timeout
-    do_wait_for_sync_idle(deadline)
+    # Barrier: a wake cast this process sent earlier is handled before we look,
+    # so a pass that has just started is visible as in flight. Tasks spawned by
+    # the worker are polled below until they finish.
+    _ = :sys.get_state(SyncWorker)
+    TestHelpers.await(fn -> not sync_busy?() end, timeout)
   end
 
-  defp do_wait_for_sync_idle(deadline) do
-    cond do
-      not sync_busy?() ->
-        :ok
-
-      System.monotonic_time(:millisecond) >= deadline ->
-        :ok
-
-      true ->
-        Process.sleep(20)
-        do_wait_for_sync_idle(deadline)
-    end
-  end
-
+  # A busy/timeout `:sys.get_state/1` is not evidence of idleness: treat an
+  # unknown shape as busy and keep polling. Only `:exit` is swallowed; a
+  # `KeyError` from a renamed field is left to fail the test.
   defp sync_busy? do
-    in_flight =
-      try do
-        :sys.get_state(SyncWorker).in_flight
-      catch
-        _kind, _reason -> %{}
-      end
-
-    children =
-      try do
-        Task.Supervisor.children(Cadence.Daemon.SyncTasks)
-      catch
-        _kind, _reason -> []
-      end
-
-    in_flight != %{} or children != []
-  end
-
-  defp eventually(fun, timeout \\ 5_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    try_until(fun, deadline)
-  end
-
-  defp try_until(fun, deadline) do
-    if fun.() do
-      true
-    else
-      if System.monotonic_time(:millisecond) >= deadline do
-        flunk("condition not met within timeout")
-      else
-        Process.sleep(20)
-        try_until(fun, deadline)
-      end
+    case sync_in_flight() do
+      :unknown -> true
+      in_flight -> in_flight != %{} or sync_children_busy?()
     end
   end
+
+  defp sync_in_flight do
+    try do
+      :sys.get_state(SyncWorker).in_flight
+    catch
+      :exit, _reason -> :unknown
+    end
+  end
+
+  defp sync_children_busy? do
+    try do
+      Task.Supervisor.children(Cadence.Daemon.SyncTasks) != []
+    catch
+      :exit, _reason -> true
+    end
+  end
+
+  defp eventually(fun), do: TestHelpers.eventually(fun, 5_000)
 end
