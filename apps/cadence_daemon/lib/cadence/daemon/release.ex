@@ -71,6 +71,42 @@ defmodule Cadence.Daemon.Release do
     )
   end
 
+  @doc """
+  Imports a local Git repository through a running daemon and returns the
+  completed job.
+
+  Equivalent to `mix cad.import`; options are `:refs` (list), `:all_refs`,
+  `:allow_shallow`, `:limit`, `:project_id`, `:name`, and `:slug`. Raises when
+  the daemon rejects the source or the job fails.
+  """
+  @spec import(Path.t(), keyword()) :: map()
+  def import(path, opts \\ []),
+    do: __MODULE__.import(path, opts, Cadence.Daemon.API.socket_path())
+
+  @spec import(Path.t(), keyword(), Path.t()) :: map()
+  def import(path, opts, socket_path) when is_list(opts) do
+    attrs = Cadence.Daemon.ImportClient.attrs(path, opts)
+
+    with {:ok, job} <- Cadence.Daemon.ImportClient.start(attrs, socket_path),
+         {:ok, final} <- Cadence.Daemon.ImportClient.wait(job["id"], socket_path) do
+      case final do
+        %{"status" => "completed"} ->
+          final
+
+        %{"status" => "failed"} ->
+          raise "import #{job["id"]} failed: #{format_job_error(final)}"
+      end
+    else
+      {:error, :timeout} -> raise "import did not finish in time"
+      {:error, {status, message}} -> raise "import request failed (#{status}): #{message}"
+    end
+  end
+
+  defp format_job_error(%{"error" => %{"code" => code, "message" => message}}),
+    do: "#{code}: #{message}"
+
+  defp format_job_error(job), do: inspect(job["error"])
+
   defp ensure_repo_dir!(repo) do
     Cadence.Daemon.Dirs.ensure_repo_dir!(repo.config()[:database])
   end

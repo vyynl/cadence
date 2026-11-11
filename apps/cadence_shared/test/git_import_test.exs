@@ -99,8 +99,10 @@ defmodule Cadence.Shared.GitImportTest do
       write_ref(repo, "refs/tags/annotated", annotated)
 
       assert {:ok, ^sha} = GitStore.resolve_revision(repo, "main")
+      assert {:ok, ^sha} = GitStore.resolve_revision(repo, "refs/heads/main")
       assert {:ok, ^sha} = GitStore.resolve_revision(repo, "light")
       assert {:ok, ^sha} = GitStore.resolve_revision(repo, "annotated")
+      assert {:ok, ^sha} = GitStore.resolve_revision(repo, "refs/tags/annotated")
       assert {:ok, ^sha} = GitStore.resolve_revision(repo, "HEAD")
       assert {:ok, ^sha} = GitStore.resolve_revision(repo, sha)
       assert {:error, :not_found} = GitStore.resolve_revision(repo, "missing")
@@ -186,6 +188,99 @@ defmodule Cadence.Shared.GitImportTest do
     end
   end
 
+  describe "list_refs/1" do
+    test "lists local branches and tags, with loose refs winning over packed", %{root: root} do
+      repo = bare(root, "list_refs")
+      one = commit(repo, tree(repo, "a", "1"), [], "one")
+      two = commit(repo, tree(repo, "b", "2"), [one], "two")
+
+      write_ref(repo, "refs/heads/main", two)
+      write_ref(repo, "refs/tags/v1", one)
+      write_ref(repo, "refs/remotes/origin/main", one)
+
+      packed = Path.join(repo.home_dir, "packed-refs")
+
+      File.write!(packed, """
+      # pack-refs with: peeled fully-peeled sorted
+      #{one} refs/heads/main
+      #{two} refs/heads/other
+      #{one} refs/tags/v1
+      ^#{one}
+      not-a-sha refs/heads/broken
+      """)
+
+      assert {:ok, refs} = GitStore.list_refs(repo)
+
+      assert refs == [
+               %{name: "refs/heads/main", sha: two},
+               %{name: "refs/heads/other", sha: two},
+               %{name: "refs/tags/v1", sha: one}
+             ]
+    end
+
+    test "returns an empty list for a repository with no refs", %{root: root} do
+      repo = bare(root, "no_refs")
+      assert {:ok, []} = GitStore.list_refs(repo)
+    end
+
+    test "ignores a symlinked ref directory instead of following it", %{root: root} do
+      repo = bare(root, "symlink_refs")
+      sha = commit(repo, tree(repo, "a", "1"), [], "one")
+      write_ref(repo, "refs/heads/main", sha)
+
+      loop = Path.join([repo.home_dir, "refs", "loop"])
+      File.mkdir_p!(loop)
+      File.ln_s!(Path.join(repo.home_dir, "refs"), Path.join(loop, "back"))
+
+      assert {:ok, [%{name: "refs/heads/main", sha: ^sha}]} = GitStore.list_refs(repo)
+    end
+  end
+
+  describe "preflight_blobs/3" do
+    test "counts unique blobs once and estimates the largest per-commit tree", %{root: root} do
+      repo = bare(root, "preflight")
+      readme = GitStore.write_blob(repo, "hello")
+      added = GitStore.write_blob(repo, "world")
+
+      first_tree =
+        GitStore.write_tree(repo, [
+          %{name: "README.md", mode: @file_mode, type: :blob, ref: readme}
+        ])
+
+      second_tree =
+        GitStore.write_tree(repo, [
+          %{name: "README.md", mode: @file_mode, type: :blob, ref: readme},
+          %{name: "new.txt", mode: @file_mode, type: :blob, ref: added}
+        ])
+
+      first = commit(repo, first_tree, [], "one", 100)
+      second = commit(repo, second_tree, [first], "two", 200)
+
+      assert {:ok, %{commits: commits}} = GitStore.walk_commits(repo, [second])
+
+      assert {:ok, %{blobs: 2, bytes: 10, largest_node_bytes: 10}} =
+               GitStore.preflight_blobs(repo, commits)
+    end
+
+    test "rejects a blob above the limit with its path", %{root: root} do
+      repo = bare(root, "preflight_big")
+      big = GitStore.write_blob(repo, String.duplicate("x", 100))
+
+      tree =
+        GitStore.write_tree(repo, [
+          %{name: "big.bin", mode: @file_mode, type: :blob, ref: big}
+        ])
+
+      sha = commit(repo, tree, [], "big", 100)
+      assert {:ok, %{commits: [only]}} = GitStore.walk_commits(repo, [sha])
+
+      assert {:error, {:blob_too_large, "big.bin", 100}} =
+               GitStore.preflight_blobs(repo, [only], max_blob_bytes: 10)
+
+      assert {:ok, _summary} = GitStore.preflight_blobs(repo, [only], max_blob_bytes: 0)
+    end
+  end
+
   describe "copy_commit_objects/4" do
     test "copies commits and their closure, skipping shared trees and gitlinks", %{root: root} do
       source = bare(root, "source")
@@ -226,6 +321,23 @@ defmodule Cadence.Shared.GitImportTest do
 
       assert {:ok, %{objects: 0}} =
                GitStore.copy_commit_objects(source, target, [first, second])
+
+      # A destination that already holds a closure in a pack is skipped too.
+      # (`first` is packed rather than `second` because a tree carrying a
+      # gitlink is not a packable object set.)
+      assert {:ok, first_objects} = GitStore.objects_from(target, first)
+      assert {:ok, _pack} = GitStore.pack_objects(target, first_objects)
+
+      Enum.each(first_objects, fn %{sha: sha} ->
+        File.rm!(
+          Path.join([target.home_dir, "objects", binary_part(sha, 0, 2), binary_part(sha, 2, 38)])
+        )
+      end)
+
+      GitStore.invalidate_cache(target)
+
+      assert {:ok, %{objects: 0}} =
+               GitStore.copy_commit_objects(source, target, [first])
     end
 
     test "refuses a blob above the configured limit", %{root: root} do

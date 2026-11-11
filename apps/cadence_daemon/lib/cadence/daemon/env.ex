@@ -192,4 +192,42 @@ defmodule Cadence.Daemon.Env do
   def docs_diff_max_bytes do
     Application.get_env(:cadence_daemon, :docs_diff_max_bytes, 32_768)
   end
+
+  @doc "Maximum commits one import may walk (default 2,000)."
+  @spec import_max_commits() :: pos_integer()
+  def import_max_commits do
+    Application.get_env(:cadence_daemon, :import_max_commits, 2_000) |> positive(2_000)
+  end
+
+  @doc "Maximum blob size copied by an import in bytes (default 8 MiB; `0` disables)."
+  @spec import_max_blob_bytes() :: non_neg_integer()
+  def import_max_blob_bytes do
+    Application.get_env(:cadence_daemon, :import_max_blob_bytes, 8_388_608)
+    |> non_negative(8_388_608)
+  end
+
+  @doc "Wall-clock bound for one import job in seconds (default 1,800; `0` disables)."
+  @spec import_max_seconds() :: non_neg_integer()
+  def import_max_seconds do
+    Application.get_env(:cadence_daemon, :import_max_seconds, 1_800) |> non_negative(1_800)
+  end
+
+  @doc "Whether a shallow clone may be imported (default `false`)."
+  @spec import_allow_shallow?() :: boolean()
+  def import_allow_shallow? do
+    Application.get_env(:cadence_daemon, :import_allow_shallow, false) == true
+  end
+
+  @doc "Nodes inserted and enqueued per transaction batch during an import (default 100)."
+  @spec import_push_batch() :: pos_integer()
+  def import_push_batch do
+    Application.get_env(:cadence_daemon, :import_push_batch, 100) |> positive(100)
+  end
+
+  # A typo in an env var must not disable a bound: fall back to the default.
+  defp positive(value, _default) when is_integer(value) and value > 0, do: value
+  defp positive(_value, default), do: default
+
+  defp non_negative(value, _default) when is_integer(value) and value >= 0, do: value
+  defp non_negative(_value, default), do: default
 end

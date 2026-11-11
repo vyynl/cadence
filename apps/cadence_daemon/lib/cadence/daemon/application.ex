@@ -17,6 +17,8 @@ defmodule Cadence.Daemon.Application do
         {Task.Supervisor, name: Cadence.Daemon.SyncTasks},
         {Registry, keys: :unique, name: Cadence.Daemon.Queues},
         Cadence.Daemon.ProjectRegistry,
+        {Task.Supervisor, name: Cadence.Daemon.ImportTasks},
+        Cadence.Daemon.Importer,
         Cadence.Daemon.SyncWorker,
         Cadence.Daemon.SyncSocket
       ] ++ api_children()

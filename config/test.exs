@@ -11,6 +11,9 @@ config :cadence_daemon,
   watch_backend: :fs_poll,
   local_user_id: "00000000-0000-0000-0000-000000000000",
   start_api: false,
+  # Keep project Git stores out of the operator's real state directory.
+  state_dir:
+    Path.join(System.tmp_dir!(), "cadence_test_state_#{System.unique_integer([:positive])}"),
   llm_retry_backoff_ms: 60_000,
   llm_retry_attempts: 3,
   sync_exists_limit: 5_000

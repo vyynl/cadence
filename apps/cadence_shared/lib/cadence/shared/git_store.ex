@@ -148,6 +148,12 @@ defmodule Cadence.Shared.GitStore do
           {:error, :not_found} -> {:error, :not_found}
         end
 
+      String.starts_with?(rev, "refs/") ->
+        case read_ref(repo, rev) do
+          {:ok, sha} -> peel_to_commit(repo, sha)
+          {:error, :not_found} -> {:error, :not_found}
+        end
+
       true ->
         ["refs/heads/#{rev}", "refs/tags/#{rev}", "refs/remotes/#{rev}"]
         |> Enum.find_value({:error, :not_found}, fn ref ->
@@ -235,6 +241,7 @@ defmodule Cadence.Shared.GitStore do
       objects: 0,
       bytes: 0,
       trees: MapSet.new(),
+      written: MapSet.new(),
       max_blob: Keyword.get(opts, :max_blob_bytes, :infinity)
     }
 
@@ -255,6 +262,75 @@ defmodule Cadence.Shared.GitStore do
   end
 
   def copy_commit_objects(_source, _target, _commits, _opts), do: {:error, :invalid_commits}
+
+  @doc """
+  List the repository's local branch and tag refs.
+
+  Loose refs are read first and win over `packed-refs`; peeled tag lines and
+  refs outside `refs/heads` / `refs/tags` are ignored. Returns
+  `{:ok, [%{name: ref, sha: sha}]}` sorted by name. Nothing is created or
+  changed.
+  """
+  @spec list_refs(t()) :: {:ok, [%{name: String.t(), sha: sha()}]}
+  def list_refs(repo) do
+    refs =
+      repo.home_dir
+      |> Path.join("refs")
+      |> list_loose_refs("refs")
+      |> then(&Map.merge(read_packed_refs(repo), &1))
+
+    {:ok,
+     refs
+     |> Enum.map(fn {name, sha} -> %{name: name, sha: sha} end)
+     |> Enum.sort_by(& &1.name)}
+  end
+
+  @doc """
+  Preflight the blob sizes of commits without writing anything.
+
+  Every blob reachable from the commits' trees is read at most once and cached
+  by SHA. `:max_blob_bytes` (default `:infinity`, `0`/`:infinity` disable the
+  check) rejects a larger blob with `{:error, {:blob_too_large, path, size}}`
+  where `path` is the first offending path in deterministic tree order.
+
+  Returns `{:ok, %{blobs: n, bytes: n, largest_node_bytes: n}}`: unique blob
+  count and bytes, plus the largest per-commit tree closure (the estimate for
+  one node's push payload). Shared subtrees are counted once per commit, which
+  matches `objects_from/2`'s per-node signal.
+  """
+  @spec preflight_blobs(t(), [commit()], keyword()) ::
+          {:ok,
+           %{
+             blobs: non_neg_integer(),
+             bytes: non_neg_integer(),
+             largest_node_bytes: non_neg_integer()
+           }}
+          | {:error, term()}
+  def preflight_blobs(repo, commits, opts \\ [])
+
+  def preflight_blobs(repo, commits, opts) when is_list(commits) do
+    max = Keyword.get(opts, :max_blob_bytes, :infinity)
+    max = if max in [0, nil], do: :infinity, else: max
+
+    acc = %{sizes: %{}, blobs: 0, bytes: 0, largest: 0}
+
+    commits
+    |> Enum.reduce_while({:ok, acc}, fn commit, {:ok, acc} ->
+      case measure_commit(repo, commit, max, acc) do
+        {:ok, node_bytes, acc} ->
+          {:cont, {:ok, %{acc | largest: max(acc.largest, node_bytes)}}}
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, acc} -> {:ok, %{blobs: acc.blobs, bytes: acc.bytes, largest_node_bytes: acc.largest}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def preflight_blobs(_repo, _commits, _opts), do: {:error, :invalid_commits}
 
   @doc "Store a blob and return its SHA."
   @spec write_blob(t(), iodata()) :: sha()
@@ -1660,6 +1736,148 @@ defmodule Cadence.Shared.GitStore do
 
   defp valid_ref_name?(_ref), do: false
 
+  defp selected_ref?("refs/heads/" <> _rest), do: true
+  defp selected_ref?("refs/tags/" <> _rest), do: true
+  defp selected_ref?(_ref), do: false
+
+  defp list_loose_refs(dir, prefix) do
+    case File.ls(dir) do
+      {:ok, names} ->
+        Enum.reduce(names, %{}, fn name, acc ->
+          path = Path.join(dir, name)
+          ref = prefix <> "/" <> name
+
+          # `lstat` keeps a symlinked ref directory from being followed (and
+          # looping); regular ref files are still read.
+          case File.lstat(path) do
+            {:ok, %File.Stat{type: :directory}} ->
+              Map.merge(acc, list_loose_refs(path, ref))
+
+            {:ok, %File.Stat{type: :regular}} ->
+              case read_ref_file(path) do
+                {:ok, sha} -> if selected_ref?(ref), do: Map.put(acc, ref, sha), else: acc
+                :error -> acc
+              end
+
+            _other ->
+              acc
+          end
+        end)
+
+      _ ->
+        %{}
+    end
+  end
+
+  defp read_packed_refs(repo) do
+    case File.read(Path.join(repo.home_dir, "packed-refs")) do
+      {:ok, contents} ->
+        contents
+        |> String.split("\n", trim: true)
+        |> Enum.reduce(%{}, fn line, acc ->
+          line = String.trim(line)
+
+          cond do
+            String.starts_with?(line, "#") or String.starts_with?(line, "^") ->
+              acc
+
+            true ->
+              case String.split(line, " ", parts: 2) do
+                [sha, ref] ->
+                  if valid_sha?(sha) and selected_ref?(ref) and valid_ref_name?(ref),
+                    do: Map.put(acc, ref, sha),
+                    else: acc
+
+                _ ->
+                  acc
+              end
+          end
+        end)
+
+      _ ->
+        %{}
+    end
+  end
+
+  defp measure_commit(repo, %{tree: tree}, max, acc) when is_binary(tree) do
+    case measure_tree(repo, tree, "", max, acc, MapSet.new()) do
+      {:ok, bytes, acc, _visited} -> {:ok, bytes, acc}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp measure_commit(_repo, _commit, _max, _acc), do: {:error, :invalid_commit}
+
+  defp measure_tree(repo, tree_sha, prefix, max, acc, visited) do
+    if MapSet.member?(visited, tree_sha) do
+      {:ok, 0, acc, visited}
+    else
+      visited = MapSet.put(visited, tree_sha)
+
+      case read_tree(repo, tree_sha) do
+        nil ->
+          {:error, {:missing_object, tree_sha}}
+
+        entries ->
+          entries
+          |> Enum.sort_by(& &1.name)
+          |> Enum.reduce_while({:ok, 0, acc, visited}, fn entry, {:ok, bytes, acc, visited} ->
+            path = join_path(prefix, entry.name)
+
+            case entry.type do
+              :commit ->
+                {:cont, {:ok, bytes, acc, visited}}
+
+              :tree ->
+                case measure_tree(repo, entry.ref, path, max, acc, visited) do
+                  {:ok, sub_bytes, acc, visited} ->
+                    {:cont, {:ok, bytes + sub_bytes, acc, visited}}
+
+                  {:error, reason} ->
+                    {:halt, {:error, reason}}
+                end
+
+              :blob ->
+                case blob_size(repo, entry.ref, acc) do
+                  {:ok, size, acc} when max == :infinity or size <= max ->
+                    {:cont, {:ok, bytes + size, acc, visited}}
+
+                  {:ok, size, _acc} ->
+                    {:halt, {:error, {:blob_too_large, path, size}}}
+
+                  {:error, reason} ->
+                    {:halt, {:error, reason}}
+                end
+            end
+          end)
+      end
+    end
+  end
+
+  defp blob_size(repo, sha, acc) do
+    case Map.fetch(acc.sizes, sha) do
+      {:ok, size} ->
+        {:ok, size, acc}
+
+      :error ->
+        case read_blob(repo, sha) do
+          nil ->
+            {:error, {:missing_object, sha}}
+
+          data ->
+            size = byte_size(data)
+
+            {:ok, size,
+             %{
+               acc
+               | sizes: Map.put(acc.sizes, sha, size),
+                 blobs: acc.blobs + 1,
+                 bytes: acc.bytes + size
+             }}
+        end
+    end
+  end
+
   defp peel_to_commit(repo, sha, depth \\ 0)
   defp peel_to_commit(_repo, _sha, depth) when depth > 8, do: {:error, :tag_chain_too_deep}
 
@@ -1885,13 +2103,22 @@ defmodule Cadence.Shared.GitStore do
     end
   end
 
+  # The copy is the only writer of `target` while it runs, so `present_shas/2`
+  # (loose file + cached pack indexes) is enough; `has_object?/2` would reload
+  # the pack cache on every miss, once per copied object.
   defp write_object_counted(target, type, data, expected, acc) do
-    if has_object?(target, expected) do
-      {:ok, acc}
+    if MapSet.member?(acc.written, expected) or present_shas(target, [expected]) != [] do
+      {:ok, %{acc | written: MapSet.put(acc.written, expected)}}
     else
       case write_raw(target, type, data) do
         ^expected ->
-          {:ok, %{acc | objects: acc.objects + 1, bytes: acc.bytes + byte_size(data)}}
+          {:ok,
+           %{
+             acc
+             | objects: acc.objects + 1,
+               bytes: acc.bytes + byte_size(data),
+               written: MapSet.put(acc.written, expected)
+           }}
 
         _other ->
           {:error, {:hash_mismatch, expected}}

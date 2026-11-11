@@ -74,7 +74,13 @@ if config_env() != :test do
       String.to_integer(System.get_env("CAD_SYNC_RETRY_BACKOFF_MS", "30000")),
     sync_max_attempts: String.to_integer(System.get_env("CAD_SYNC_MAX_ATTEMPTS", "10")),
     sync_push_limit: String.to_integer(System.get_env("CAD_SYNC_PUSH_LIMIT", "100")),
-    sync_exists_limit: String.to_integer(System.get_env("CAD_SYNC_EXISTS_LIMIT", "5000"))
+    sync_exists_limit: String.to_integer(System.get_env("CAD_SYNC_EXISTS_LIMIT", "5000")),
+    import_max_commits: String.to_integer(System.get_env("CAD_IMPORT_MAX_COMMITS", "2000")),
+    import_max_blob_bytes:
+      String.to_integer(System.get_env("CAD_IMPORT_MAX_BLOB_BYTES", "8388608")),
+    import_max_seconds: String.to_integer(System.get_env("CAD_IMPORT_MAX_SECONDS", "1800")),
+    import_allow_shallow: System.get_env("CAD_IMPORT_ALLOW_SHALLOW", "false") == "true",
+    import_push_batch: String.to_integer(System.get_env("CAD_IMPORT_PUSH_BATCH", "100"))
 
   config :cadence_daemon,
     docs_enabled: System.get_env("CAD_DOCS_ENABLED", "true") == "true",

@@ -6,7 +6,8 @@ defmodule Cadence.Daemon.Dirs do
   @doc "The daemon state directory (socket, cache, DB). Default: `~/.local/state/cadence`."
   @spec state_dir() :: Path.t()
   def state_dir do
-    System.get_env("CAD_STATE_DIR") ||
+    Application.get_env(:cadence_daemon, :state_dir) ||
+      System.get_env("CAD_STATE_DIR") ||
       Path.join(System.user_home!(), ".local/state/cadence")
   end
 

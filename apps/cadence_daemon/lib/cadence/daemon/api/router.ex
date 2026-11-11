@@ -10,6 +10,7 @@ defmodule Cadence.Daemon.API.Router do
     DocDiff,
     DocQueue,
     Env,
+    Importer,
     NodeDiff,
     Nodes,
     ProjectRegistry,
@@ -184,6 +185,26 @@ defmodule Cadence.Daemon.API.Router do
 
       {:error, :not_found} ->
         send_json(conn, 404, %{error: "project not found"})
+    end
+  end
+
+  post "/import" do
+    case Importer.submit(conn.body_params) do
+      {:ok, job} ->
+        send_json(conn, 202, %{job: Importer.job_json(job)})
+
+      {:error, reason} ->
+        import_error(conn, reason)
+    end
+  end
+
+  get "/import/:id" do
+    case Importer.status(conn.path_params["id"]) do
+      {:ok, job} ->
+        send_json(conn, 200, %{job: Importer.job_json(job)})
+
+      {:error, :not_found} ->
+        send_json(conn, 404, %{error: "import job not found"})
     end
   end
 
@@ -474,6 +495,102 @@ defmodule Cadence.Daemon.API.Router do
       created_at: node.created_at,
       docs_state: node.docs_state
     }
+  end
+
+  defp import_error(conn, :missing_work_dir) do
+    send_json(conn, 422, %{error: "work_dir is required"})
+  end
+
+  defp import_error(conn, :invalid_refs) do
+    send_json(conn, 422, %{error: "refs must be a list of non-empty strings"})
+  end
+
+  defp import_error(conn, :invalid_limit) do
+    send_json(conn, 422, %{error: "limit must be a positive integer"})
+  end
+
+  defp import_error(conn, :invalid_project) do
+    send_json(conn, 422, %{error: "invalid project_id"})
+  end
+
+  defp import_error(conn, {:invalid_project, _details}) do
+    send_json(conn, 422, %{error: "invalid project"})
+  end
+
+  defp import_error(conn, :not_a_directory) do
+    send_json(conn, 422, %{error: "work_dir is not a directory"})
+  end
+
+  defp import_error(conn, :not_a_repository) do
+    send_json(conn, 422, %{error: "work_dir is not a Git repository"})
+  end
+
+  defp import_error(conn, :invalid_gitfile) do
+    send_json(conn, 422, %{error: "the .git redirect is invalid"})
+  end
+
+  defp import_error(conn, {:invalid_source, _reason}) do
+    send_json(conn, 422, %{error: "the repository contains an unreadable Git object"})
+  end
+
+  defp import_error(conn, {:ref_not_found, ref}) do
+    send_json(conn, 422, %{error: "ref not found: #{ref}"})
+  end
+
+  defp import_error(conn, {:not_a_commit, ref}) do
+    send_json(conn, 422, %{error: "ref does not resolve to a commit: #{ref}"})
+  end
+
+  defp import_error(conn, :no_refs) do
+    send_json(conn, 422, %{error: "no importable refs"})
+  end
+
+  defp import_error(conn, :shallow_repository) do
+    send_json(conn, 422, %{error: "source is a shallow clone; pass allow_shallow"})
+  end
+
+  defp import_error(conn, {:too_many_commits, max}) do
+    send_json(conn, 422, %{error: "history exceeds the #{max}-commit limit"})
+  end
+
+  defp import_error(conn, {:blob_too_large, path, size}) do
+    send_json(conn, 422, %{error: "blob too large: #{path} (#{size} bytes)"})
+  end
+
+  defp import_error(conn, {:missing_object, sha}) do
+    send_json(conn, 422, %{error: "missing Git object #{sha}"})
+  end
+
+  defp import_error(conn, :project_not_found) do
+    send_json(conn, 404, %{error: "project not found"})
+  end
+
+  defp import_error(conn, :project_location_mismatch) do
+    send_json(conn, 409, %{error: "project location does not match work_dir"})
+  end
+
+  defp import_error(conn, :project_not_importable) do
+    send_json(conn, 409, %{error: "project already has nodes that were not imported"})
+  end
+
+  defp import_error(conn, :import_in_progress) do
+    send_json(conn, 409, %{error: "an import is already queued or running for this source"})
+  end
+
+  defp import_error(conn, :too_many_jobs) do
+    send_json(conn, 429, %{error: "too many queued imports"})
+  end
+
+  defp import_error(conn, :not_available) do
+    send_json(conn, 503, %{error: "importer is unavailable"})
+  end
+
+  defp import_error(conn, :invalid_payload) do
+    send_json(conn, 422, %{error: "invalid import payload"})
+  end
+
+  defp import_error(conn, _reason) do
+    send_json(conn, 500, %{error: "import failed"})
   end
 
   defp send_json(conn, status, body) do

@@ -123,6 +123,37 @@ defmodule Cadence.Daemon.WatcherTest do
     assert eventually(fn -> count_nodes(project) == 1 end)
   end
 
+  test "suspension is token-scoped", %{work_dir: work_dir, git_dir: git_dir, project: project} do
+    queue =
+      start_supervised!(
+        {CommitQueue, [project_id: project.id, work_dir: work_dir, git_dir: git_dir]}
+      )
+
+    name = {:via, Registry, {Cadence.Daemon.Queues, {:watcher, project.id}}}
+
+    start_supervised!(
+      {Watcher,
+       [
+         dir: work_dir,
+         commit_queue: queue,
+         backend: :fs_poll,
+         interval: 50,
+         debounce_ms: 50,
+         name: name
+       ]}
+    )
+
+    assert :ok = Watcher.suspend(project.id, :docs)
+    assert :ok = Watcher.suspend(project.id, {:import, "job"})
+    assert Watcher.suspended?(project.id)
+
+    assert :ok = Watcher.resume(project.id, :docs)
+    assert Watcher.suspended?(project.id)
+
+    assert :ok = Watcher.resume(project.id, {:import, "job"})
+    refute Watcher.suspended?(project.id)
+  end
+
   test "survives a vanished project directory and resumes when it returns",
        %{work_dir: work_dir, git_dir: git_dir, project: project} do
     queue =

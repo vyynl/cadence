@@ -7,10 +7,12 @@ defmodule Cadence.Daemon.Watcher do
   `Cadence.Daemon.CommitQueue`.
 
   A project's watcher is registered in `Cadence.Daemon.Queues` so background
-  writers (the doc agent) can `suspend/1` it while they rewrite the working
-  tree. Events seen while suspended are dropped, and `resume/1` re-arms a
-  debounce that was already pending (a user edit is never lost), so an
-  automated write cannot create a second node (spec §9.3).
+  writers (the doc agent, the importer) can `suspend/1` it while they rewrite
+  or insert history. Suspensions are token-scoped: each owner suspends and
+  resumes with its own token, and the watcher only becomes live when every
+  token has been released. Events seen while suspended are dropped, and the
+  last `resume/1` re-arms a debounce that was already pending (a user edit is
+  never lost), so an automated write cannot create a second node (spec §9.3).
 
   The watcher owns its file-system backend for its whole lifetime instead of
   dying with it. A project directory that is deleted, renamed, or briefly
@@ -40,7 +42,7 @@ defmodule Cadence.Daemon.Watcher do
     :queue,
     :debounce_ms,
     :timer,
-    suspended: false,
+    suspensions: MapSet.new(),
     pending: false
   ]
 
@@ -50,18 +52,18 @@ defmodule Cadence.Daemon.Watcher do
   end
 
   @doc """
-  Suspends commits for a project. No-op when the project has no running
-  watcher.
+  Suspends commits for a project under `token` (default `:default`). No-op when
+  the project has no running watcher.
   """
-  @spec suspend(Ecto.UUID.t()) :: :ok
-  def suspend(project_id), do: control(project_id, :suspend)
+  @spec suspend(Ecto.UUID.t(), term()) :: :ok
+  def suspend(project_id, token \\ :default), do: control(project_id, {:suspend, token})
 
   @doc """
-  Resumes commits for a project, discarding any debounce timer armed before the
-  suspension. No-op when the project has no running watcher.
+  Releases `token`'s suspension. The last release re-arms a debounce that was
+  pending before the suspension. No-op when the project has no running watcher.
   """
-  @spec resume(Ecto.UUID.t()) :: :ok
-  def resume(project_id), do: control(project_id, :resume)
+  @spec resume(Ecto.UUID.t(), term()) :: :ok
+  def resume(project_id, token \\ :default), do: control(project_id, {:resume, token})
 
   @doc "Whether a project's watcher is currently suspended (`false` when absent)."
   @spec suspended?(Ecto.UUID.t()) :: boolean()
@@ -119,18 +121,21 @@ defmodule Cadence.Daemon.Watcher do
   end
 
   @impl true
-  def handle_call(:suspend, _from, state) do
-    # Remember a debounce that was already armed so `resume/1` can re-arm it;
-    # a user edit must not be lost while the doc agent rewrites the tree.
+  def handle_call({:suspend, token}, _from, state) do
+    # Remember a debounce that was already armed so the last resume can re-arm
+    # it; a user edit must not be lost while an automated writer runs.
     pending = state.pending or state.timer != nil
-    {:reply, :ok, %{cancel_timer(state) | suspended: true, pending: pending}}
+    suspensions = MapSet.put(state.suspensions, token)
+
+    {:reply, :ok, %{cancel_timer(state) | suspensions: suspensions, pending: pending}}
   end
 
-  def handle_call(:resume, _from, state) do
-    state = %{state | suspended: false}
+  def handle_call({:resume, token}, _from, state) do
+    suspensions = MapSet.delete(state.suspensions, token)
+    state = %{state | suspensions: suspensions}
 
     state =
-      if state.pending do
+      if MapSet.size(suspensions) == 0 and state.pending do
         schedule_commit(%{state | pending: false})
       else
         state
@@ -140,13 +145,13 @@ defmodule Cadence.Daemon.Watcher do
   end
 
   def handle_call(:suspended?, _from, state) do
-    {:reply, state.suspended, state}
+    {:reply, suspended_state?(state), state}
   end
 
   @impl true
   def handle_info({:file_event, worker, {_path, _events}}, %{worker: worker} = state)
       when worker != nil do
-    if state.suspended do
+    if suspended_state?(state) do
       {:noreply, state}
     else
       {:noreply, schedule_commit(state)}
@@ -184,19 +189,19 @@ defmodule Cadence.Daemon.Watcher do
 
   def handle_info(:reconnect, state), do: {:noreply, state}
 
-  def handle_info(:debounced_commit, %{suspended: true} = state) do
-    {:noreply, %{state | timer: nil}}
-  end
-
   def handle_info(:debounced_commit, state) do
-    # A debounce can outlive the directory (delete/rename); committing then
-    # would crash the queue on a snapshot error. Wait for the watcher to
-    # reconnect instead.
-    if File.dir?(state.dir) do
-      CommitQueue.commit(state.queue, :auto, skip_unchanged: true)
-    end
+    if suspended_state?(state) do
+      {:noreply, %{state | timer: nil}}
+    else
+      # A debounce can outlive the directory (delete/rename); committing then
+      # would crash the queue on a snapshot error. Wait for the watcher to
+      # reconnect instead.
+      if File.dir?(state.dir) do
+        CommitQueue.commit(state.queue, :auto, skip_unchanged: true)
+      end
 
-    {:noreply, %{state | timer: nil}}
+      {:noreply, %{state | timer: nil}}
+    end
   end
 
   @impl true
@@ -273,6 +278,8 @@ defmodule Cadence.Daemon.Watcher do
     Process.cancel_timer(timer)
     %{state | timer: nil}
   end
+
+  defp suspended_state?(state), do: MapSet.size(state.suspensions) > 0
 
   defp control(project_id, message) do
     case lookup(project_id) do

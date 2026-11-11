@@ -22,13 +22,23 @@ defmodule Cadence.Daemon.Projects do
     Session
   }
 
-  alias Cadence.Shared.{Membership, Project, UUID}
+  alias Cadence.Shared.{GitStore, Membership, Project, UUID}
 
   @doc """
   Registers a project. `attrs` requires string-keyed `name`, `slug`, and
   `work_dir`. Returns `{:ok, project}` or `{:error, changeset}`.
+
+  Options:
+
+    * `:watch` — when `false`, persist the project, location, and membership
+      without starting the `{CommitQueue, Watcher}` pair. The Git importer uses
+      this so a new project has no watcher while its history is inserted, and a
+      bare-repository import never starts one.
   """
-  def register_project(%{} = attrs) do
+  @spec register_project(map(), keyword()) ::
+          {:ok, Project.t()}
+          | {:error, :already_registered | :missing_work_dir | Ecto.Changeset.t() | term()}
+  def register_project(%{} = attrs, opts \\ []) do
     case attrs["work_dir"] do
       dir when is_binary(dir) and dir != "" ->
         work_dir = Path.expand(dir)
@@ -36,7 +46,7 @@ defmodule Cadence.Daemon.Projects do
         if Repo.get_by(ProjectLocation, work_dir: work_dir) do
           {:error, :already_registered}
         else
-          do_register(attrs, work_dir)
+          do_register(attrs, work_dir, Keyword.get(opts, :watch, true))
         end
 
       _ ->
@@ -76,8 +86,10 @@ defmodule Cadence.Daemon.Projects do
     ProjectLocation
     |> Repo.all()
     |> Enum.each(fn loc ->
-      if ProjectRegistry.lookup_queue(loc.project_id) == nil and
-           Repo.get(Project, loc.project_id) do
+      project = Repo.get(Project, loc.project_id)
+
+      if ProjectRegistry.lookup_queue(loc.project_id) == nil and not is_nil(project) and
+           watchable?(loc) do
         case ProjectRegistry.start_project(
                project_id: loc.project_id,
                work_dir: loc.work_dir,
@@ -103,11 +115,19 @@ defmodule Cadence.Daemon.Projects do
       end
   end
 
+  # A bare-repository import has no working tree to watch or snapshot. Starting
+  # the pair would let a ref/object change inside the bare repo become a node,
+  # so these projects are restored as data-only (sync still works from the
+  # location row).
+  defp watchable?(%ProjectLocation{} = loc) do
+    not match?({:ok, %{kind: :bare}}, GitStore.detect_repository(loc.work_dir))
+  end
+
   defp missing_table?(error) do
     String.contains?(Exception.message(error), "no such table")
   end
 
-  defp do_register(attrs, work_dir) do
+  defp do_register(attrs, work_dir, watch?) do
     project_attrs = %{
       name: attrs["name"],
       slug: attrs["slug"],
@@ -127,21 +147,29 @@ defmodule Cadence.Daemon.Projects do
       # Best-effort: the working-tree file remains the source of truth.
       _ = SchemaSource.refresh(project.id, work_dir)
 
-      case ProjectRegistry.start_project(
-             project_id: project.id,
-             work_dir: work_dir,
-             git_dir: git_dir
-           ) do
-        {:ok, _pid} ->
-          {:ok, project}
-
-        {:error, {:already_started, _pid}} ->
-          {:ok, project}
-
-        {:error, reason} ->
-          cleanup_project(project.id)
-          {:error, reason}
+      if watch? do
+        start_project(project, work_dir, git_dir)
+      else
+        {:ok, project}
       end
+    end
+  end
+
+  defp start_project(project, work_dir, git_dir) do
+    case ProjectRegistry.start_project(
+           project_id: project.id,
+           work_dir: work_dir,
+           git_dir: git_dir
+         ) do
+      {:ok, _pid} ->
+        {:ok, project}
+
+      {:error, {:already_started, _pid}} ->
+        {:ok, project}
+
+      {:error, reason} ->
+        cleanup_project(project.id)
+        {:error, reason}
     end
   end
 

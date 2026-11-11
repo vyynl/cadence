@@ -48,4 +48,36 @@ defmodule Cadence.Daemon.EnvTest do
     assert Env.docs_context_bytes() == 65_536
     assert Env.docs_diff_max_bytes() == 32_768
   end
+
+  test "import defaults and fallbacks match the env contract" do
+    assert Env.import_max_commits() == 2_000
+    assert Env.import_max_blob_bytes() == 8_388_608
+    assert Env.import_max_seconds() == 1_800
+    refute Env.import_allow_shallow?()
+    assert Env.import_push_batch() == 100
+
+    on_exit(fn ->
+      for key <- [
+            :import_max_commits,
+            :import_max_blob_bytes,
+            :import_max_seconds,
+            :import_allow_shallow,
+            :import_push_batch
+          ] do
+        Application.delete_env(:cadence_daemon, key)
+      end
+    end)
+
+    Application.put_env(:cadence_daemon, :import_max_commits, 0)
+    Application.put_env(:cadence_daemon, :import_max_blob_bytes, 0)
+    Application.put_env(:cadence_daemon, :import_max_seconds, -1)
+    Application.put_env(:cadence_daemon, :import_allow_shallow, true)
+    Application.put_env(:cadence_daemon, :import_push_batch, :nope)
+
+    assert Env.import_max_commits() == 2_000
+    assert Env.import_max_blob_bytes() == 0
+    assert Env.import_max_seconds() == 1_800
+    assert Env.import_allow_shallow?()
+    assert Env.import_push_batch() == 100
+  end
 end
