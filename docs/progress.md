@@ -970,6 +970,23 @@ is optional and recorded in spec §16.
   edges), so the total internal edge count is roughly unchanged; the rubric's
   hotspot module is fixed, and a further `ProjectPane.Repo`/`.Actions` split is
   recorded as optional.
+- **Audit 100 slice, wave 5 (2026-11-11)** — **D1 + D2 shipped.**
+  **D1:** `mix_audit` 2.1.5 is a dev/test-only `cadence_server` dependency
+  (spec §11; run from the umbrella root as
+  `mix deps.audit --ignore-file .mix_audit.ignore`). It found four pre-existing
+  hackney 1.25.0 advisories; no 1.x patch exists and 4.x is blocked by
+  `axiom_ai ~> 1.9` / `httpoison ~> 1.21`, so they are accepted risk, ignored
+  by exact advisory ID and time-boxed in spec §16 (revisit 2027-02-11 or when
+  the constraint relaxes / the transport moves to Req). The ignore file and
+  spec row document three silent-pass footguns: an app-local run scans nothing,
+  the bare command ignores nothing, and the advisory DB is a git clone that
+  still prints a clean pass when missing or stale. **D2:** `libgraph` 0.16.0 →
+  0.17.1 (`~> 0.17.1`); only `Cadence.Shared.DAG` uses it (`new/1`,
+  `add_vertex/2`, `add_edge/3`, `topsort/1`, `in_neighbors/2`), and directed
+  topsort/`in_neighbors` are unchanged, so depth maps and layout are unaffected.
+  Gate: 1241 tests (332 + 666 + 243), format and dev/prod compile clean,
+  `deps.audit` exit 0, `hex.outdated` clean for libgraph (only the test-only
+  `lazy_html` patch remains).
 - **Audit 100 slice, wave 2 (2026-11-11)** — **S1 + S2 + S3 shipped.**
   **S1:** `sobelow` 0.18.1 is a dev/test-only `cadence_server` dependency (spec
   §11 row; run from `apps/cadence_server`, the umbrella root refuses). Its scan
@@ -1059,17 +1076,17 @@ Shipped: T1 (fixed sleeps), T2 (80% coverage floor + AGENTS docs), S1 (Sobelow
 0.18 + two XSS fixes), S2 (`/sync/*` per-user rate limit), S3 (CSP; Sobelow now
 exits 0), P1 (`users_by_ids/1` batching), P2 (one-query preview node), P3
 (content-keyed proposal-result cache), A2 (shared `Components.ProposalResult`),
-A1 (`ProjectLive` split, 19 → 7 xref edges). **Performance and architecture are
-now clean**; dependencies, CI, and the exemption notes remain.
+A1 (`ProjectLive` split, 19 → 7 xref edges), D1 (`mix_audit` CVE scanner with
+a time-boxed exact-ID hackney ignore), D2 (`libgraph` 0.17.1). **Architecture,
+performance, and dependencies are now clean**; CI and the exemption notes
+remain.
 
 **Remaining audit items** (resume with `/audit-100 <IDs>`):
 
-1. **D1** — `mix_audit` **needs a new dev/test dependency + spec §11 row and
-   explicit user approval** before the child starts.
-2. **D2** — `libgraph` 0.17.1; run `graph_test.exs`, the DAG layout tests, and
-   the project page.
-3. **T4** — CI workflow last, so it can call `sobelow` (from
-   `apps/cadence_server`) and `mix deps.audit`. `mix test.coverage` needs
+1. **T4** — CI workflow last, so it can call `sobelow` (from
+   `apps/cadence_server`) and
+   `mix deps.audit --ignore-file .mix_audit.ignore` (umbrella root), and assert
+   the advisory DB is populated. `mix test.coverage` needs
    `mix test --cover --export-coverage default` first. A3/P4/T3 are
    documentation-only exemptions; fold their one-line rationales into the final
    audit doc, then re-run the five tracks and refresh `docs/audit-*.md`.
@@ -1176,6 +1193,17 @@ expected for the closeout follow-ups.
 
 ## Spec Deltas / Open Items
 
+- **Audit D1/D2 notes (2026-11-11)** — (a) The hackney accept-risk decision,
+  exact-ID ignore, and 2027-02-11 revisit trigger live in spec §16; the run and
+  silent-pass contract is the §11 row plus `.mix_audit.ignore`. (b) `~> 0.17.1`
+  for `libgraph` is deliberate: it accepts 0.17.x patches and blocks 0.18 for a
+  pre-1.0 library. (c) `Cadence.Shared.DAG` still relies on libgraph's default
+  vertex identifier (`:erlang.phash2/2`, 32-bit); 0.17 documents the collision
+  caveat but does not change it. A future hardening is
+  `Graph.new(type: :directed, vertex_identifier: & &1)` plus a collision test;
+  the probability is negligible at current project sizes and the bump neither
+  causes nor fixes it. (d) `DAGLayout` sorts its own output, so the topsort
+  list order cannot leak into pixels.
 - **Audit 100 A1 notes (2026-11-11)** — (a) The split fixes the hotspot module
   (`project_live.ex` 19 → 7 xref edges), but the reads aggregate in
   `ProjectPane` (15 edges), so the total internal edge count is roughly
@@ -1810,6 +1838,13 @@ expected for the closeout follow-ups.
   the review UI (optional 4d/UI-pass work).
 
 ## Last Updated
+2026-11-11 (audit 100, wave 5) — **D1 + D2 shipped** (`ee86db2`, `df1f9ca`).
+The CVE scanner is installed (`mix_audit 2.1.5`, umbrella-root run, exact-ID
+ignore) with four hackney advisories accepted and time-boxed in spec §16;
+`libgraph` is 0.17.1 with the DAG API unchanged. Gate: 1241 tests (332 + 666 +
+243), format and dev/prod compile clean, `deps.audit` exit 0. **Resume** with
+`/audit-100 T4` (CI), then the A3/P4/T3 exemption notes and the final
+five-track audit refresh. Ledger: `.claude/plans/audit-100/progress.md`.
 2026-11-11 (audit 100, run 2 complete) — **P2, P3, A2, A1 shipped**
 (`28008ed`, `441be8b`, `95743c7`, `17e415e`, docs `abb0b09`). Performance and
 architecture are clean: preview resolution is one query, the public proposal
