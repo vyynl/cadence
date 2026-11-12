@@ -1,0 +1,63 @@
+# Publish the production server image to GHCR.
+#
+# The Portainer stack (`docker-compose.portainer.yml`) pulls
+# `ghcr.io/vyynl/cadence-server:latest` by default. This workflow builds
+# `docker/Dockerfile` on master, version tags, and manual dispatch.
+#
+# The package is private for a private repository. Add GHCR credentials in
+# Portainer (username = GitHub user, password = a PAT with `read:packages`)
+# before deploying the stack.
+
+name: Publish server image
+
+"on":
+  push:
+    branches: [master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Build and push
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Build and push
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/cadence-server
+        run: |
+          set -euo pipefail
+
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+          tags=("${IMAGE}:sha-${GITHUB_SHA::12}")
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tags+=("${IMAGE}:${GITHUB_REF_NAME}" "${IMAGE}:latest")
+          else
+            tags+=("${IMAGE}:edge" "${IMAGE}:latest")
+          fi
+
+          build_args=()
+          for tag in "${tags[@]}"; do
+            build_args+=(-t "$tag")
+          done
+
+          docker build -f docker/Dockerfile "${build_args[@]}" .
+          for tag in "${tags[@]}"; do
+            docker push "$tag"
+          done

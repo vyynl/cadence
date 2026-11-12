@@ -21,6 +21,9 @@ before implementing.
 
 - [Production deployment](deploy.md) — run `scripts/setup-prod.sh`, start the
   compose stack with bundled TLS, and manage migrations and volumes.
+- [Portainer stack](deploy.md#portainer-paste-a-stack) — paste
+  `docker-compose.portainer.yml`, set the environment variables, and pull the
+  GHCR image.
 - [Docker actions](deploy.md#docker-actions) — socket proxy, isolation limits,
   and the volume prerequisite.
 - [Troubleshooting](deploy.md#troubleshooting) — server boot, migration, and

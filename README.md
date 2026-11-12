@@ -151,6 +151,16 @@ docker compose -f docker-compose.prod.yml logs -f cadence
   publishing, passkeys, and troubleshooting are in
   [`docs/deploy.md`](docs/deploy.md).
 
+### Portainer
+
+For a paste-a-stack deployment, use
+[`docker-compose.portainer.yml`](docker-compose.portainer.yml). It has no build
+context or bind mounts, pulls `ghcr.io/vyynl/cadence-server:latest` (published
+by the image workflow), and generates Caddy's config inline. Add the same
+`CAD_*` environment variables in Portainer; if the GHCR package is private,
+add registry credentials first. The full steps are in
+[`docs/deploy.md#portainer-paste-a-stack`](docs/deploy.md#portainer-paste-a-stack).
+
 ## Neovim
 
 The daemon's editor front end installs from this repository — no separate

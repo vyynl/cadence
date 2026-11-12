@@ -183,6 +183,54 @@ Caddy state lives in the `caddy_data` volume; deleting it discards certificates
 `CAD_HTTP_BIND` (default `127.0.0.1`), so it is not directly reachable from
 outside the host.
 
+## Portainer (paste-a-stack)
+
+`docker-compose.portainer.yml` is self-contained: no `build:` context, no bind
+mounts, and no repo-relative files, so it can be pasted into Portainer's stack
+editor. It pulls `ghcr.io/vyynl/cadence-server:latest` and always runs Caddy.
+The image is built and pushed by
+[`.github/workflows/publish-image.yml`](../.github/workflows/publish-image.yml)
+on `master`, `v*` tags, and manual dispatch.
+
+1. **Make the image available.** Run the publish workflow (or push it
+   yourself). For a private GHCR package, add registry credentials in
+   Portainer: **Registries → Add registry → Custom**, URL
+   `https://ghcr.io`, username = your GitHub user, password = a PAT with
+   `read:packages`.
+2. **Paste the stack.** In Portainer: **Stacks → Add stack → Web editor**, then
+   paste `docker-compose.portainer.yml` (or upload it).
+3. **Add the environment variables** listed below. Generate the secrets with:
+   ```bash
+   openssl rand -hex 48   # CAD_SECRET_KEY_BASE
+   openssl rand -hex 24   # CAD_DB_PASS
+   openssl rand -hex 16   # CAD_ADMIN_PASSWORD
+   ```
+4. **Deploy** and watch `migrate`, `bootstrap`, `cadence`, and `caddy`.
+5. **Sign in** at `https://<CAD_PHX_HOST>/sign-in` with `CAD_ADMIN_EMAIL` and
+   the generated admin password, enroll TOTP, then remove
+   `CAD_ADMIN_PASSWORD` and redeploy. `bootstrap` is a no-op on later deploys.
+6. **Upgrade** with Portainer's **Pull and redeploy** / **Update the stack**;
+   the one-shot `migrate` and `bootstrap` services run again safely.
+
+| Variable | Notes |
+|---|---|
+| `CAD_PHX_HOST` | Hostname only (`cadence.example.com`). |
+| `CAD_PUBLIC_URL` | Exact public origin (`https://cadence.example.com`). |
+| `CAD_SECRET_KEY_BASE` | 64+ random bytes. |
+| `CAD_DB_USER` / `CAD_DB_PASS` / `CAD_DB_NAME` | PostgreSQL credentials; keep `CAD_DB_PASS` URL-safe. |
+| `CAD_ADMIN_EMAIL` / `CAD_ADMIN_NAME` / `CAD_ADMIN_PASSWORD` | First account; remove the password after the first sign-in. |
+| `CAD_TLS_MODE` | `auto` (public DNS, ports 80/443) or `internal` (private CA). |
+| `CAD_SERVER_IMAGE` | Optional image override; default `ghcr.io/vyynl/cadence-server:latest`. |
+| `CAD_ACTIONS_ENABLED` | Set `false` if you do not want Docker actions. |
+
+The Portainer file always includes Caddy. For an existing reverse proxy,
+**delete the `caddy` service block** and set `CAD_HTTP_BIND=0.0.0.0` (or attach
+the proxy to the stack network). Caddy needs ports 80/443 for `auto` TLS;
+`CAD_CADDY_HTTP_PORT` / `CAD_CADDY_HTTPS_PORT` override the published ports but
+are only useful with `internal` TLS or an external proxy. This file is for
+Docker Standalone stacks; Docker Swarm's legacy deployer does not support
+`depends_on` conditions.
+
 ## Passkeys
 
 Passkeys are an additional browser sign-in method for existing accounts and are
@@ -291,7 +339,13 @@ sync; compose prefixing the volume would break actions.
 
 ## Building and publishing the image
 
-The compose file builds locally. To publish a versioned image:
+The reference stack builds locally by default. The
+[publish workflow](../.github/workflows/publish-image.yml) builds and pushes
+`ghcr.io/vyynl/cadence-server` on `master`, `v*` tags, and manual dispatch; it
+tags `latest` and `edge` (or the version tag) plus a `sha-<12>` tag. The
+Portainer stack consumes that image by default.
+
+To publish manually or to another registry:
 
 ```bash
 docker build -f docker/Dockerfile -t ghcr.io/you/cadence-server:1.0.0 .
@@ -300,11 +354,13 @@ docker push ghcr.io/you/cadence-server:1.0.0
 
 Then set `CAD_SERVER_IMAGE=ghcr.io/you/cadence-server:1.0.0` in `.env` and run
 `docker compose -f docker-compose.prod.yml pull` (the `cadence` service still
-declares a local `build:`; `pull` uses the tagged image).
+declares a local `build:`; `pull` uses the tagged image). Use the same variable
+in Portainer to pin a version instead of `latest`.
 
 CI ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) runs the merge
-gate but does not build or publish images. Registry publishing and version
-pinning are operator-managed; the workflow's first remote run is operator-side.
+gate; the separate publish workflow handles registry images. A private GHCR
+package needs registry credentials in Portainer (see
+[Portainer](#portainer-paste-a-stack)).
 
 ## Troubleshooting
 

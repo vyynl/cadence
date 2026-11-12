@@ -1,4 +1,4 @@
-# Keeps the commit-SHA action pins in .github/workflows/ci.yml from rotting:
+# Keeps the commit-SHA action pins in .github/workflows/*.yml from rotting:
 # Dependabot rewrites the SHA and its trailing version comment on updates.
 version: 2
 updates:

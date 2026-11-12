@@ -2018,6 +2018,15 @@ The action volume name and `CAD_ACTIONS_VOLUME` both read `CAD_ACTIONS_VOLUME`
 action containers, and no source or `/app` tree is bind-mounted. See
 `docs/deploy.md`.
 
+`docker-compose.portainer.yml` is the self-contained Portainer variant: no
+`build:` context, no bind mounts, and no repo-relative files, so it can be
+pasted into Portainer's web editor. It pulls
+`ghcr.io/vyynl/cadence-server:latest` (published by
+`.github/workflows/publish-image.yml`) and always runs Caddy with an inline
+config generated from `CAD_PHX_HOST` and `CAD_TLS_MODE` (`auto` or `internal`).
+An external proxy means deleting the `caddy` service and setting
+`CAD_HTTP_BIND=0.0.0.0` (or sharing the stack network).
+
 The repository also ships a **local demo stack** (`docker-compose.yml` +
 `docker/Dockerfile.demo`): `postgres:16-alpine` plus a `MIX_ENV=dev` server that
 runs migrations, seeds demo data (`mix cadence.demo_seed`), and boots only
@@ -2085,7 +2094,9 @@ app; `CAD_DATABASE_URL` is derived from the first three):
 | `CAD_DB_PASS` | yes | — | PostgreSQL password (URL-safe) |
 | `CAD_DB_NAME` | no | `cadence` | PostgreSQL database |
 | `CAD_HTTP_BIND` | no | `127.0.0.1` | Host interface for the app port |
-| `CAD_TLS_MODE` | no | `auto` | `auto` (Let's Encrypt), `internal` (local CA), or `external` (no Caddy profile) |
+| `CAD_TLS_MODE` | no | `auto` | `auto` (Let's Encrypt), `internal` (local CA), or `external` (no Caddy profile; not used by the Portainer file) |
+| `CAD_CADDY_HTTP_PORT` | no | `80` | Host port for bundled Caddy HTTP (Portainer stack; `internal`/external-proxy use) |
+| `CAD_CADDY_HTTPS_PORT` | no | `443` | Host port for bundled Caddy HTTPS/HTTP3 (Portainer stack) |
 | `CAD_ADMIN_EMAIL` | no | — | First-account bootstrap email |
 | `CAD_ADMIN_NAME` | no | — | First-account display name |
 | `CAD_ADMIN_PASSWORD` | no | — | First-account password; remove after the first sign-in |
@@ -2278,7 +2289,10 @@ app; `CAD_DATABASE_URL` is derived from the first three):
   idempotent first-account entry point. Persistent paths are `/data/git`,
   `/data/artifacts`, and `/data/actions`; the app listens on 4000 inside the
   container. The reference stack is `docker-compose.prod.yml` (§12.4);
-  operator steps are in `docs/deploy.md`.
+  `.github/workflows/publish-image.yml` builds and pushes
+  `ghcr.io/vyynl/cadence-server` on `master`, version tags, and manual
+  dispatch, and `docker-compose.portainer.yml` consumes that image. Operator
+  steps are in `docs/deploy.md`.
 - **Daemon release (Phase 8b, shipped):** the root `mix.exs` defines a
   `cadence_daemon` release containing the `cadence_daemon` + `cadence_shared`
   application closure (no Phoenix/PostgreSQL/LiveView); the entry point is
@@ -2805,10 +2819,6 @@ kept for traceability. Section numbers are stable and are not renumbered.
 - [ ] **Conditional UI and passkey step-up:** deferred — conditional/autofill
       credential UI and a fresh passkey assertion before minting a daemon PAT
       are later hardening slices.
-- [ ] **Image publishing / CI:** `docker-compose.prod.yml` builds
-      `cadence-server:prod` (or `CAD_SERVER_IMAGE`) locally and the image is
-      otherwise operator-managed. Registry publishing, version pinning, and a
-      build pipeline are deferred until a registry workflow exists.
 - [ ] **Accepted hackney and assent advisories (time-boxed):** `mix hex.audit`
       and `mix deps.audit` report known advisories against **hackney 1.25.0**
       and **assent 0.2.13**. They are ignored by exact advisory ID in
@@ -2856,6 +2866,10 @@ kept for traceability. Section numbers are stable and are not renumbered.
 
 ### Resolved
 
+- [x] **Image publishing / CI (2026-11-12):** resolved — the reference stack
+      still builds locally, and `.github/workflows/publish-image.yml` now
+      builds and pushes `ghcr.io/vyynl/cadence-server` on `master`, `v*` tags,
+      and manual dispatch. `docker-compose.portainer.yml` consumes the image.
 - [x] **Auth model (2026-11-12):** resolved — Cadence stays multi-user. Local
       accounts are operator-created (no public registration), password + TOTP is
       primary, OAuth and passkeys remain secondary, and browser sessions are
@@ -3031,7 +3045,7 @@ kept for traceability. Section numbers are stable and are not renumbered.
       complete, all apps and both releases report `1.0.0`, and
       `docs/release-notes.md` is the release summary, upgrade note, and
       known-limitation list. Bump the version and add an entry there for every
-      release; CI and image publishing remain open below.
+      release; the first CI run remains operator-side.
 - [x] **Imported merge nodes bypass meld review (Phase 9c):** resolved — an
       owner may push a multi-parent node carrying
       `session_metadata["import"]["source"] == "git"` (up to

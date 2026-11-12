@@ -1,0 +1,154 @@
+# Portainer-ready production stack (spec §12.4).
+#
+# This file is deliberately self-contained: it has no `build:` context, no
+# bind mounts, and no repo-relative files, so it can be pasted into Portainer's
+# stack web editor. The image is published to GHCR by
+# `.github/workflows/publish-image.yml`; override CAD_SERVER_IMAGE for a
+# private registry or a pinned tag.
+#
+# Set these in Portainer's stack environment:
+#   CAD_PHX_HOST, CAD_PUBLIC_URL, CAD_SECRET_KEY_BASE,
+#   CAD_DB_USER, CAD_DB_PASS, CAD_DB_NAME,
+#   CAD_ADMIN_EMAIL, CAD_ADMIN_NAME, CAD_ADMIN_PASSWORD,
+#   CAD_TLS_MODE=auto|internal
+#
+# TLS is always on: Caddy is part of this stack. For an existing reverse proxy,
+# delete the caddy service and set CAD_HTTP_BIND=0.0.0.0 (or attach the proxy
+# to the stack network). The setup script is not used here; generate secrets
+# with `openssl rand -hex 48` (secret key base), `openssl rand -hex 24`
+# (database password), and `openssl rand -hex 16` (admin password).
+
+x-cadence-env: &cadence-env
+  CAD_PHX_HOST: "${CAD_PHX_HOST:?set CAD_PHX_HOST}"
+  CAD_PUBLIC_URL: "${CAD_PUBLIC_URL:?set CAD_PUBLIC_URL}"
+  CAD_SECRET_KEY_BASE: "${CAD_SECRET_KEY_BASE:?set CAD_SECRET_KEY_BASE}"
+  CAD_DATABASE_URL: "ecto://${CAD_DB_USER:?set CAD_DB_USER}:${CAD_DB_PASS:?set CAD_DB_PASS}@postgres:5432/${CAD_DB_NAME:-cadence}"
+  CAD_DB_POOL_SIZE: "${CAD_DB_POOL_SIZE:-10}"
+  CAD_GIT_STORE_PATH: "/data/git"
+  CAD_ARTIFACT_PATH: "/data/artifacts"
+  CAD_ACTIONS_ENABLED: "${CAD_ACTIONS_ENABLED:-true}"
+  CAD_ACTIONS_VOLUME: "${CAD_ACTIONS_VOLUME:-cadence_actions}"
+  CAD_ACTIONS_VOLUME_PATH: "/data/actions"
+  CAD_DOCKER_SOCKET: "http://docker-proxy:2375"
+  CAD_LLM_PROVIDER: "${CAD_LLM_PROVIDER:-deepseek}"
+  CAD_LLM_API_KEY: "${CAD_LLM_API_KEY:-}"
+  CAD_LLM_MODEL: "${CAD_LLM_MODEL:-deepseek-chat}"
+  CAD_LLM_BASE_URL: "${CAD_LLM_BASE_URL:-https://api.deepseek.com}"
+  CAD_OAUTH_GITHUB_CLIENT_ID: "${CAD_OAUTH_GITHUB_CLIENT_ID:-}"
+  CAD_OAUTH_GITHUB_CLIENT_SECRET: "${CAD_OAUTH_GITHUB_CLIENT_SECRET:-}"
+  CAD_OAUTH_GOOGLE_CLIENT_ID: "${CAD_OAUTH_GOOGLE_CLIENT_ID:-}"
+  CAD_OAUTH_GOOGLE_CLIENT_SECRET: "${CAD_OAUTH_GOOGLE_CLIENT_SECRET:-}"
+
+services:
+  migrate:
+    image: "${CAD_SERVER_IMAGE:-ghcr.io/vyynl/cadence-server:latest}"
+    command: ["/app/bin/cadence", "eval", "Cadence.Server.Release.migrate()"]
+    environment: *cadence-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  bootstrap:
+    image: "${CAD_SERVER_IMAGE:-ghcr.io/vyynl/cadence-server:latest}"
+    command: ["/app/bin/cadence", "eval", "Cadence.Server.Release.bootstrap_admin()"]
+    environment:
+      <<: *cadence-env
+      CAD_ADMIN_EMAIL: "${CAD_ADMIN_EMAIL:-}"
+      CAD_ADMIN_NAME: "${CAD_ADMIN_NAME:-}"
+      CAD_ADMIN_PASSWORD: "${CAD_ADMIN_PASSWORD:-}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  cadence:
+    image: "${CAD_SERVER_IMAGE:-ghcr.io/vyynl/cadence-server:latest}"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      bootstrap:
+        condition: service_completed_successfully
+      docker-proxy:
+        condition: service_started
+    ports:
+      - "${CAD_HTTP_BIND:-127.0.0.1}:${CAD_HTTP_PORT:-4000}:4000"
+    environment: *cadence-env
+    volumes:
+      - cadence_data:/data
+      - cadence_actions:/data/actions
+      - cadence_artifacts:/data/artifacts
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        tls_directive=""
+        case "$${CAD_TLS_MODE:-auto}" in
+          auto|"") ;;
+          internal) tls_directive="tls internal" ;;
+          *)
+            echo "CAD_TLS_MODE must be auto or internal for the Portainer stack" >&2
+            exit 1
+            ;;
+        esac
+        printf '%s {\n  %s\n  reverse_proxy cadence:4000\n}\n' "$${CAD_PHX_HOST}" "$$tls_directive" > /tmp/Caddyfile
+        exec caddy run --config /tmp/Caddyfile --adapter caddyfile
+    environment:
+      CAD_PHX_HOST: "${CAD_PHX_HOST:?set CAD_PHX_HOST}"
+      CAD_TLS_MODE: "${CAD_TLS_MODE:-auto}"
+    ports:
+      - "${CAD_CADDY_HTTP_PORT:-80}:80"
+      - "${CAD_CADDY_HTTPS_PORT:-443}:443"
+      - "${CAD_CADDY_HTTPS_PORT:-443}:443/udp"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      cadence:
+        condition: service_started
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "${CAD_DB_USER:?set CAD_DB_USER}"
+      POSTGRES_PASSWORD: "${CAD_DB_PASS:?set CAD_DB_PASS}"
+      POSTGRES_DB: "${CAD_DB_NAME:-cadence}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${CAD_DB_USER} -d ${CAD_DB_NAME:-cadence}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  # Allowlisted Docker API proxy (spec §8.4), used only when actions are on.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      BUILD: 1
+      POST: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+volumes:
+  cadence_data:
+  cadence_actions:
+    name: "${CAD_ACTIONS_VOLUME:-cadence_actions}"
+  cadence_artifacts:
+  postgres_data:
+  caddy_data:
+  caddy_config:
