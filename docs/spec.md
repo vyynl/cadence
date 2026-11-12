@@ -2756,13 +2756,10 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       repository is supported today (§5.7). Importing from a remote URL,
       incremental background mirroring of an upstream, and a web-side import
       UI are deferred; the re-run of an advanced ref is the incremental path.
-- [ ] **`mix cad.import` summary path (known defect):** without `--json`, the
-      task calls its reporter with `nil` instead of `false` and raises a
-      `FunctionClauseError` **after** the job has completed, so the shell exit
-      is non-zero despite a successful import. The `POST /import` /
-      `GET /import/:id` API and `--json` are unaffected; `docs/import.md` §12
-      records the workaround. A one-clause fix (default `opts[:json]` to
-      `false`) is left as a follow-up outside the 9e docs/spec slice.
+- [x] **`mix cad.import` summary path:** resolved — an absent `--json` is
+      treated as `false`, so the default summary path no longer raises after a
+      successful job and the exit status reflects the job result. The
+      `POST /import` / `GET /import/:id` API and `--json` were unaffected.
 - [ ] **Image publishing / CI:** `docker-compose.prod.yml` builds
       `cadence-server:prod` (or `CAD_SERVER_IMAGE`) locally and the image is
       otherwise operator-managed. Registry publishing, version pinning, and a

@@ -91,10 +91,7 @@ mix cad.import ~/code/thing --json
 
 The task submits the job, polls `GET /import/:id` until it is `completed` or
 `failed`, and prints the summary (imported/reused counts, objects/bytes, tip
-node). It exits non-zero on a rejected request or a failed job. One shipped
-defect affects the default summary path: without `--json` the task raises a
-`FunctionClauseError` **after** a successful job (the job itself is complete;
-see §12 below). Use `--json` until it is fixed.
+node). It exits non-zero on a rejected request or a failed job.
 
 Defaults and semantics:
 
@@ -401,7 +398,6 @@ the snapshot is hidden.
 | A merge node never appears on the server | The pushing user is not the project owner, or the server predates 9c. `trusted` members cannot publish multi-parent nodes. |
 | `import failed: timeout` | `CAD_IMPORT_MAX_SECONDS` (default 30 min) was exceeded. The insert batches that committed are durable; re-run to resume (idempotent). Raise the bound for a very large history. |
 | A node's public snapshot is hidden | Expected: the push scan found a high-confidence secret and opened a critical incident. Rotate the secret; resolve the incident as an acknowledgment when done. |
-| `mix cad.import` raises `FunctionClauseError ... report/2` after a successful import | Known Phase 9b defect: the task passes `opts[:json]` (nil when the flag is absent) to `report/2`, which only matches booleans, so the default summary path crashes *after* the job completed. Pass `--json` (or use `POST /import` and `GET /import/:id`) until it is fixed; the import itself succeeded. |
 | `/p/:slug` shows fewer commits than were imported | Expected above `CAD_DAG_MAX_NODES` (default 150). Use `/p/:slug/history` or the "Showing the newest N of M" link for the rest. |
 | Imported author is missing from a History row | Older/non-imported nodes have no `session_metadata["import"]`; the column renders `—`. Imported nodes always carry the source author. |
 

@@ -81,6 +81,8 @@ defmodule Mix.Tasks.Cad.Import do
     end
   end
 
+  defp report(job, nil), do: report(job, false)
+
   defp report(job, true) do
     Mix.shell().info(Jason.encode!(job, pretty: true))
   end
