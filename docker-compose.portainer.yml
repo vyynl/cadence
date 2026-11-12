@@ -41,7 +41,7 @@ x-cadence-env: &cadence-env
 
 services:
   migrate:
-    image: "${CAD_SERVER_IMAGE:-ghcr.io/vyynl/cadence-server:latest}"
+    image: "${CAD_SERVER_IMAGE:-ghcr.io/vyynl/cadence:latest}"
     command: ["/app/bin/cadence", "eval", "Cadence.Server.Release.migrate()"]
     environment: *cadence-env
     depends_on:
@@ -50,7 +50,7 @@ services:
     restart: "no"
 
   bootstrap:
-    image: "${CAD_SERVER_IMAGE:-ghcr.io/vyynl/cadence-server:latest}"
+    image: "${CAD_SERVER_IMAGE:-ghcr.io/vyynl/cadence:latest}"
     command: ["/app/bin/cadence", "eval", "Cadence.Server.Release.bootstrap_admin()"]
     environment:
       <<: *cadence-env
@@ -65,7 +65,7 @@ services:
     restart: "no"
 
   cadence:
-    image: "${CAD_SERVER_IMAGE:-ghcr.io/vyynl/cadence-server:latest}"
+    image: "${CAD_SERVER_IMAGE:-ghcr.io/vyynl/cadence:latest}"
     restart: unless-stopped
     depends_on:
       postgres:

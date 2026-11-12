@@ -187,7 +187,7 @@ outside the host.
 
 `docker-compose.portainer.yml` is self-contained: no `build:` context, no bind
 mounts, and no repo-relative files, so it can be pasted into Portainer's stack
-editor. It pulls `ghcr.io/vyynl/cadence-server:latest` and always runs Caddy.
+editor. It pulls `ghcr.io/vyynl/cadence:latest` and always runs Caddy.
 The image is built and pushed by
 [`.github/workflows/publish-image.yml`](../.github/workflows/publish-image.yml)
 on `master`, `v*` tags, and manual dispatch.
@@ -220,7 +220,7 @@ on `master`, `v*` tags, and manual dispatch.
 | `CAD_DB_USER` / `CAD_DB_PASS` / `CAD_DB_NAME` | PostgreSQL credentials; keep `CAD_DB_PASS` URL-safe. |
 | `CAD_ADMIN_EMAIL` / `CAD_ADMIN_NAME` / `CAD_ADMIN_PASSWORD` | First account; remove the password after the first sign-in. |
 | `CAD_TLS_MODE` | `auto` (public DNS, ports 80/443) or `internal` (private CA). |
-| `CAD_SERVER_IMAGE` | Optional image override; default `ghcr.io/vyynl/cadence-server:latest`. |
+| `CAD_SERVER_IMAGE` | Optional image override; default `ghcr.io/vyynl/cadence:latest`. |
 | `CAD_ACTIONS_ENABLED` | Set `false` if you do not want Docker actions. |
 
 The Portainer file always includes Caddy. For an existing reverse proxy,
@@ -341,18 +341,18 @@ sync; compose prefixing the volume would break actions.
 
 The reference stack builds locally by default. The
 [publish workflow](../.github/workflows/publish-image.yml) builds and pushes
-`ghcr.io/vyynl/cadence-server` on `master`, `v*` tags, and manual dispatch; it
+`ghcr.io/vyynl/cadence` on `master`, `v*` tags, and manual dispatch; it
 tags `latest` and `edge` (or the version tag) plus a `sha-<12>` tag. The
 Portainer stack consumes that image by default.
 
 To publish manually or to another registry:
 
 ```bash
-docker build -f docker/Dockerfile -t ghcr.io/you/cadence-server:1.0.0 .
-docker push ghcr.io/you/cadence-server:1.0.0
+docker build -f docker/Dockerfile -t ghcr.io/you/cadence:1.0.0 .
+docker push ghcr.io/you/cadence:1.0.0
 ```
 
-Then set `CAD_SERVER_IMAGE=ghcr.io/you/cadence-server:1.0.0` in `.env` and run
+Then set `CAD_SERVER_IMAGE=ghcr.io/you/cadence:1.0.0` in `.env` and run
 `docker compose -f docker-compose.prod.yml pull` (the `cadence` service still
 declares a local `build:`; `pull` uses the tagged image). Use the same variable
 in Portainer to pin a version instead of `latest`.

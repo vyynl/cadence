@@ -155,7 +155,7 @@ docker compose -f docker-compose.prod.yml logs -f cadence
 
 For a paste-a-stack deployment, use
 [`docker-compose.portainer.yml`](docker-compose.portainer.yml). It has no build
-context or bind mounts, pulls `ghcr.io/vyynl/cadence-server:latest` (published
+context or bind mounts, pulls `ghcr.io/vyynl/cadence:latest` (published
 by the image workflow), and generates Caddy's config inline. Add the same
 `CAD_*` environment variables in Portainer; if the GHCR package is private,
 add registry credentials first. The full steps are in

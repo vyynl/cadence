@@ -73,7 +73,7 @@ projects stay at `1.0.0` until then. This section is the candidate text for
 - `docker-compose.portainer.yml` is a paste-ready Portainer stack (no build
   context, no bind mounts, inline Caddy config). The new
   `.github/workflows/publish-image.yml` publishes
-  `ghcr.io/vyynl/cadence-server` for it.
+  `ghcr.io/vyynl/cadence` for it.
 
 ### Upgrade notes
 

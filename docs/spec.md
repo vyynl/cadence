@@ -2021,7 +2021,7 @@ action containers, and no source or `/app` tree is bind-mounted. See
 `docker-compose.portainer.yml` is the self-contained Portainer variant: no
 `build:` context, no bind mounts, and no repo-relative files, so it can be
 pasted into Portainer's web editor. It pulls
-`ghcr.io/vyynl/cadence-server:latest` (published by
+`ghcr.io/vyynl/cadence:latest` (published by
 `.github/workflows/publish-image.yml`) and always runs Caddy with an inline
 config generated from `CAD_PHX_HOST` and `CAD_TLS_MODE` (`auto` or `internal`).
 An external proxy means deleting the `caddy` service and setting
@@ -2290,7 +2290,7 @@ app; `CAD_DATABASE_URL` is derived from the first three):
   `/data/artifacts`, and `/data/actions`; the app listens on 4000 inside the
   container. The reference stack is `docker-compose.prod.yml` (§12.4);
   `.github/workflows/publish-image.yml` builds and pushes
-  `ghcr.io/vyynl/cadence-server` on `master`, version tags, and manual
+  `ghcr.io/vyynl/cadence` on `master`, version tags, and manual
   dispatch, and `docker-compose.portainer.yml` consumes that image. Operator
   steps are in `docs/deploy.md`.
 - **Daemon release (Phase 8b, shipped):** the root `mix.exs` defines a
@@ -2868,7 +2868,7 @@ kept for traceability. Section numbers are stable and are not renumbered.
 
 - [x] **Image publishing / CI (2026-11-12):** resolved — the reference stack
       still builds locally, and `.github/workflows/publish-image.yml` now
-      builds and pushes `ghcr.io/vyynl/cadence-server` on `master`, `v*` tags,
+      builds and pushes `ghcr.io/vyynl/cadence` on `master`, `v*` tags,
       and manual dispatch. `docker-compose.portainer.yml` consumes the image.
 - [x] **Auth model (2026-11-12):** resolved — Cadence stays multi-user. Local
       accounts are operator-created (no public registration), password + TOTP is

@@ -1,7 +1,7 @@
 # Publish the production server image to GHCR.
 #
 # The Portainer stack (`docker-compose.portainer.yml`) pulls
-# `ghcr.io/vyynl/cadence-server:latest` by default. This workflow builds
+# `ghcr.io/vyynl/cadence:latest` by default. This workflow builds
 # `docker/Dockerfile` on master, version tags, and manual dispatch.
 #
 # The package is private for a private repository. Add GHCR credentials in
@@ -38,7 +38,7 @@ jobs:
 
       - name: Build and push
         env:
-          IMAGE: ghcr.io/${{ github.repository_owner }}/cadence-server
+          IMAGE: ghcr.io/${{ github.repository_owner }}/cadence
         run: |
           set -euo pipefail
 

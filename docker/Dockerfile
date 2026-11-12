@@ -70,6 +70,13 @@ ENV LANG=C.UTF-8 \
 
 WORKDIR /app
 
+# GHCR uses the source label to link a new package to this repository. Without
+# it, the first partial push can leave an orphaned package that GITHUB_TOKEN
+# cannot write (the package is not linked to the repository's Actions access).
+LABEL org.opencontainers.image.source="https://github.com/vyynl/cadence" \
+      org.opencontainers.image.title="Cadence server" \
+      org.opencontainers.image.description="Self-hosted Cadence server"
+
 COPY --from=build /app/_build/prod/rel/cadence ./
 
 # Persistent state (spec §12.3). `/data/actions` is the mount point for the
