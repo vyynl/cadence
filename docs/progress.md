@@ -15,8 +15,9 @@ re-score is **100/A** (`docs/audit-2026-11-11.md`), with A3/P4/T3 exemptions
 and the accepted hackney advisories recorded. Phase 9 (import a local Git
 repository) is approved; slices **9a** (shared read-only Git primitives), **9b**
 (daemon importer, job API, CLI), and **9c** (server owner-only multi-parent
-push + sync body limit) shipped. 9d (web DAG cap + paged History + provenance)
-is next. Remaining work is optional and recorded in spec §16.
+push + sync body limit) shipped. **9d-1** (web DAG render cap + intro
+threshold) shipped; 9d-2 (paged History + provenance) is next. Remaining work
+is optional and recorded in spec §16.
 
 ## Done (summary)
 
@@ -972,6 +973,23 @@ is next. Remaining work is optional and recorded in spec §16.
   edges), so the total internal edge count is roughly unchanged; the rubric's
   hotspot module is fixed, and a further `ProjectPane.Repo`/`.Actions` split is
   recorded as optional.
+- **Phase 9d-1 (web DAG render cap, 2026-11-11)** — a large history no longer
+  renders an unusable page. `Portfolio.list_nodes/2` takes `:limit`/`:offset`
+  (an offset alone is ignored) and `count_nodes/1` reads the total in one
+  aggregate. The project page lays out the newest `CAD_DAG_MAX_NODES` (150),
+  shows "Showing the newest N of M commits" only when truncated, and skips the
+  intro above `CAD_DAG_INTRO_MAX_NODES` (60). The selected node is resolved by
+  id, so a deep link or pinned preview older than the window still opens; a
+  `nodes_pushed` event no longer re-derives the selection from the capped list.
+  `DAGLayout` drops edges whose parent is outside the window (a trimmed parent
+  became a phantom vertex and raised `KeyError` in `Map.fetch!`), placing the
+  boundary child at depth 1; the rail wrapper keeps `min-width: 0`, and
+  `.dag-scroll` is bounded at `min(70vh, 48rem)`. Both values fall back to the
+  documented default when non-positive. Spec §7.3 records the render cap and
+  the depth divergence, §12.6 the two keys, §16 the out-of-window affordance.
+  Gate: 1254 tests (332 + 679 + 243), focused 96, format and dev/prod compile
+  clean. Review found the blocker and two layout mediums; all fixed and
+  re-reviewed. Visual rail/scroll verification is deferred to the 9e smoke.
 - **Audit 100 slice, wave 6 + final audit (2026-11-11)** — **T4 shipped and
   the audit is closed at 100/A.** `.github/workflows/ci.yml` is the merge gate:
   format, dev+prod compile with warnings-as-errors, `mix test`,
@@ -1102,20 +1120,19 @@ a time-boxed exact-ID hackney ignore), D2 (`libgraph` 0.17.1), and T4 (CI).
 (`docs/audit-2026-11-11.md`), with the A3/P4/T3 method exemptions and the
 accepted hackney advisories recorded there.
 
-**Immediate product step:** **Phase 9d — web scale and provenance.** 9a–9c are
-shipped, so an imported merge history can publish. The full plan is
-`docs/phase-9-prep.md` (D1–D10 approved). 9d must:
+**Immediate product step:** **Phase 9d-2 — paged History + provenance.**
+9d-1 (render cap, truncation note, intro threshold) shipped at `0c6ab52`;
+9a–9c are shipped, so an imported history can publish. The full plan is
+`docs/phase-9-prep.md` (D1–D10 approved). 9d-2 must:
 
-1. `Portfolio.list_nodes/2` with `:limit`/`:offset`; the project page renders
-   the newest `CAD_DAG_MAX_NODES` (default 150) and shows "Showing the newest
-   150 of N commits".
-2. A public paged `History` list (50 per page: message, author display name,
-   date, short SHA, link to the node) for the remainder; skip the intro
-   animation above `CAD_DAG_INTRO_MAX_NODES` (default 60).
-3. A node-pane provenance line (`Imported from git · <author name>`); author
-   emails only to `can_manage?` audiences, never anonymously.
-4. Tests: cap boundary, truncation note, history paging, intro threshold,
-   provenance visibility, message redaction.
+1. A public paged `History` list at `/p/:slug/history` (50 per page: redacted
+   message, author display name, date, short SHA, link to the node) for the
+   commits outside the DAG window; the truncation note links to it.
+2. A node-pane provenance line (`Imported from git · <author name>`); author
+   emails only to `can_manage?` audiences, never anonymously. Add the
+   "outside the graph" affordance recorded in spec §16.
+3. Tests: history paging (boundaries, junk/out-of-range pages), provenance
+   visibility, message redaction for anonymous viewers, and the note link.
 
 Then 9e (docs/spec/live smoke: `docs/import.md`, spec §5.7 + §7.3, a fixture
 repo imported and published end to end).
@@ -1200,6 +1217,18 @@ expected for the closeout follow-ups.
 
 ## Spec Deltas / Open Items
 
+- **Phase 9d-1 notes (2026-11-11)** — (a) A trimmed window drops edges whose
+  parent is outside the window; the boundary child renders at depth 1, so its
+  web row spacing can differ from the daemon/picker depth (§7.3 records this).
+  (b) An out-of-window selected node opens in the pane but cannot be highlighted
+  in the SVG; the affordance belongs to 9d-2 (§16). (c) The rendered count and
+  truncation note refresh on navigation, not on `nodes_pushed` (live DAG rebuild
+  remains out of scope). (d) `list_nodes/2` ignores `:offset` without a positive
+  `:limit`; 9d-2's history paging must always pass a limit. (e) The rail
+  wrapper keeps `min-width: 0` and `.dag-scroll` is bounded at
+  `min(70vh, 48rem)`; the headless width/scroll check is deferred to 9e's live
+  smoke (static CSS assertions only so far). (f) The intro is skipped by project
+  total, not rendered count — the safe direction when the two caps disagree.
 - **Audit 100 closeout notes (2026-11-11)** — (a) "100" is rubric
   satisfaction: every deduction is paid or recorded as a method exemption (A3
   endpoint/router compile cycle, P4 streams, T3 Mox) plus one accepted risk
@@ -1858,6 +1887,17 @@ expected for the closeout follow-ups.
   the review UI (optional 4d/UI-pass work).
 
 ## Last Updated
+2026-11-11 (Phase 9d-1) — **the public DAG is capped** (`0c6ab52`). The project
+page renders the newest `CAD_DAG_MAX_NODES` (150), shows "Showing the newest N
+of M commits", skips the intro above `CAD_DAG_INTRO_MAX_NODES` (60), and keeps
+deep links / old pinned previews working. The review caught a real blocker (a
+trimmed parent raised `KeyError` in `DAGLayout`); fixed with an edge filter and
+covered by unit + integration tests. Gate: 1254 tests (332 + 679 + 243),
+format and dev/prod compile clean. **Next:** 9d-2 — public paged History at
+`/p/:slug/history`, the note link, node-pane provenance (email manager-only),
+and the out-of-window affordance in spec §16. Visual rail/scroll verification
+is deferred to 9e. Ledger: `.claude/plans/audit-100/progress.md` (append-only;
+this slice is also recorded there).
 2026-11-11 (audit 100 complete) — **T4 shipped; final audit 100/A**
 (`83f3cce`). CI is one SHA-pinned workflow (format, dev+prod compile, test +
 coverage, hex.audit, lockfile check, Sobelow, deps.audit with the advisory-DB
