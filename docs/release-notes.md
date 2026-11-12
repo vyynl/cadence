@@ -92,12 +92,14 @@ its daemon endpoints are plain HTTP over `daemon.sock` (`docs/daemon-setup.md`
 - Action logs are captured after the container exits; there is no live stream.
 - Pack consolidation / a multi-pack index is not implemented; each repack run
   adds a pack.
-- Public proposal rendering is uncached and the sync API has no general rate
-  limit beyond the meld limiter; keep the server behind normal edge protection
-  if exposed publicly.
-- Image publishing/CI is operator-side; `Project.docker_image` has no admin
-  writer; action containers run in the host user namespace with no `/out`
-  quota, so the actions volume must be size-limited.
+- Keep the server behind normal edge protection if exposed publicly. `/sync/*`
+  is rate-limited per authenticated user, meld calls have their own per-project
+  limiter, and public proposal results are cached, but there is no WAF or bot
+  protection in the app.
+- Image publishing is operator-side; the CI workflow runs the merge gate but
+  does not publish images. `Project.docker_image` has no admin writer; action
+  containers run in the host user namespace with no `/out` quota, so the
+  actions volume must be size-limited.
 - Multi-node server fan-out, the public-preview auth decision, and the cloud
   backup strategy remain open.
 - A `burrito` single-file daemon artifact is not implemented (it would need a

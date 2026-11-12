@@ -10,7 +10,7 @@ defmodule Cadence.Daemon.DocAgentWorker do
 
   The client is injectable via
   `Application.get_env(:cadence_daemon, :docs_llm, Cadence.Shared.LLM)` so tests
-  never reach a real API (AGENTS.md §9).
+  never reach a real API (spec §9.3).
   """
 
   alias Cadence.Daemon.{Env, LLMRateLimit}

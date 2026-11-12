@@ -4,7 +4,7 @@ A local-first, self-hosted source control system built around a DAG of
 session nodes rather than Git branches.
 
 - **Canonical spec:** [docs/spec.md](docs/spec.md)
-- **Agent conventions:** [AGENTS.md](AGENTS.md)
+- **Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md)
 - **Status:** 1.0.0 — the planned build order is complete; see
   [docs/release-notes.md](docs/release-notes.md) for the release summary,
   upgrade notes, and known limitations.
@@ -39,7 +39,7 @@ read-only token, a Postgres 16 service on port 55432, and Elixir 1.20 / OTP 29
   (see `.mix_audit.ignore`).
 
 Reproduce the gate locally. Start the test database first — same port, user,
-password, and database as the CI service (also in AGENTS.md §6):
+password, and database as the CI service (also in CONTRIBUTING.md):
 
 ```bash
 docker run --rm -d --name cadence-test-pg \

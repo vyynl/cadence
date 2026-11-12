@@ -3,18 +3,26 @@
 `docs/spec.md` is the canonical contract. If a design question is not answered
 there, resolve it in the spec (or add it to §16) before implementing.
 
-## Read order
+## Where to start
 
-1. `progress.md` — current phase, summary, next step, blockers.
-2. `deploy.md` for production/operator work, or `archive/` for historical
-   context.
-3. `spec.md` — the relevant sections for the task.
+| Document | Purpose |
+|---|---|
+| [`spec.md`](spec.md) | Canonical product and technical contract |
+| [`release-notes.md`](release-notes.md) | Release history, upgrade notes, and known limitations |
+| [`daemon-setup.md`](daemon-setup.md) | Local daemon: release or source install, token, env file, migration, boot, registration, upgrades |
+| [`deploy.md`](deploy.md) | Production server: release image, compose stack, migrations, volumes, actions |
+| [`demo.md`](demo.md) | One-command demo stack, seeded accounts, and the guided tour |
+| [`webauthn-plan.md`](webauthn-plan.md) | Approved WebAuthn/passkey (FIDO2) design: YubiKey, recovery, schema, phases |
+| [`ui-notes.md`](ui-notes.md) | UI/tuning backlog — visual, layout, and copy observations |
+| [`images/`](images/) | Screenshots referenced by the docs |
 
-Completed-phase briefs and the full Phase 1–3 log live in `archive/`; they are
-history, not current instructions. The 1.0.0 release summary and known
-limitations are in `release-notes.md`.
+Project entry points:
 
-## Current status
+- [`../README.md`](../README.md) — overview, quickstart, and the CI gate
+- [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — setup, tests, hard rules, and pull requests
+- [`../SECURITY.md`](../SECURITY.md) — supported versions and private vulnerability reporting
+
+## Project status
 
 | Phase | Status |
 |---|---|
@@ -28,35 +36,19 @@ limitations are in `release-notes.md`.
 | Phase 6 — Docker actions | Complete (6a manifest foundation, 6b runner, 6c web run experience, post-close run queue, retention and run/artifact paging); action log streaming remains a §16 delta |
 | Phase 7 — Storage engineering | Complete (7a pack layer, 7b repacker, 7c existence handshake, 7d multi-pack/index/delta-depth/repack verification + demo-stack smoke); pack consolidation remains a §16 delta |
 | Phase 8 — Release engineering | Complete (8a production server image, umbrella release, `Cadence.Server.Release.migrate/0`, prod compose, deploy docs; 8b `cadence_daemon` release with `Cadence.Daemon.Release.migrate/0`, release registration, systemd/install/upgrade docs) |
-| Phase 9 — Import a local Git repository | In progress (9a shared import primitives, 9b daemon importer/job API/CLI, 9c server multi-parent push + sync body limit, 9d web DAG cap + paged History + provenance); 9e docs/spec/live smoke remains |
+| Phase 9 — Import a local Git repository | 9a–9d shipped (shared primitives, daemon importer/API/CLI, multi-parent push, capped DAG + paged History + provenance); 9e docs/spec/smoke in progress |
+| WebAuthn / passkeys | Design approved; G1 data/config/Wax spike in progress |
 
 Current release: **1.0.0** (2026-11-11) — the planned build order (Phases 1–8)
 is complete; remaining work is optional and recorded in spec §16 and
 `release-notes.md`.
 
-## Current docs
+## Documentation conventions
 
-| File | Purpose |
-|---|---|
-| `spec.md` | Canonical product/technical contract |
-| `progress.md` | Current handoff and session summary |
-| `release-notes.md` | Release history, upgrade notes, and known limitations |
-| `audit-2026-11-11.md` | Post-cleanup five-track health audit: 100/A, per-track evidence, recorded exemptions, residual risks |
-| `audit-100-plan.md` | The 87→100 gap-closing plan; shipped 2026-11-11 (item → commit table in the audit report) |
-| `daemon-setup.md` | Local daemon setup: release or source install, token, env file, migration, boot, registration, upgrades |
-| `deploy.md` | Production server: release image, compose stack, migrations, volumes, actions |
-| `demo.md` | Local demo stack: compose, seed accounts, guided tour |
-| `ui-notes.md` | UI/tuning backlog — drop observations here between sessions |
-| `opencode.md` | Agent tooling: skills, formatter, gates, artifact conventions |
-| `phase-9-prep.md` | Phase 9 import brief: Git history → Cadence DAG (9a–9d shipped) |
-| `webauthn-plan.md` | Approved WebAuthn/passkey (FIDO2) design: YubiKey, recovery, schema, phases |
-| `archive/` | Completed-phase briefs and historical progress log |
-
-## Adding a phase brief
-
-- Name it `phase-<n>-prep.md` for the next phase, or
-  `phase-<n><letter>-prep.md` for a slice.
-- State scope, verified state, dependencies, proposed slices, tests, acceptance,
-  decisions, and risks.
-- When the phase/slice ships, move the brief to `archive/` and update
-  `progress.md` to point at the next brief.
+- Anchor links use spec section numbers (`§7.3`) so a change can be traced from
+  code and tests back to the contract.
+- User-facing behavior changes update `spec.md` and `release-notes.md` in the
+  same change.
+- Configuration belongs in spec §12.6 and `.env.example`; do not hide defaults
+  in prose only.
+- Screenshots live in `images/` and are referenced from the doc that uses them.

@@ -7,13 +7,12 @@ apps — `cadence_shared`, `cadence_daemon`, and `cadence_server` — plus the
 
 Read these first, in order:
 
-1. `docs/progress.md` — what is in flight and what comes next.
-2. `docs/spec.md` — the canonical contract. If a design question is not
+1. `docs/spec.md` — the canonical contract. If a design question is not
    answered there, resolve it in the spec (or add a §16 entry) before
    implementing.
-3. `AGENTS.md` — working conventions, hard rules, and the definition of done.
-4. `docs/release-notes.md` — current release, upgrade notes, and known
+2. `docs/release-notes.md` — current release, upgrade notes, and known
    limitations.
+3. `docs/README.md` — the documentation index and operator guides.
 
 ## Prerequisites
 
@@ -52,8 +51,8 @@ dev server on <http://localhost:4000> (`docs/demo.md`). Operator setup is in
 
 ## The merge gate
 
-Run these from the umbrella root. They are the commands in `AGENTS.md` §6/§11
-and the ones CI runs:
+Run these from the umbrella root. They are the project's merge gate and the
+commands CI runs:
 
 ```bash
 mix format --check-formatted
@@ -103,6 +102,7 @@ nvim --headless -l cadence.nvim/spec/graph_spec.lua
 nvim --headless -l cadence.nvim/spec/diff_spec.lua
 nvim --headless -l cadence.nvim/spec/doc_spec.lua
 nvim --headless -l cadence.nvim/spec/proposal_spec.lua
+nvim --headless -l cadence.nvim/spec/client_spec.lua
 ```
 
 ## Test conventions
@@ -121,7 +121,7 @@ nvim --headless -l cadence.nvim/spec/proposal_spec.lua
 
 ## Hard rules
 
-These come from `AGENTS.md` §4 and are enforced in review:
+These are enforced in review:
 
 - Never shell out to `git`; use `Cadence.Shared.GitStore` for object
   operations.
@@ -140,7 +140,6 @@ These come from `AGENTS.md` §4 and are enforced in review:
   socket proxy (spec §8.4).
 - Renames are umbrella-wide: module names, env prefixes, and command prefixes
   are load-bearing.
-- Agent sessions must update `docs/progress.md` before ending (`AGENTS.md` §2).
 
 Respect the app boundaries: `cadence_shared` must not depend on Phoenix,
 Postgres, Bandit, or any web stack, and `cadence_daemon` must not depend on
@@ -167,11 +166,10 @@ Use `.github/PULL_REQUEST_TEMPLATE.md`. A pull request should state what
 changed and why, link an issue when one exists, list the affected apps, and
 show the exact commands you ran (format, dev/prod compile, tests, coverage).
 
-The checklist in the template mirrors `AGENTS.md` §11. "Done" is not "it
+The checklist in the template mirrors the merge gate above. "Done" is not "it
 compiles": formatting, dev and prod compile, tests, the coverage floor, and the
-no-hardcoded-config rule all have to pass. CI runs the same gate once the
-repository is hosted with Actions enabled; describe what you ran locally rather
-than assuming a green run.
+no-hardcoded-config rule all have to pass. CI runs the same gate; describe what
+you ran locally rather than assuming a green run.
 
 ## Reporting bugs and requesting features
 

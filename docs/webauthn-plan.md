@@ -4,7 +4,7 @@
 > **Date:** 2026-11-11
 > **Scope:** `apps/cadence_server` only. No daemon, shared-schema, or sync changes.
 > **Approval:** `wax_ ~> 0.7` and the defaults below are approved. The §11/§12.6/§16
-> rows in §12 are applied with the G1 meld (AGENTS.md §4.3, §5).
+> rows in §12 are applied with the G1 meld (spec §11 and CONTRIBUTING.md).
 
 ## Approval record (2026-11-11)
 
@@ -625,7 +625,7 @@ not needed once we render the OAuth links ourselves. A smaller alternative
 ## 9. Configuration (proposed `CAD_WEBAUTHN_*`)
 
 All values are read in `config/runtime.exs` and stored in the application env;
-nothing is hardcoded (AGENTS.md §4.4).
+nothing is hardcoded (spec §12.6).
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
@@ -704,7 +704,7 @@ Cases:
   - Cross-device: desktop Chrome → “Use a phone” → Android/iPhone QR → sign in.
   - Cancel/timeout, wrong RP (change rp_id in a scratch env), proxy origin
     mismatch, disabled deployment.
-- Keep the manual evidence (browser/OS/key firmware) in `docs/progress.md` when
+- Keep the manual evidence (browser/OS/key firmware) in the release review when
   the slice closes.
 
 ---
@@ -789,8 +789,7 @@ The nine `CAD_WEBAUTHN_*` rows in §9, inserted with the other server vars.
 - `docs/demo.md` (YubiKey + phone QR walkthrough), `docs/release-notes.md`
   (feature + known limitations), `.env.example` (new vars), `docs/README.md`
   index link.
-- `AGENTS.md` §3 (project structure) only if a new top-level doc is added —
-  not needed.
+- `CONTRIBUTING.md` only if the contributor workflow changes — not needed.
 
 ---
 
@@ -820,7 +819,7 @@ The recommended option was taken for each item unless the approval record says
 otherwise.
 
 1. **Approve `wax_ ~> 0.7` and the §11 row?** This is the only new dependency;
-   nothing can be implemented without it (AGENTS.md §4.3).
+   nothing can be implemented without it (spec §11).
 2. **Stay on AshAuthentication 4.15.1 (recommended) or take the 5.0.0-rc
    upgrade** to use the vendor WebAuthn strategy? If the latter, is an RC auth
    dependency acceptable for 1.0.x?

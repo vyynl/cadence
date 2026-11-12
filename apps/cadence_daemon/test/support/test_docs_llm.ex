@@ -1,6 +1,6 @@
 defmodule Cadence.Daemon.TestDocsLLM do
   @moduledoc """
-  Injectable fake doc LLM for tests. Never hits a real API (AGENTS.md §9).
+  Injectable fake doc LLM for tests. Never hits a real API (spec §9.3).
 
   Behavior is controlled via `Application.get_env(:cadence_daemon,
   :test_docs_llm_result, :ok)`:

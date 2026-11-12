@@ -36,10 +36,9 @@
 
 - [ ] `docs/spec.md` (section: )
 - [ ] `docs/release-notes.md`
-- [ ] `docs/progress.md` (session handoff)
 - [ ] Not needed — no behavior or configuration change
 
-## Checklist (`AGENTS.md` §11)
+## Checklist
 
 - [ ] Code is formatted (`mix format --check-formatted` passes).
 - [ ] Dev and prod compile clean (`mix compile --warnings-as-errors`, `MIX_ENV=prod mix compile --warnings-as-errors`).

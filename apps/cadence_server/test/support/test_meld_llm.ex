@@ -1,6 +1,6 @@
 defmodule Cadence.Server.TestMeldLLM do
   @moduledoc """
-  Injectable fake meld LLM client. Never hits a real API (AGENTS.md §9).
+  Injectable fake meld LLM client. Never hits a real API (spec §6.5).
 
   Behavior comes from a per-test ETS script first, then
   `Application.get_env(:cadence_server, :meld_llm_result)`:

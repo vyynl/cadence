@@ -5,7 +5,7 @@ defmodule Cadence.Daemon.AgentWorker do
   A `Task.Supervisor` that gates every LLM call through
   `Cadence.Daemon.LLMRateLimit` and awaits it with a timeout. The LLM client is
   injectable via `Application.get_env(:cadence_daemon, :llm, Cadence.Shared.LLM)`
-  so tests substitute a fake and never hit a real API (AGENTS.md §9).
+  so tests substitute a fake and never hit a real API (spec §5.5).
   """
 
   alias Cadence.Daemon.LLMRateLimit

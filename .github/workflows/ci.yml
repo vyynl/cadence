@@ -1,6 +1,6 @@
-# Cadence CI — the merge gate (docs/audit-100-plan.md T4).
+# Cadence CI — the merge gate.
 #
-# Every step is the same command documented in AGENTS.md §6/§11, so a local run
+# Every step is the same command documented in CONTRIBUTING.md, so a local run
 # of those commands reproduces this job. The one exception is the Postgres
 # service: locally the test database is a container on the same port.
 #

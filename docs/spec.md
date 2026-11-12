@@ -1608,7 +1608,7 @@ cadence/
 │   ├── server.md
 │   └── sync-protocol.md
 ├── mix.exs                # umbrella root
-├── AGENTS.md              # agent conventions
+├── CONTRIBUTING.md        # contributor setup and merge gate
 └── docker-compose.yml     # server deployment
 ```
 
@@ -2043,7 +2043,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 **Phase 1a — Skeleton (week 1–2)**
 - `mix new cadence --umbrella`.
 - Create `cadence_shared`, `cadence_daemon --sup`, `cadence_server --sup`.
-- Write README, AGENTS.md, docs/spec.md.
+- Write README, CONTRIBUTING.md, docs/spec.md.
 - Add dependencies to each `mix.exs`.
 - Get `mix compile` passing with empty modules.
 

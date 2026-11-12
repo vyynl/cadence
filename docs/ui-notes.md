@@ -1,8 +1,8 @@
 # UI notes & tuning backlog
 
-Drop notes here between sessions — anything visual, layout, copy, or "this
-feels wrong". The next session reads this before touching UI work, and a
-styling pass is planned after 4c-3 (incident panel) unless a demo is imminent.
+Visual, layout, copy, and interaction observations — anything that "feels
+wrong" in the browser. Add one bullet per observation; keep the Done section as
+the record of what was fixed.
 
 ## How to use
 
@@ -13,7 +13,7 @@ styling pass is planned after 4c-3 (incident panel) unless a demo is imminent.
 
 ## Open
 
-- **`/favicon.ico` returns 404 (2026-11-11, audit smoke).** Every first page
+- **`/favicon.ico` returns 404 (2026-11-11, browser smoke).** Every first page
   load logs one `404 Not Found` in the console (the browser's automatic
   favicon request); the server log shows `no route found for GET /favicon.ico`.
   Expected: either a real favicon route or a `<link rel="icon">` pointing at an
