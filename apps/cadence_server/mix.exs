@@ -17,6 +17,18 @@ defmodule Cadence.Server.MixProject do
       # --cover` recurses into each child and reads that child's config (the
       # root `mix.exs` carries the same key for `mix test.coverage`).
       test_coverage: [summary: [threshold: 80]],
+      # Accepted advisories with a written rationale in spec §16 and
+      # .mix_audit.ignore. Exact IDs only, so a new advisory still fails.
+      hex: [
+        ignore_advisories: [
+          "GHSA-gp9c-pm5m-5cxr",
+          "GHSA-j9wq-vxxc-94wf",
+          "GHSA-mp55-p8c9-rfw2",
+          "GHSA-pj7v-xfvx-wmjq",
+          "CVE-2026-115693",
+          "CVE-2026-117656"
+        ]
+      ],
       deps: deps()
     ]
   end

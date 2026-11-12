@@ -2815,25 +2815,32 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       `cadence-server:prod` (or `CAD_SERVER_IMAGE`) locally and the image is
       otherwise operator-managed. Registry publishing, version pinning, and a
       build pipeline are deferred until a registry workflow exists.
-- [ ] **Accepted hackney advisories (audit D1, time-boxed):** `mix deps.audit`
-      reported four advisories against hackney 1.25.0 — GHSA-gp9c-pm5m-5cxr
-      (SOCKS5 TLS upgrade ignores the caller timeout, high),
-      GHSA-j9wq-vxxc-94wf (query CR/LF injection, moderate),
-      GHSA-mp55-p8c9-rfw2 (CRLF injection via `domain`/`path` options, low),
-      and GHSA-pj7v-xfvx-wmjq (SSRF allowlist bypass, moderate). They are
-      ignored by exact advisory ID in `.mix_audit.ignore` (not by package), so
-      a new hackney advisory still fails. hackney is pinned below 2.0 by
-      `axiom_ai ~> 1.9` and `httpoison ~> 1.21` (`ex_aws ~> 1.16` is
-      `optional: true` and tesla already accepts `~> 1.21 or >= 4.0.2`, so
-      neither is the blocker); every patched release is 4.x and no 1.x patch
-      exists, so upgrading requires changing the LLM transport. Mitigations are
-      per advisory and distinct: no SOCKS5 proxy is configured anywhere, query
-      strings come from fixed provider paths with no user input, no
-      `domain`/`path` option is passed, and there is no host allowlist to
-      bypass (the single host is `CAD_LLM_BASE_URL`); no custom
-      `cacert`/`cacerts` option is set. Revisit by 2027-02-11 or when
-      `axiom_ai`/`httpoison` relax their hackney constraint or the LLM
-      transport moves to Req.
+- [ ] **Accepted hackney and assent advisories (time-boxed):** `mix hex.audit`
+      and `mix deps.audit` report known advisories against **hackney 1.25.0**
+      and **assent 0.2.13**. They are ignored by exact advisory ID in
+      `.mix_audit.ignore` and `mix.exs` (`ignore_advisories`), never by package,
+      so a new advisory still fails.
+      * hackney: GHSA-gp9c-pm5m-5cxr / CVE-2026-47071 (SOCKS5 TLS upgrade
+        ignores the caller timeout, high), GHSA-j9wq-vxxc-94wf / CVE-2026-47075
+        (query CR/LF injection, moderate), GHSA-mp55-p8c9-rfw2 /
+        CVE-2026-47069 (CRLF injection via `domain`/`path`, low),
+        GHSA-pj7v-xfvx-wmjq / CVE-2026-47076 (SSRF allowlist bypass, moderate),
+        and CVE-2026-115693 (custom `cacerts`/`cacertfile` do not restrict
+        trust, critical). Mitigations: no SOCKS5 proxy is configured; query
+        strings come from fixed provider paths with no user input; no
+        `domain`/`path` option is passed; there is no host allowlist (the only
+        host is `CAD_LLM_BASE_URL`); and no custom CA option is set, so the
+        certifi default bundle is used.
+      * assent: CVE-2026-117656 / GHSA-9fr5-g44g-9526 (an unverified Sign in
+        with Apple callback parameter can override verified claims, critical).
+        Cadence configures only GitHub and Google OAuth; the Apple strategy is
+        not enabled, so that callback path is unreachable.
+      * Constraints: hackney is pinned below 2.0 by `axiom_ai ~> 1.9` and
+        `httpoison ~> 1.21`; every patched hackney release is 4.x. assent is
+        pinned below 0.3 by AshAuthentication 4.15; assent 0.3/0.4 arrive with
+        the AshAuthentication 5 upgrade. Clear these by moving the LLM
+        transport to Req and/or taking the AA5 upgrade when stable.
+      * Revisit by 2027-02-11 or when either constraint relaxes.
 
 ---
 

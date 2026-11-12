@@ -63,3 +63,20 @@ GHSA-mp55-p8c9-rfw2
 # hackney to bypass and fetches no user-supplied URL; the single host is
 # `CAD_LLM_BASE_URL`.
 GHSA-pj7v-xfvx-wmjq
+
+# EEF-CVE-2026-115693 / CVE-2026-115693 — "Custom cacerts or cacertfile do
+# not restrict trust to the pinned CA in hackney" (critical). Mitigation:
+# Cadence never passes `cacert`/`cacerts`/`cacertfile`; hackney uses certifi's
+# default CA bundle. There is no pinned custom CA to bypass.
+EEF-CVE-2026-115693
+CVE-2026-115693
+
+# EEF-CVE-2026-117656 / CVE-2026-117656 / GHSA-9fr5-g44g-9526 — "Unverified
+# Sign in with Apple callback parameter can override verified ID token
+# claims" in assent (critical). Mitigation: Cadence configures only GitHub
+# and Google OAuth; the Apple strategy is not enabled, so that callback path
+# is unreachable. assent is pinned < 0.3 by AshAuthentication 4.15; 0.3/0.4
+# arrive with the AshAuthentication 5 upgrade.
+EEF-CVE-2026-117656
+CVE-2026-117656
+GHSA-9fr5-g44g-9526

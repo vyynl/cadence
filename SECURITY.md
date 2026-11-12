@@ -83,11 +83,12 @@ Out of scope:
 
 - Issues that require an already-compromised host account, root on the server,
   or control of the Docker daemon.
-- The four accepted hackney 1.25.0 advisories recorded in `.mix_audit.ignore`
-  and [spec §16](docs/spec.md#16-open-decisions). They are ignored by exact
-  GHSA ID, not by package. Report them again only with a concrete exploit path
-  through Cadence's usage (the only host hackney calls is the operator's
-  `CAD_LLM_BASE_URL`).
+- The accepted hackney 1.25.0 and assent 0.2.13 advisories recorded in
+  `.mix_audit.ignore`, `mix.exs`, and
+  [spec §16](docs/spec.md#16-open-decisions). They are ignored by exact
+  advisory ID, not by package. Report them again only with a concrete exploit
+  path through Cadence's usage: no SOCKS5 proxy, custom CA, user-supplied query
+  string, or Apple OAuth strategy is configured.
 - Known limitations that are already documented as deployment prerequisites
   rather than defects — for example, action containers share the host user
   namespace and `/out` has no quota. See `docs/release-notes.md`
