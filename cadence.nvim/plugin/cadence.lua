@@ -285,8 +285,9 @@ vim.api.nvim_create_autocmd("VimEnter", {
       return
     end
 
-    local project = current_project()
-    if project then
+    -- A daemon that is down is a normal state; never let it break startup.
+    local ok, project = pcall(current_project)
+    if ok and project then
       vim.schedule(function()
         open_picker(project, { title = project.slug })
       end)

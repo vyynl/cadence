@@ -30,9 +30,26 @@ M.request = function(method, path, body, socket_path)
     opts.body = vim.json.encode(body)
   end
 
+  -- Plenary's synchronous request raises from a libuv on_exit callback when
+  -- curl cannot connect (for example a stale daemon socket), and that error is
+  -- outside the pcall below. Supplying on_error turns it into a normal failure
+  -- result instead of crashing Neovim at startup.
+  local request_error = nil
+  opts.on_error = function(err)
+    request_error = err.message
+  end
+
   local ok, res = pcall(curl.request, opts)
   if not ok then
     return { status = 0, body = nil, error = tostring(res) }
+  end
+
+  if request_error then
+    return { status = 0, body = nil, error = request_error }
+  end
+
+  if type(res) ~= "table" or not res.status then
+    return { status = 0, body = nil, error = "curl request failed" }
   end
 
   return { status = res.status, body = decode(res.body) }
