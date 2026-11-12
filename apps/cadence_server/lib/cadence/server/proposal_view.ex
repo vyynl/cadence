@@ -14,6 +14,12 @@ defmodule Cadence.Server.ProposalView do
   `verify_resolution/1` is the incident-resolution counterpart: it re-scans a
   proposal's stored result, so a proposal incident cannot be clicked away while
   the result is still risky (spec §6.7). It mutates nothing.
+
+  `result/3` memoizes its rendered payload in `Cadence.Server.ProposalCache`
+  under a content key (commits + caps) when caching is enabled and the result
+  can be keyed; isolation stays uncached and is checked by callers first. A
+  promotion, a missing parent, or a non-positive cache bound computes every
+  time. The incident-resolution and integrity paths never use the cache.
   """
 
   import Ecto.Query
@@ -24,6 +30,7 @@ defmodule Cadence.Server.ProposalView do
     Portfolio,
     ProjectGit,
     Proposal,
+    ProposalCache,
     Proposals,
     PublicContent,
     Repo
@@ -175,6 +182,11 @@ defmodule Cadence.Server.ProposalView do
 
   Options: `:max_files` overrides the visible-file cap (default from
   `:cadence_server, :proposal_max_files`).
+
+  Payloads are cached by content (result commit, first parent, and the caps),
+  so a repeated request skips the store walks while caching is enabled and the
+  result can be keyed. A promotion, a missing parent, or a non-positive
+  `CAD_PROPOSAL_CACHE_ENTRIES` computes every time. Errors are never cached.
   """
   @spec result(Project.t(), Proposal.t(), keyword()) :: result()
   def result(project, proposal, opts \\ [])
@@ -182,12 +194,61 @@ defmodule Cadence.Server.ProposalView do
   def result(%Project{}, %Proposal{kind: :promotion}, _opts), do: :none
 
   def result(%Project{} = project, %Proposal{} = proposal, opts) do
-    repo = ProjectGit.open(project.id)
+    context = build_cache_key(project.id, proposal, opts)
+    key = context.key
 
-    with {:ok, result_blobs} <- walk(repo, proposal.meld_commit_sha) do
-      case walk(repo, first_parent_commit(proposal)) do
+    with :miss <- cached(key) do
+      compute_result(
+        ProjectGit.open(project.id),
+        proposal.meld_commit_sha,
+        context.first_parent_sha,
+        context.max_files,
+        context.scan_limits,
+        key
+      )
+    end
+  end
+
+  @doc false
+  @spec result_cache_key(Project.t(), Proposal.t(), keyword()) :: {:ok, tuple()} | :no_cache
+  def result_cache_key(project, proposal, opts \\ [])
+
+  def result_cache_key(%Project{} = project, %Proposal{kind: :meld} = proposal, opts) do
+    case build_cache_key(project.id, proposal, opts).key do
+      nil -> :no_cache
+      key -> {:ok, key}
+    end
+  end
+
+  def result_cache_key(%Project{}, %Proposal{}, _opts), do: :no_cache
+
+  # Single source for the key inputs: the first parent and both caps are
+  # resolved once and threaded into the key and the walks, so a config change
+  # between key and compute cannot poison an entry.
+  defp build_cache_key(project_id, proposal, opts) do
+    first_parent_sha = first_parent_commit(proposal)
+    max_files = max_visible_files(opts)
+    scan_limits = Portfolio.scan_limits()
+
+    %{
+      first_parent_sha: first_parent_sha,
+      max_files: max_files,
+      scan_limits: scan_limits,
+      key:
+        cache_key(project_id, proposal.meld_commit_sha, first_parent_sha, max_files, scan_limits)
+    }
+  end
+
+  defp cached(nil), do: :miss
+  defp cached(key), do: ProposalCache.get(key)
+
+  defp compute_result(repo, result_sha, first_parent_sha, max_files, scan_limits, key) do
+    with {:ok, result_blobs} <- walk(repo, result_sha, scan_limits) do
+      case walk(repo, first_parent_sha, scan_limits) do
         {:ok, parent_blobs} ->
-          {:ok, diff(result_blobs, parent_blobs, max_visible_files(opts))}
+          payload = diff(result_blobs, parent_blobs, max_files)
+          if key, do: ProposalCache.put(key, payload)
+          {:ok, payload}
 
         {:error, :too_large} ->
           {:error, :too_large}
@@ -196,6 +257,22 @@ defmodule Cadence.Server.ProposalView do
           {:error, :missing_objects}
       end
     end
+  end
+
+  # A promotion has no result, and an unresolved commit or parent cannot be
+  # keyed on content; those paths compute and return without caching.
+  defp cache_key(_project_id, nil, _first_parent_sha, _max_files, _scan_limits), do: nil
+
+  defp cache_key(_project_id, _result_sha, nil, _max_files, _scan_limits), do: nil
+
+  defp cache_key(
+         project_id,
+         result_sha,
+         first_parent_sha,
+         max_files,
+         %{max_files: scan_max_files, max_bytes: scan_max_bytes}
+       ) do
+    {project_id, result_sha, first_parent_sha, max_files, scan_max_files, scan_max_bytes}
   end
 
   defp first_parent_commit(%Proposal{project_id: project_id, parent_ids: [first | _rest]}) do
@@ -207,11 +284,11 @@ defmodule Cadence.Server.ProposalView do
 
   defp first_parent_commit(%Proposal{}), do: nil
 
-  defp walk(_repo, nil), do: {:error, :missing_objects}
+  defp walk(repo, commit_sha), do: walk(repo, commit_sha, Portfolio.scan_limits())
 
-  defp walk(repo, commit_sha) do
-    %{max_files: max_files, max_bytes: max_bytes} = Portfolio.scan_limits()
+  defp walk(_repo, nil, _scan_limits), do: {:error, :missing_objects}
 
+  defp walk(repo, commit_sha, %{max_files: max_files, max_bytes: max_bytes}) do
     case GitStore.walk_blobs(repo, commit_sha, max_files: max_files, max_bytes: max_bytes) do
       {:ok, blobs} -> {:ok, blobs}
       {:error, :too_many_files} -> {:error, :too_large}

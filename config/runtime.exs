@@ -166,6 +166,8 @@ if config_env() != :test and server_artifact? do
     readme_max_bytes: String.to_integer(System.get_env("CAD_README_MAX_BYTES", "262144")),
     tree_max_entries: String.to_integer(System.get_env("CAD_TREE_MAX_ENTRIES", "1000")),
     proposal_max_files: String.to_integer(System.get_env("CAD_PROPOSAL_MAX_FILES", "200")),
+    proposal_cache_entries:
+      String.to_integer(System.get_env("CAD_PROPOSAL_CACHE_ENTRIES", "256")),
     scan_max_files: String.to_integer(System.get_env("CAD_SCAN_MAX_FILES", "10000")),
     scan_max_bytes: String.to_integer(System.get_env("CAD_SCAN_MAX_BYTES", "16777216")),
     repack_enabled: System.get_env("CAD_REPACK_ENABLED", "true") == "true",

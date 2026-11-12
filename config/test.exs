@@ -77,6 +77,7 @@ config :cadence_server,
   readme_max_bytes: 4096,
   tree_max_entries: 100,
   proposal_max_files: 200,
+  proposal_cache_entries: 256,
   scan_max_files: 1000,
   scan_max_bytes: 65_536,
   # Background repacking must never reach the database from a spawned task in

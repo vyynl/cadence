@@ -5,7 +5,7 @@ defmodule Cadence.ServerWeb.ReviewLiveTest do
   import Ecto.Query
   import Phoenix.LiveViewTest
 
-  alias Cadence.Server.{Incidents, ProposalView, Proposals, Repo}
+  alias Cadence.Server.{Incidents, ProposalCache, ProposalView, Proposals, Repo}
   alias Cadence.Server.Accounts.User
   alias Cadence.ServerWeb.ReviewLive.Show
   alias Cadence.Shared.{Membership, Node}
@@ -244,6 +244,8 @@ defmodule Cadence.ServerWeb.ReviewLiveTest do
           details: %{patterns: [:github_token]}
         })
 
+      ProposalCache.clear()
+
       {:ok, view, _html} = live(signed_conn(conn, owner), "/p/demo/reviews/#{proposal.id}")
       html = render_async(view)
 
@@ -251,9 +253,15 @@ defmodule Cadence.ServerWeb.ReviewLiveTest do
       refute html =~ "Approve"
       assert html =~ "Reject"
 
+      # Isolation skips the result walks, so no payload is computed or cached.
+      assert ProposalCache.size() == 0
+      assert {:ok, key} = ProposalView.result_cache_key(project, proposal)
+      assert ProposalCache.get(key) == :miss
+
       refused = render_click(view, "approve")
 
       assert refused =~ "critical incident is open"
+      assert ProposalCache.size() == 0
       assert Repo.get!(Cadence.Server.Proposal, proposal.id).status == :pending
     end
 

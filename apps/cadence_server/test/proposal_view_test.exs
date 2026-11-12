@@ -3,11 +3,16 @@ defmodule Cadence.Server.ProposalViewTest do
 
   import Cadence.ServerFixtures
 
-  alias Cadence.Server.{Incidents, Portfolio, ProposalView, Repo}
+  alias Cadence.Server.{Incidents, Portfolio, ProposalCache, ProposalView, Repo}
 
   setup do
     pid = Ecto.Adapters.SQL.Sandbox.start_owner!(Repo, shared: false)
     on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
+
+    # Content-keyed entries are process-global; clear them so a payload can
+    # never leak between tests (including into other test files).
+    ProposalCache.clear()
+    on_exit(&ProposalCache.clear/0)
 
     owner = Ecto.UUID.generate()
     project = project(owner)
@@ -217,6 +222,185 @@ defmodule Cadence.Server.ProposalViewTest do
     end
   end
 
+  describe "result/3 caching" do
+    test "stores the rendered payload and serves later calls from it", %{
+      owner: owner,
+      project: project
+    } do
+      parent = node_with_snapshot(project, %{"a.txt" => "1"})
+      result = snapshot_tree(project, %{"a.txt" => "2"})
+      proposal = meld_proposal(project, owner, [parent, node_with_snapshot(project, %{})], result)
+
+      assert ProposalCache.size() == 0
+
+      assert {:ok, view} = ProposalView.result(project, proposal)
+      assert ProposalCache.size() == 1
+
+      assert {:ok, ^view} = ProposalView.result(project, proposal)
+      assert ProposalCache.size() == 1
+    end
+
+    test "serves a seeded payload without recomputing", %{owner: owner, project: project} do
+      parent = node_with_snapshot(project, %{"a.txt" => "1"})
+      result = snapshot_tree(project, %{"a.txt" => "2"})
+      proposal = meld_proposal(project, owner, [parent, node_with_snapshot(project, %{})], result)
+
+      sentinel = %{
+        quarantined?: false,
+        truncated?: true,
+        hidden_count: 7,
+        summary: %{added: 0, modified: 0, deleted: 0},
+        files: [%{path: "sentinel.txt", status: :added}]
+      }
+
+      assert {:ok, key} = ProposalView.result_cache_key(project, proposal)
+      assert :ok = ProposalCache.put(key, sentinel)
+
+      # A real render would return the a.txt diff, so this proves the second
+      # call reads the cache instead of walking the store.
+      assert {:ok, ^sentinel} = ProposalView.result(project, proposal)
+    end
+
+    test "does not cache errors", %{owner: owner, project: project} do
+      parent = node_with_snapshot(project, %{"a.txt" => "a"})
+      result = snapshot_tree(project, %{"a.txt" => "b"})
+      bogus = String.duplicate("b", 40)
+
+      missing =
+        meld_proposal(project, owner, [parent, node_with_snapshot(project, %{})], result, %{
+          meld_commit_sha: bogus,
+          result_tree_sha: bogus
+        })
+
+      assert ProposalView.result(project, missing) == {:error, :missing_objects}
+      assert ProposalCache.size() == 0
+
+      oversized_result =
+        snapshot_tree(project, %{"large.txt" => String.duplicate("a", 70_000)})
+
+      oversized =
+        meld_proposal(
+          project,
+          owner,
+          [parent, node_with_snapshot(project, %{})],
+          oversized_result
+        )
+
+      assert ProposalView.result(project, oversized) == {:error, :too_large}
+      assert ProposalCache.size() == 0
+    end
+
+    test "does not cache promotions", %{owner: owner, project: project} do
+      node = node_with_snapshot(project, %{"a.txt" => "a"})
+      proposal = promotion_proposal(project, owner, node)
+
+      assert ProposalView.result(project, proposal) == :none
+      assert ProposalCache.size() == 0
+      assert ProposalView.result_cache_key(project, proposal) == :no_cache
+    end
+
+    test "a non-positive entry bound disables caching", %{owner: owner, project: project} do
+      parent = node_with_snapshot(project, %{"a.txt" => "1"})
+      result = snapshot_tree(project, %{"a.txt" => "2"})
+      proposal = meld_proposal(project, owner, [parent, node_with_snapshot(project, %{})], result)
+
+      restore_env(:proposal_cache_entries)
+      Application.put_env(:cadence_server, :proposal_cache_entries, 0)
+
+      refute ProposalCache.enabled?()
+
+      assert {:ok, view} = ProposalView.result(project, proposal)
+      assert view.files == [%{path: "a.txt", status: :modified}]
+
+      # `size/0` reports 0 whenever disabled, so read the table directly and
+      # probe the exact key to prove `put/2` really was a no-op.
+      assert {:ok, key} = ProposalView.result_cache_key(project, proposal)
+      assert ProposalCache.get(key) == :miss
+      assert :ets.info(:cadence_proposal_cache, :size) == 0
+    end
+
+    test "does not cache a parent-side overflow", %{owner: owner, project: project} do
+      parent = node_with_snapshot(project, %{"large.txt" => String.duplicate("a", 70_000)})
+      result = snapshot_tree(project, %{"small.txt" => "small"})
+      proposal = meld_proposal(project, owner, [parent, node_with_snapshot(project, %{})], result)
+
+      assert ProposalView.result(project, proposal) == {:error, :too_large}
+
+      assert {:ok, key} = ProposalView.result_cache_key(project, proposal)
+      assert ProposalCache.get(key) == :miss
+      assert ProposalCache.size() == 0
+    end
+
+    test "verify_resolution re-scans instead of trusting a cached payload", %{
+      owner: owner,
+      project: project
+    } do
+      parent = node_with_snapshot(project, %{"a.txt" => "1"})
+      result = snapshot_tree(project, %{"a.txt" => "2"})
+      proposal = meld_proposal(project, owner, [parent, node_with_snapshot(project, %{})], result)
+      incident = open_incident(project, proposal)
+
+      sentinel = %{
+        quarantined?: true,
+        truncated?: false,
+        hidden_count: 0,
+        summary: %{added: 0, modified: 0, deleted: 0},
+        files: []
+      }
+
+      assert {:ok, key} = ProposalView.result_cache_key(project, proposal)
+      assert :ok = ProposalCache.put(key, sentinel)
+      assert ProposalCache.get(key) == {:ok, sentinel}
+
+      # A cache reader would report `:still_risky` from the sentinel; the
+      # resolution path re-walks the real (clean) result instead.
+      assert ProposalView.verify_resolution(incident) == :ok
+    end
+
+    test "evicts the oldest insertion when the bound is reached" do
+      restore_env(:proposal_cache_entries)
+      Application.put_env(:cadence_server, :proposal_cache_entries, 2)
+
+      payload = %{quarantined?: false, files: []}
+
+      ProposalCache.clear()
+      assert :ok = ProposalCache.put(:first, payload)
+      assert :ok = ProposalCache.put(:second, payload)
+      assert :ok = ProposalCache.put(:third, payload)
+
+      assert ProposalCache.size() == 2
+      assert ProposalCache.get(:first) == :miss
+      assert {:ok, ^payload} = ProposalCache.get(:second)
+      assert {:ok, ^payload} = ProposalCache.get(:third)
+    end
+
+    test "the key includes the visible-file cap", %{owner: owner, project: project} do
+      parent = node_with_snapshot(project, %{"a.txt" => "1"})
+      result = snapshot_tree(project, %{"a.txt" => "2"})
+      proposal = meld_proposal(project, owner, [parent, node_with_snapshot(project, %{})], result)
+
+      assert {:ok, default_key} = ProposalView.result_cache_key(project, proposal)
+      assert {:ok, capped_key} = ProposalView.result_cache_key(project, proposal, max_files: 1)
+
+      refute default_key == capped_key
+    end
+
+    test "the key includes the scan caps", %{owner: owner, project: project} do
+      parent = node_with_snapshot(project, %{"a.txt" => "1"})
+      result = snapshot_tree(project, %{"a.txt" => "2"})
+      proposal = meld_proposal(project, owner, [parent, node_with_snapshot(project, %{})], result)
+
+      assert {:ok, default_key} = ProposalView.result_cache_key(project, proposal)
+
+      restore_env(:scan_max_files)
+      Application.put_env(:cadence_server, :scan_max_files, 999)
+
+      assert {:ok, narrowed_key} = ProposalView.result_cache_key(project, proposal)
+
+      refute default_key == narrowed_key
+    end
+  end
+
   describe "parents/1" do
     test "returns parents in parent_ids order and drops foreign nodes", %{
       owner: owner,
@@ -301,5 +485,18 @@ defmodule Cadence.Server.ProposalViewTest do
       })
 
     incident
+  end
+
+  # Restore a server config key exactly (unset stays unset), so a test that
+  # narrows a cap cannot leak it into later tests.
+  defp restore_env(key) do
+    previous = Application.get_env(:cadence_server, key)
+
+    on_exit(fn ->
+      case previous do
+        nil -> Application.delete_env(:cadence_server, key)
+        value -> Application.put_env(:cadence_server, key, value)
+      end
+    end)
   end
 end

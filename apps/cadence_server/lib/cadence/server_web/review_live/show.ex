@@ -14,13 +14,15 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
 
   Authorization runs in `handle_params/3` (a refused visitor must be redirected)
   while the review payload is loaded with `assign_async/3`, so the expiring
-  work — two capped blob walks and the integrity walk — never runs in `mount/3`.
+  work — the capped result walks and the integrity walk — never runs in
+  `mount/3`. An isolated proposal skips the result walks entirely.
 
   ## Freshness
 
-  The payload (including `isolated?` and the result diff) is recomputed on every
-  `handle_params`, after every decision, and when the project topic announces
-  this proposal's decision or an incident that touches it. An incident is
+  The payload (including `isolated?`, and the result diff when the result is not
+  isolated) is recomputed on every `handle_params`, after every decision, and
+  when the project topic announces this proposal's decision or an incident that
+  touches it. An incident is
   relevant when it is proposal-linked, or when it quarantines the node approval
   would promote/attach (`Proposals.decision_node/1`): that node blocks the
   decision even though it does not isolate the result. Incidents on unrelated
@@ -441,6 +443,7 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
       Accounts.users_by_ids(Enum.reject([proposal.proposer_id, proposal.reviewer_id], &is_nil/1))
 
     decision_node = Proposals.decision_node(proposal)
+    isolated? = ProposalView.isolated?(proposal)
 
     %{
       proposal: proposal,
@@ -448,8 +451,11 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
       reviewer: Map.get(identities, proposal.reviewer_id),
       parents: ProposalView.parents(proposal),
       target_node: ProposalView.target_node(proposal),
-      isolated?: ProposalView.isolated?(proposal),
-      result: ProposalView.result(project, proposal),
+      isolated?: isolated?,
+      # Isolation hides the result, so its walks and cache entry would be dead
+      # work; the template's first branch and both decision helpers read
+      # `isolated?` before `result`.
+      result: if(isolated?, do: nil, else: ProposalView.result(project, proposal)),
       integrity: Proposals.result_integrity(project.id, proposal),
       result_node: Proposals.result_node(proposal),
       # The context refuses approval when an open critical incident quarantines

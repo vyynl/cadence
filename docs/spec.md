@@ -886,7 +886,10 @@ resolved, every result blob — including blobs behind filtered path names — i
 re-scanned, so a secret hidden by its filename still keeps the incident open.
 Content rendering on the review surface remains deferred; when it lands, this
 scope must be revisited so a hidden path's content cannot leak through a
-different surface.
+different surface. Rendered result payloads are cached in-process by content
+key (result commit, first parent, and the scan/file caps), so approving or
+rejecting a proposal does not invalidate them. Isolation is never cached: it is
+an incident-derived answer and is checked before the result payload.
 
 This is best-effort defense-in-depth, not a guarantee. Owners must still rotate
 any secret that was ever committed. Per-project scan allowlists/overrides are
@@ -1818,6 +1821,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_README_MAX_BYTES` | no | `262144` | Max README bytes rendered publicly |
 | `CAD_TREE_MAX_ENTRIES` | no | `1000` | Max directory entries returned by the repo browser |
 | `CAD_PROPOSAL_MAX_FILES` | no | `200` | Max changed files listed on a public proposal page |
+| `CAD_PROPOSAL_CACHE_ENTRIES` | no | `256` | Max cached public proposal-result payloads (`0` disables) |
 | `CAD_SCAN_MAX_FILES` | no | `10000` | Max files scanned for secret quarantine |
 | `CAD_SCAN_MAX_BYTES` | no | `16777216` | Max snapshot bytes scanned for secret quarantine |
 | `CAD_REPACK_ENABLED` | no | `true` | Server repo repacking (pack + deferred loose sweep) |

@@ -17,6 +17,7 @@ defmodule Cadence.Server.Application do
       Cadence.Server.Actions.Retention,
       Cadence.Server.Storage.TaskSupervisor,
       Cadence.Server.Storage.Repacker,
+      Cadence.Server.ProposalCache,
       Cadence.ServerWeb.Endpoint
     ]
 
