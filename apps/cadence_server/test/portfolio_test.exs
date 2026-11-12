@@ -113,6 +113,25 @@ defmodule Cadence.Server.PortfolioTest do
       assert Portfolio.preview_node(project.id).id == functioning.id
     end
 
+    test "prefers the newest of two functioning nodes" do
+      project = insert_project()
+
+      insert_node(project, %{
+        flags: [:functioning],
+        message: "older functioning",
+        created_at: ~U[2026-10-20 00:00:00Z]
+      })
+
+      newer =
+        insert_node(project, %{
+          flags: [:functioning],
+          message: "newer functioning",
+          created_at: ~U[2026-10-24 00:00:00Z]
+        })
+
+      assert Portfolio.preview_node(project.id).id == newer.id
+    end
+
     test "falls back to the newest node" do
       project = insert_project()
 
@@ -137,8 +156,83 @@ defmodule Cadence.Server.PortfolioTest do
       assert Portfolio.preview_node(project.id) == nil
     end
 
+    test "prefers the newest pinned node over an older pinned functioning node" do
+      project = insert_project()
+
+      insert_node(project, %{
+        pinned: true,
+        flags: [:functioning],
+        message: "older pinned functioning",
+        created_at: ~U[2026-10-20 00:00:00Z]
+      })
+
+      newer =
+        insert_node(project, %{
+          pinned: true,
+          flags: [:"in-progress"],
+          message: "newer pinned",
+          created_at: ~U[2026-10-24 00:00:00Z]
+        })
+
+      assert Portfolio.preview_node(project.id).id == newer.id
+    end
+
+    test "prefers a pinned functioning node over a newer unpinned functioning node" do
+      project = insert_project()
+
+      pinned =
+        insert_node(project, %{
+          pinned: true,
+          flags: [:functioning],
+          message: "pinned functioning",
+          created_at: ~U[2026-10-20 00:00:00Z]
+        })
+
+      insert_node(project, %{
+        flags: [:functioning],
+        message: "newer unpinned functioning",
+        created_at: ~U[2026-10-24 00:00:00Z]
+      })
+
+      assert Portfolio.preview_node(project.id).id == pinned.id
+    end
+
     test "returns nil for an invalid project id" do
       assert Portfolio.preview_node("not-a-uuid") == nil
+    end
+
+    test "resolves the precedence in exactly one nodes query" do
+      attach_node_query_counter()
+      project = insert_project()
+
+      # No pinned and no functioning node: the old three-step resolver issued a
+      # query per precedence step here, so a count of one pins the fold.
+      insert_node(project, %{
+        flags: [:"in-progress"],
+        message: "older",
+        created_at: ~U[2026-10-20 00:00:00Z]
+      })
+
+      insert_node(project, %{
+        flags: [:broken],
+        message: "middle",
+        created_at: ~U[2026-10-22 00:00:00Z]
+      })
+
+      newest =
+        insert_node(project, %{
+          flags: [],
+          message: "newest",
+          created_at: ~U[2026-10-24 00:00:00Z]
+        })
+
+      # The seeding inserts emit node queries too; drop them so the count below
+      # measures only the resolver.
+      _ = node_query_count()
+
+      assert %Node{id: id} = Portfolio.preview_node(project.id)
+      assert id == newest.id
+      assert node_query_count() == 1
     end
   end
 
@@ -393,6 +487,39 @@ defmodule Cadence.Server.PortfolioTest do
       assert project_id == project.id
       assert Portfolio.membership_for(Ecto.UUID.generate(), project.id) == nil
       assert Portfolio.membership_for("nope", project.id) == nil
+    end
+  end
+
+  # Counts statements against the `nodes` table. Ecto derives the event prefix
+  # from the repo module name (not `otp_app`): `Cadence.Server.Repo` →
+  # `[:cadence, :server, :repo, :query]`. Attached only by the query-count test
+  # and detached on exit, so the handler never outlives that test.
+  defp attach_node_query_counter do
+    test_pid = self()
+    handler_id = {__MODULE__, make_ref()}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:cadence, :server, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:source] == "nodes" do
+            send(test_pid, {:node_query, metadata.query})
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+  end
+
+  # Queries run in the caller under the sandbox, so the handler has already run
+  # and the message is in our own mailbox — `after 0` is enough.
+  defp node_query_count(acc \\ 0) do
+    receive do
+      {:node_query, _query} -> node_query_count(acc + 1)
+    after
+      0 -> acc
     end
   end
 

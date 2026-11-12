@@ -118,7 +118,7 @@ defmodule Cadence.Server.Portfolio do
   @doc """
   List a project's nodes, newest first with a deterministic tie-break.
 
-  Used by the full public DAG and the preview resolver.
+  Used by the full public DAG.
   """
   @spec list_nodes(Ecto.UUID.t() | String.t()) :: [Node.t()]
   def list_nodes(project_id) do
@@ -131,20 +131,33 @@ defmodule Cadence.Server.Portfolio do
 
   @doc """
   Resolve the preview node (spec §4.4): pinned, then functioning, then newest.
+
+  Precedence is a three-tier `ORDER BY` expression — the pinned tier, then the
+  functioning tier, then everything else — with `created_at DESC, id DESC` as
+  the recency tie-break inside each tier, so one `LIMIT 1` statement resolves
+  it. Returns `nil` for an unknown/invalid project.
   """
   @spec preview_node(Ecto.UUID.t() | String.t()) :: Node.t() | nil
   def preview_node(project_id) do
     with {:ok, project_id} <- UUID.cast(project_id) do
-      ordered = ordered_nodes(project_id)
-
-      Repo.one(from(n in ordered, where: n.pinned == true, limit: 1)) ||
-        Repo.one(
-          from(n in ordered,
-            where: fragment("? = ANY(?)", "functioning", n.flags),
-            limit: 1
-          )
-        ) ||
-        Repo.one(from(n in ordered, limit: 1))
+      Repo.one(
+        from(n in Node,
+          where: n.project_id == ^project_id,
+          order_by: [
+            asc:
+              fragment(
+                "CASE WHEN ? THEN 0 WHEN ? THEN 1 ELSE 2 END",
+                n.pinned,
+                # The dumped value of `:functioning`; keep in step with
+                # `Cadence.Shared.Node.flags/0`.
+                fragment("? = ANY(?)", "functioning", n.flags)
+              ),
+            desc: n.created_at,
+            desc: n.id
+          ],
+          limit: 1
+        )
+      )
     else
       :error -> nil
     end
