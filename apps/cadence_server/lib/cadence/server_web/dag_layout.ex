@@ -71,8 +71,12 @@ defmodule Cadence.ServerWeb.DAGLayout do
     default_id = resolve_default(opts[:default_id], nodes, placed)
     lineage = lineage_ids(default_id, by_id)
 
+    # No default means no lineage to animate: keep the timing at zero instead
+    # of delaying the pane for an intro that draws nothing.
+    effective_intro_ms = if default_id == nil, do: 0, else: intro_ms
+
     {pulse_delay, rest_delay, pane_delay, edge_duration, step} =
-      intro_timing(intro_ms, lineage, depths)
+      intro_timing(effective_intro_ms, lineage, depths)
 
     placed_nodes =
       nodes
@@ -94,6 +98,10 @@ defmodule Cadence.ServerWeb.DAGLayout do
 
     edges =
       DAG.edges(nodes)
+      # A trimmed node list (the render cap, §7.3) still carries edges from
+      # parents outside the window: keep a boundary child attached to its
+      # rendered parent, and drop the phantom edge to the missing parent.
+      |> Enum.filter(&Map.has_key?(placed, &1.from))
       |> Enum.map(fn edge ->
         from = Map.fetch!(placed, edge.from)
         to = Map.fetch!(placed, edge.to)
@@ -121,7 +129,7 @@ defmodule Cadence.ServerWeb.DAGLayout do
       width: @margin_x * 2 + (used_columns - 1) * @x_spacing,
       height: height,
       default_id: default_id,
-      intro_ms: intro_ms,
+      intro_ms: effective_intro_ms,
       pulse_delay: pulse_delay,
       rest_delay: rest_delay,
       pane_delay: pane_delay,

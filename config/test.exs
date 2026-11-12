@@ -72,6 +72,8 @@ config :cadence_server,
   # ordering regression still fails loudly there.
   sync_rate_limit: 0,
   dag_intro_ms: 0,
+  dag_max_nodes: 150,
+  dag_intro_max_nodes: 60,
   file_max_bytes: 4096,
   file_max_lines: 100,
   readme_max_bytes: 4096,

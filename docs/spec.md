@@ -752,6 +752,15 @@ becomes a product requirement; it is not part of Phase 3.
    (capped by the max), so a small graph never overflows the rail; horizontal
    scrolling appears only when the graph is wider than it (§7.3).
 
+**Render cap:** the public project page renders only the newest
+`CAD_DAG_MAX_NODES` nodes (default 150, §12.6); when the project has more, the
+page shows "Showing the newest N of M commits". Older commits stay in the data
+and remain reachable by direct node URL. The intro animation is skipped when the
+project has more nodes than `CAD_DAG_INTRO_MAX_NODES` (default 60, §12.6). A node
+whose parent falls outside the window is placed at depth 1 (as if the first
+trimmed parent were a root) and its boundary edge is omitted, so the web row
+spacing can differ from the daemon/picker depth for those nodes.
+
 **Interactivity:** LiveView owns selection state. Hover shows a CSS tooltip
 with the commit message and node status (flags/pinned) and highlights the node;
 hover does not change the right pane. Click selects the node, patches the URL,
@@ -1817,6 +1826,8 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_SYNC_RATE_LIMIT` | no | `300` | Max `/sync/*` requests per authenticated user per window (a non-positive value disables the bound) |
 | `CAD_SYNC_RATE_SCALE` | no | `60000` | `/sync/*` rate window in milliseconds (non-positive or non-integer falls back to the default) |
 | `CAD_DAG_INTRO_MS` | no | `1200` | First-load DAG/repo intro animation duration |
+| `CAD_DAG_MAX_NODES` | no | `150` | Newest nodes rendered in the public project DAG (older nodes stay in the data and remain reachable by node URL; a non-positive value falls back to the default) |
+| `CAD_DAG_INTRO_MAX_NODES` | no | `60` | Skip the DAG intro animation when the project has more nodes than this (a non-positive value falls back to the default) |
 | `CAD_FILE_MAX_BYTES` | no | `524288` | Max bytes rendered in the public file viewer |
 | `CAD_FILE_MAX_LINES` | no | `2000` | Max lines rendered in the public file viewer |
 | `CAD_README_MAX_BYTES` | no | `262144` | Max README bytes rendered publicly |
@@ -2360,6 +2371,12 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       `nodes_pushed` remains deferred: `DAGLayout.layout/2` recomputes intro
       timing, so a live refresh would replay the animation and disturb the
       selected pane.
+- [ ] **DAG render-window selection affordance (Phase 9d):** a selected node
+      outside the newest `CAD_DAG_MAX_NODES` window (a direct node URL or an old
+      pinned preview) still opens in the pane, but it cannot be highlighted in
+      the SVG because it is not placed (§7.3). 9d's History list and pane
+      slice add the affordance. The rendered count and truncation note refresh
+      on navigation, not on `nodes_pushed`.
 - [x] **Doc agent model:** resolved for Phase 5 — the doc agent uses the
       configured `CAD_LLM_*` client through `Cadence.Shared.LLM`; per-project
       model overrides remain deferred.

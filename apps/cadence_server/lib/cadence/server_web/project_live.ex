@@ -115,11 +115,17 @@ defmodule Cadence.ServerWeb.ProjectLive do
         </header>
 
         <div class="project-home">
-          <DAG.dag
-            layout={@dag_layout}
-            selected_id={@selected_node && @selected_node.id}
-            project_slug={@project.slug}
-          />
+          <div class="dag-rail">
+            <p :if={@node_total > @dag_layout.count} class="note">
+              Showing the newest {@dag_layout.count} of {@node_total} commits.
+            </p>
+
+            <DAG.dag
+              layout={@dag_layout}
+              selected_id={@selected_node && @selected_node.id}
+              project_slug={@project.slug}
+            />
+          </div>
 
           <NodePane.pane
             project={@project}

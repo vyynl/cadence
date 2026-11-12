@@ -118,14 +118,41 @@ defmodule Cadence.Server.Portfolio do
   @doc """
   List a project's nodes, newest first with a deterministic tie-break.
 
-  Used by the full public DAG.
+  Used by the public DAG. Options:
+
+    * `:limit` — a positive integer caps the result; anything else (missing,
+      non-integer, zero, or negative) means no limit.
+    * `:offset` — a positive integer skips that many rows. It is only applied
+      together with a limit: an offset without a limit is ignored, because
+      there is no page to offset within.
+
+  Returns `[]` for an unknown or invalid project.
   """
-  @spec list_nodes(Ecto.UUID.t() | String.t()) :: [Node.t()]
-  def list_nodes(project_id) do
+  @spec list_nodes(Ecto.UUID.t() | String.t(), keyword()) :: [Node.t()]
+  def list_nodes(project_id, opts \\ []) do
     with {:ok, project_id} <- UUID.cast(project_id) do
-      Repo.all(ordered_nodes(project_id))
+      Repo.all(page_query(ordered_nodes(project_id), opts))
     else
       :error -> []
+    end
+  end
+
+  @doc """
+  Count a project's nodes.
+
+  One aggregate query; an unknown or invalid project has zero nodes.
+  """
+  @spec count_nodes(Ecto.UUID.t() | String.t()) :: non_neg_integer()
+  def count_nodes(project_id) do
+    with {:ok, project_id} <- UUID.cast(project_id) do
+      Repo.one(
+        from(n in Node,
+          where: n.project_id == ^project_id,
+          select: count(n.id)
+        )
+      )
+    else
+      :error -> 0
     end
   end
 
@@ -491,4 +518,23 @@ defmodule Cadence.Server.Portfolio do
       order_by: [desc: n.created_at, desc: n.id]
     )
   end
+
+  defp page_query(query, opts) do
+    case Keyword.get(opts, :limit) do
+      page_size when is_integer(page_size) and page_size > 0 ->
+        skip = page_offset(Keyword.get(opts, :offset))
+
+        query
+        |> limit(^page_size)
+        |> offset(^skip)
+
+      _ ->
+        # Without a limit there is no page, so an offset alone is ignored
+        # rather than silently dropping the newest rows.
+        query
+    end
+  end
+
+  defp page_offset(value) when is_integer(value) and value > 0, do: value
+  defp page_offset(_value), do: 0
 end

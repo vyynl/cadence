@@ -34,7 +34,58 @@ defmodule Cadence.ServerWeb.DAGLayoutTest do
       assert Enum.all?(layout.edges, & &1.intro?)
       assert Enum.all?(layout.nodes, & &1.intro?)
       assert layout.pulse_delay == 550
+      assert layout.rest_delay == 950
       assert layout.pane_delay == 950
+    end
+
+    test "lays out a trimmed window whose boundary parent is missing" do
+      # A→B→C rendered as only the newest two nodes: B keeps its trimmed
+      # parent's depth offset, and the phantom A→B edge is dropped.
+      nodes = [
+        node("c", ["b"], created_at: @t0),
+        node("b", ["a"], created_at: @t0)
+      ]
+
+      layout = DAGLayout.layout(nodes, default_id: "c", intro_ms: 1000)
+
+      assert layout.count == 2
+      assert [b, c] = layout.nodes
+      assert b.id == "b"
+      assert c.id == "c"
+      assert b.depth == 1
+      assert c.depth == 2
+      assert b.y < c.y
+      assert [%{from: "b", to: "c"}] = layout.edges
+    end
+
+    test "keeps a meld's rendered parent and drops the trimmed one" do
+      nodes = [
+        node("kept", [], created_at: @t0),
+        node("meld", ["kept", "trimmed"], created_at: DateTime.add(@t0, 1, :second))
+      ]
+
+      layout = DAGLayout.layout(nodes, default_id: "meld", intro_ms: 0)
+
+      kept = Enum.find(layout.nodes, &(&1.id == "kept"))
+      meld = Enum.find(layout.nodes, &(&1.id == "meld"))
+
+      assert meld.depth == kept.depth + 1
+      assert [%{from: "kept", to: "meld"}] = layout.edges
+    end
+
+    test "ignores a default id outside the rendered window" do
+      nodes = [
+        node("b", ["a"], created_at: @t0),
+        node("c", ["b"], created_at: DateTime.add(@t0, 1, :second))
+      ]
+
+      layout = DAGLayout.layout(nodes, default_id: "a", intro_ms: 1000)
+
+      assert layout.default_id == nil
+      assert layout.intro_ms == 0
+      assert layout.pulse_delay == 0
+      assert layout.rest_delay == 0
+      assert layout.pane_delay == 0
     end
 
     test "orders branches and melds" do

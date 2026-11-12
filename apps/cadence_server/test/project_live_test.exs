@@ -979,6 +979,150 @@ defmodule Cadence.ServerWeb.ProjectLiveTest do
     end
   end
 
+  describe "DAG scale" do
+    test "caps the DAG and shows the note only past the cap", %{conn: conn} do
+      put_config(:dag_max_nodes, 2)
+      project = insert_project("dag-cap")
+
+      first =
+        insert_bare_node(project, %{message: "cap one", created_at: ~U[2026-10-20 00:00:00Z]})
+
+      second =
+        insert_bare_node(project, %{
+          message: "cap two",
+          parents: [first.id],
+          created_at: ~U[2026-10-21 00:00:00Z]
+        })
+
+      {:ok, _view, html} = live(conn, "/p/dag-cap")
+
+      assert dag_node_count(html) == 2
+      refute html =~ "Showing the newest"
+
+      insert_bare_node(project, %{
+        message: "cap three",
+        parents: [second.id],
+        created_at: ~U[2026-10-22 00:00:00Z]
+      })
+
+      {:ok, _view, html} = live(conn, "/p/dag-cap")
+
+      assert dag_node_count(html) == 2
+      assert length(Regex.scan(~r/class="dag-edge /, html)) == 1
+      assert html =~ "Showing the newest 2 of 3 commits."
+      assert html =~ "cap three"
+      refute html =~ "cap one"
+    end
+
+    test "skips the intro above dag_intro_max_nodes", %{conn: conn} do
+      put_config(:dag_intro_ms, 1000)
+      put_config(:dag_intro_max_nodes, 60)
+
+      at_threshold = insert_project("intro-60")
+      insert_bare_nodes(at_threshold, 60)
+
+      {:ok, _view, html} = live(conn, "/p/intro-60")
+
+      assert html =~ "--pane-delay: 950ms"
+
+      above_threshold = insert_project("intro-61")
+      insert_bare_nodes(above_threshold, 61)
+
+      {:ok, _view, html} = live(conn, "/p/intro-61")
+
+      assert html =~ "--pane-delay: 0ms"
+    end
+
+    test "a deep link to a node older than the cap still renders the pane", %{conn: conn} do
+      put_config(:dag_max_nodes, 2)
+      project = insert_project("dag-deep-link")
+
+      old =
+        insert_bare_node(project, %{
+          message: "old deploy token: ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+          created_at: ~U[2026-10-20 00:00:00Z]
+        })
+
+      insert_bare_node(project, %{message: "middle", created_at: ~U[2026-10-21 00:00:00Z]})
+      insert_bare_node(project, %{message: "newest", created_at: ~U[2026-10-22 00:00:00Z]})
+
+      {:ok, view, html} = live(conn, "/p/dag-deep-link/n/#{old.id}")
+
+      assert has_element?(view, "div#node-pane-#{old.id}-node-[phx-update=replace]")
+      assert html =~ "[REDACTED]"
+      refute html =~ "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+      assert html =~ "Showing the newest 2 of 3 commits."
+    end
+
+    test "a pinned node older than the cap is still the default selection", %{conn: conn} do
+      put_config(:dag_max_nodes, 2)
+      project = insert_project("dag-pinned-old")
+
+      pinned =
+        insert_bare_node(project, %{
+          message: "pinned old",
+          pinned: true,
+          created_at: ~U[2026-10-20 00:00:00Z]
+        })
+
+      insert_bare_node(project, %{message: "middle", created_at: ~U[2026-10-21 00:00:00Z]})
+      insert_bare_node(project, %{message: "newest", created_at: ~U[2026-10-22 00:00:00Z]})
+
+      {:ok, view, html} = live(conn, "/p/dag-pinned-old")
+
+      assert has_element?(view, "div#node-pane-#{pinned.id}-node-[phx-update=replace]")
+      assert html =~ "pinned old"
+    end
+
+    test "an event after selecting a node older than the cap keeps it selected", %{conn: conn} do
+      put_config(:dag_max_nodes, 2)
+      owner = seed_user("dag-retain@example.com", "Owner")
+      project = insert_project("dag-retain", owner.id)
+      insert_membership(project, owner, :owner)
+
+      old =
+        insert_node(
+          project,
+          %{message: "old selected", created_at: ~U[2026-10-20 00:00:00Z]},
+          %{"README.md" => "# Old\n"}
+        )
+
+      insert_node(
+        project,
+        %{message: "middle", created_at: ~U[2026-10-21 00:00:00Z]},
+        %{"README.md" => "# Middle\n"}
+      )
+
+      newest =
+        insert_node(
+          project,
+          %{message: "newest", created_at: ~U[2026-10-22 00:00:00Z]},
+          %{"README.md" => "# Newest\n"}
+        )
+
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/dag-retain/n/#{old.id}")
+
+      assert has_element?(view, "div#node-pane-#{old.id}-node-[phx-update=replace]")
+
+      # The `{:nodes_pushed, ...}` half only proves that event path does not
+      # touch the selection; the `toggle_pin` half is the `reload_dag/1`
+      # assertion.
+      Phoenix.PubSub.broadcast(
+        Cadence.Server.PubSub,
+        "project:#{project.id}",
+        {:nodes_pushed, project.id, [newest.id]}
+      )
+
+      assert has_element?(view, "div#node-pane-#{old.id}-node-[phx-update=replace]")
+
+      # A pin rebuilds the layout; it must keep the existing selection too.
+      render_click(view, "toggle_pin", %{"id" => newest.id})
+
+      assert has_element?(view, "div#node-pane-#{old.id}-node-[phx-update=replace]")
+      assert Repo.get!(Node, newest.id).pinned
+    end
+  end
+
   test "renders the empty state", %{conn: conn} do
     insert_project("empty")
     {:ok, view, html} = live(conn, "/p/empty")
@@ -1020,7 +1164,64 @@ defmodule Cadence.ServerWeb.ProjectLiveTest do
              "LiveView"
 
     assert conn |> get("/assets/js/app.js") |> response(200) =~ "LiveSocket"
-    assert conn |> get("/assets/css/app.css") |> response(200) =~ ".project-home"
+
+    css = conn |> get("/assets/css/app.css") |> response(200)
+    assert css =~ ".project-home"
+    assert css =~ ".dag-rail"
+  end
+
+  defp put_config(key, value) do
+    previous = Application.get_env(:cadence_server, key)
+
+    Application.put_env(:cadence_server, key, value)
+
+    on_exit(fn ->
+      if previous == nil do
+        Application.delete_env(:cadence_server, key)
+      else
+        Application.put_env(:cadence_server, key, previous)
+      end
+    end)
+  end
+
+  # A row-only node is enough for layout/cap tests: no snapshot means the pane
+  # renders the header and a quarantine notice, which is all these assert.
+  defp insert_bare_node(project, attrs) do
+    attrs =
+      Map.merge(
+        %{
+          project_id: project.id,
+          git_commit_sha: String.duplicate("b", 40),
+          created_by: project.owner_id,
+          created_at: DateTime.utc_now(),
+          docs_state: :pending,
+          flags: [:"in-progress"],
+          message: "node"
+        },
+        attrs
+      )
+
+    %Node{}
+    |> Node.changeset(attrs)
+    |> Repo.insert!()
+  end
+
+  defp insert_bare_nodes(project, count) do
+    base = ~U[2026-10-20 00:00:00Z]
+
+    Enum.map(1..count, fn index ->
+      insert_bare_node(project, %{
+        message: "node #{index}",
+        created_at: DateTime.add(base, index, :second)
+      })
+    end)
+  end
+
+  defp dag_node_count(html) do
+    html
+    |> String.split(~s(class="dag-node ))
+    |> length()
+    |> Kernel.-(1)
   end
 
   defp seed_user(email, name) do

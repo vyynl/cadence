@@ -74,6 +74,68 @@ defmodule Cadence.Server.PortfolioTest do
     end
   end
 
+  describe "list_nodes/2" do
+    test "limit and offset page through nodes in newest-first order" do
+      project = insert_project()
+      [newest, second, third, oldest] = Enum.reverse(insert_ordered_nodes(project, 4))
+
+      assert ids(Portfolio.list_nodes(project.id, limit: 2)) == [newest.id, second.id]
+
+      assert ids(Portfolio.list_nodes(project.id, limit: 2, offset: 1)) ==
+               [second.id, third.id]
+
+      assert ids(Portfolio.list_nodes(project.id, limit: 2, offset: 2)) ==
+               [third.id, oldest.id]
+    end
+
+    test "limit without offset and offset without limit" do
+      project = insert_project()
+      nodes = insert_ordered_nodes(project, 3)
+
+      # `list_nodes/1` keeps its no-limit behavior.
+      assert ids(Portfolio.list_nodes(project.id)) == Enum.map(Enum.reverse(nodes), & &1.id)
+
+      # An offset needs a page to offset within, so it is ignored alone.
+      assert ids(Portfolio.list_nodes(project.id, offset: 1)) ==
+               Enum.map(Enum.reverse(nodes), & &1.id)
+
+      # Non-positive or non-integer bounds fall back to "no limit".
+      assert ids(Portfolio.list_nodes(project.id, limit: 0)) ==
+               Enum.map(Enum.reverse(nodes), & &1.id)
+
+      assert ids(Portfolio.list_nodes(project.id, limit: -1)) ==
+               Enum.map(Enum.reverse(nodes), & &1.id)
+
+      assert ids(Portfolio.list_nodes(project.id, limit: nil)) ==
+               Enum.map(Enum.reverse(nodes), & &1.id)
+    end
+
+    test "returns [] for an invalid project id even with paging" do
+      assert Portfolio.list_nodes("not-a-uuid", limit: 2, offset: 1) == []
+    end
+  end
+
+  describe "count_nodes/1" do
+    test "counts only the project's nodes" do
+      project = insert_project()
+      other = insert_project("other")
+
+      insert_ordered_nodes(project, 3)
+      insert_node(other, %{message: "other"})
+
+      assert Portfolio.count_nodes(project.id) == 3
+      assert Portfolio.count_nodes(other.id) == 1
+    end
+
+    test "returns 0 for an empty, unknown, or invalid project" do
+      empty = insert_project("empty")
+
+      assert Portfolio.count_nodes(empty.id) == 0
+      assert Portfolio.count_nodes(Ecto.UUID.generate()) == 0
+      assert Portfolio.count_nodes("not-a-uuid") == 0
+    end
+  end
+
   describe "preview_node/1" do
     test "prefers a pinned node over a newer functioning node" do
       project = insert_project()
@@ -521,6 +583,20 @@ defmodule Cadence.Server.PortfolioTest do
     after
       0 -> acc
     end
+  end
+
+  defp ids(nodes), do: Enum.map(nodes, & &1.id)
+
+  # Oldest first, one minute apart, so ordering is independent of insert order.
+  defp insert_ordered_nodes(project, count) do
+    base = ~U[2026-10-24 12:00:00Z]
+
+    Enum.map(1..count, fn index ->
+      insert_node(project, %{
+        message: "node #{index}",
+        created_at: DateTime.add(base, index, :minute)
+      })
+    end)
   end
 
   defp insert_project(slug \\ "demo") do

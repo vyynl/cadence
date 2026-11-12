@@ -273,6 +273,7 @@ defmodule Cadence.ServerWeb.ProjectPane do
       canonical_url: nil,
       project: nil,
       dag_layout: DAGLayout.layout([]),
+      node_total: 0,
       selected_node: nil,
       docs_child: nil,
       actions: nil,
@@ -303,15 +304,19 @@ defmodule Cadence.ServerWeb.ProjectPane do
 
     nodes =
       project.id
-      |> Portfolio.list_nodes()
+      |> Portfolio.list_nodes(limit: dag_max_nodes())
       |> Enum.map(&redact_node/1)
 
+    node_total = Portfolio.count_nodes(project.id)
     preview = Portfolio.preview_node(project.id)
 
+    # The selected node is resolved independently of the capped list: the
+    # default preview (or a deep-linked node) can be older than the newest
+    # `dag_max_nodes()` nodes, and it must still open.
     selected_node =
       case params["node_id"] do
         nil ->
-          Enum.find(nodes, &(preview && &1.id == preview.id))
+          redact_node(preview)
 
         node_id ->
           project.id
@@ -341,7 +346,7 @@ defmodule Cadence.ServerWeb.ProjectPane do
       dag_layout =
         DAGLayout.layout(nodes,
           default_id: preview && preview.id,
-          intro_ms: dag_intro_ms()
+          intro_ms: intro_ms(node_total)
         )
 
       path = URI.parse(uri).path || "/p/#{project.slug}"
@@ -354,6 +359,7 @@ defmodule Cadence.ServerWeb.ProjectPane do
           canonical_url: Metadata.canonical(path),
           project: project,
           dag_layout: dag_layout,
+          node_total: node_total,
           selected_node: selected_node,
           docs_child: selected_node && Portfolio.docs_child(project.id, selected_node.id),
           actions: actions_for(project, selected_node, auth.membership, quarantine),
@@ -527,22 +533,32 @@ defmodule Cadence.ServerWeb.ProjectPane do
 
     nodes =
       project.id
-      |> Portfolio.list_nodes()
+      |> Portfolio.list_nodes(limit: dag_max_nodes())
       |> Enum.map(&redact_node/1)
 
+    node_total = Portfolio.count_nodes(project.id)
     preview = Portfolio.preview_node(project.id)
-    selected_id = socket.assigns.selected_node && socket.assigns.selected_node.id
-    selected_node = Enum.find(nodes, &(&1.id == selected_id))
 
     dag_layout =
       DAGLayout.layout(nodes,
         default_id: preview && preview.id,
-        intro_ms: dag_intro_ms()
+        intro_ms: intro_ms(node_total)
       )
 
+    # The selected node may be older than the cap, so it is never looked up in
+    # the capped list: that would nil out an existing selection on an unrelated
+    # event. Re-reading it by id keeps the selection while refreshing mutable
+    # fields (e.g. `pinned` after a toggle); the docs child is left as-is.
+    selected_node =
+      case socket.assigns.selected_node do
+        nil -> nil
+        %Node{id: id} -> project.id |> Portfolio.node_for_project(id) |> redact_node()
+      end
+
     assign(socket,
-      selected_node: selected_node,
-      dag_layout: dag_layout
+      node_total: node_total,
+      dag_layout: dag_layout,
+      selected_node: selected_node
     )
   end
 
@@ -671,6 +687,22 @@ defmodule Cadence.ServerWeb.ProjectPane do
   defp run_error(:run_failed), do: "The run could not be started."
   defp run_error(%Ecto.Changeset{}), do: "The run request was invalid."
   defp run_error(_reason), do: "The run could not be started."
+
+  # A non-positive or non-integer cap would silently empty the DAG, so each
+  # value falls back to the documented default instead.
+  defp dag_max_nodes, do: positive_config_int(:dag_max_nodes, 150)
+  defp dag_intro_max_nodes, do: positive_config_int(:dag_intro_max_nodes, 60)
+
+  defp intro_ms(node_count) do
+    if node_count > dag_intro_max_nodes(), do: 0, else: dag_intro_ms()
+  end
+
+  defp positive_config_int(key, default) do
+    case Application.get_env(:cadence_server, key, default) do
+      value when is_integer(value) and value > 0 -> value
+      _other -> default
+    end
+  end
 
   defp dag_intro_ms do
     Application.get_env(:cadence_server, :dag_intro_ms, 1200)

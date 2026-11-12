@@ -232,6 +232,12 @@ code {
   align-items: start;
 }
 
+/* The DAG's grid item; min-width: 0 lets a wide graph scroll instead of
+   overflowing the 25% rail (§7.3). */
+.dag-rail {
+  min-width: 0;
+}
+
 .dag-panel {
   min-width: 0;
   border: 1px solid var(--line);
@@ -242,6 +248,7 @@ code {
 
 .dag-scroll {
   overflow: auto;
+  max-height: min(70vh, 48rem);
   padding: 0.75rem;
 }
 
