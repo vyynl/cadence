@@ -949,6 +949,27 @@ is optional and recorded in spec §16.
   a direct string-equality test). The duplicated-markup note is removed from
   this file. Gate: 1240 tests (332 + 665 + 243), format and dev/prod compile
   clean.
+- **Audit 100 slice, A1 (2026-11-11)** — `ProjectLive` is split.
+  `Cadence.ServerWeb.ProjectPane` owns the reads and state transitions
+  (`handle_params`, the repo loads, the quarantine cache, the actions view,
+  auth/members, the `toggle_pin`/`toggle_raw`/`run_action` bodies, and the two
+  pane-affecting PubSub handlers); `Components.NodePane` owns the selected-node
+  markup. `ProjectLive` keeps the route, the root events (still dispatched at the
+  root view, so no test event site moved), the subscription lifecycle, the
+  header/members panel, and the DAG. `project_live.ex` is 859 → 178 lines and
+  **19 → 7 outgoing xref edges**; 4 of the 7 are the LiveView wiring floor
+  (`server_web`, `layouts`, `endpoint`, `router`), the rest are `Components.DAG`,
+  `ProjectPane`, and `Components.NodePane`. The quarantine cache is still one
+  unit (`{node_id, blocking_node?}` plus the three assigns), `raw_view?` is still
+  derived in the `handle_params` path, `reset/2` no longer clears subscription
+  state it does not own, and `auth_context/2` uses `Authorization.can_manage?/1`.
+  The pane id, `phx-update="replace"`, the `--pane-delay` style, and the
+  malformed `run_action` refusal are now pinned by tests. Gate: 1241 tests
+  (332 + 666 + 243), format and dev/prod compile clean, `sobelow --exit medium`
+  exit 0. **Known trade:** the reads aggregate in `ProjectPane` (15 outgoing
+  edges), so the total internal edge count is roughly unchanged; the rubric's
+  hotspot module is fixed, and a further `ProjectPane.Repo`/`.Actions` split is
+  recorded as optional.
 - **Audit 100 slice, wave 2 (2026-11-11)** — **S1 + S2 + S3 shipped.**
   **S1:** `sobelow` 0.18.1 is a dev/test-only `cadence_server` dependency (spec
   §11 row; run from `apps/cadence_server`, the umbrella root refuses). Its scan
@@ -1037,27 +1058,21 @@ is optional and recorded in spec §16.
 Shipped: T1 (fixed sleeps), T2 (80% coverage floor + AGENTS docs), S1 (Sobelow
 0.18 + two XSS fixes), S2 (`/sync/*` per-user rate limit), S3 (CSP; Sobelow now
 exits 0), P1 (`users_by_ids/1` batching), P2 (one-query preview node), P3
-(content-keyed proposal-result cache). Performance is now clean; architecture,
-dependencies, CI, and the exemption notes remain.
+(content-keyed proposal-result cache), A2 (shared `Components.ProposalResult`),
+A1 (`ProjectLive` split, 19 → 7 xref edges). **Performance and architecture are
+now clean**; dependencies, CI, and the exemption notes remain.
 
-**Remaining audit items, in wave order** (resume with `/audit-100 <IDs>`):
+**Remaining audit items** (resume with `/audit-100 <IDs>`):
 
-1. **A2** — extract `Components.ProposalResult`; the two isolation sentinels
-   differ by copy ("Resolve it before deciding" vs read-only) and must stay.
-2. **A1** — split `ProjectLive` into a plain `ProjectPane` module + function
-   component (not a LiveComponent: all 16 test event sites dispatch at the root
-   view). Target 8 outgoing edges; keep the `phx-update="replace"` pane id, the
-   `{node_id, blocking_node?}` quarantine cache as one unit, and `raw_view?`
-   derivation in `handle_params`. Extraction order is in the run ledger.
-3. **D1** — `mix_audit` **needs a new dev/test dependency + spec §11 row and
+1. **D1** — `mix_audit` **needs a new dev/test dependency + spec §11 row and
    explicit user approval** before the child starts.
-4. **D2** — `libgraph` 0.17.1; run `graph_test.exs`, the DAG layout tests, and
+2. **D2** — `libgraph` 0.17.1; run `graph_test.exs`, the DAG layout tests, and
    the project page.
-5. **T4** — CI workflow last, so it can call `sobelow` (from
+3. **T4** — CI workflow last, so it can call `sobelow` (from
    `apps/cadence_server`) and `mix deps.audit`. `mix test.coverage` needs
    `mix test --cover --export-coverage default` first. A3/P4/T3 are
    documentation-only exemptions; fold their one-line rationales into the final
-   audit doc.
+   audit doc, then re-run the five tracks and refresh `docs/audit-*.md`.
 
 **Immediate product step (after the audit slice):** **Phase 9d — web scale and provenance.** 9a–9c are shipped,
 so an imported merge history can publish. The full plan is
@@ -1161,6 +1176,22 @@ expected for the closeout follow-ups.
 
 ## Spec Deltas / Open Items
 
+- **Audit 100 A1 notes (2026-11-11)** — (a) The split fixes the hotspot module
+  (`project_live.ex` 19 → 7 xref edges), but the reads aggregate in
+  `ProjectPane` (15 edges), so the total internal edge count is roughly
+  unchanged. A further `ProjectPane.Repo` / `ProjectPane.Actions` split is the
+  honest next cut if the fan-out matters; it is not part of A1's acceptance.
+  (b) `actions_enabled?` is read once per `handle_params` and stored as an assign
+  (a render-time call would be an extra `ProjectLive` edge); a mid-session config
+  flip updates the header link on the next navigation, while the click path still
+  reads `Actions.enabled?/0` live. (c) The pane reads run **before** the PubSub
+  subscription — that is the pre-split order, so an `{:incidents_changed, …}`
+  broadcast that lands mid-load is not observed until the next event. This is a
+  pre-existing race, not a regression from the split. (d) `pane_id/3` sanitizes
+  every non-alphanumeric path character to `-`, so `/tree/a/b` and `/tree/a-b`
+  share an id; nothing rendered inside the pane keeps client state, so the
+  collision is harmless today. (e) `ProjectLive`'s catch-all `handle_info/2`
+  swallows unknown project-topic events by design.
 - **Audit 100 P2/P3 notes (2026-11-11)** — (a) `Portfolio.preview_node/1` is a
   three-tier `CASE` rather than a lexicographic `pinned DESC, functioning DESC`
   sort: §4.4 consults `functioning` only when no node is pinned, so the
@@ -1779,6 +1810,17 @@ expected for the closeout follow-ups.
   the review UI (optional 4d/UI-pass work).
 
 ## Last Updated
+2026-11-11 (audit 100, run 2 complete) — **P2, P3, A2, A1 shipped**
+(`28008ed`, `441be8b`, `95743c7`, `17e415e`, docs `abb0b09`). Performance and
+architecture are clean: preview resolution is one query, the public proposal
+result is content-keyed and cached, the result markup is one component, and
+`ProjectLive` is 19 → 7 xref edges (178 lines). Gate: 1241 tests (332 shared +
+666 server + 243 daemon), format and dev/prod compile clean,
+`mix sobelow --exit medium` exit 0; log at `/tmp/opencode/audit-100-gate.log`.
+**Resume** with `/audit-100 D1 D2 T4` — D1 (`mix_audit`) needs a new dev/test
+dependency, a spec §11 row, and explicit approval before the child starts — then
+the A3/P4/T3 exemption notes and the final five-track audit refresh. Ledger:
+`.claude/plans/audit-100/progress.md`.
 2026-11-11 (audit 100, wave 1 of run 2) — **P2 + P3 shipped** (`28008ed`,
 `441be8b`). Performance is now clean: the preview resolver is one query and the
 public proposal result is content-keyed and cached. Wave boundary gate: 1224
