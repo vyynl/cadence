@@ -1793,6 +1793,7 @@ inserts); the daemon can mark only that node failed and retry the rest.
 | Docs schema parsing (`.caddocs.yaml`, §9.1) | `yaml_elixir` (declared in `cadence_shared`; `yamerl` is its parser) |
 | HTTP server | `Bandit` |
 | HTTP abstraction | `Plug` |
+| Bundled TLS (optional, compose) | Caddy 2 (the `tls` profile in `docker-compose.prod.yml`; an external reverse proxy remains fully supported) |
 | Local persistent store | SQLite via `ecto_sqlite3` |
 | Cloud database | PostgreSQL (`postgrex`) |
 | PubSub | `Phoenix.PubSub` |
@@ -1911,8 +1912,9 @@ schemas, with different adapters (SQLite vs PostgreSQL). Name them explicitly:
 
 - Distributed as a Docker image (`docker/Dockerfile`, spec §12.8).
 - Targets TrueNAS SCALE or any Docker host.
-- Compose stack: app + PostgreSQL + Docker socket proxy; the reference file is
-  `docker-compose.prod.yml` (§12.4).
+- Compose stack: app + PostgreSQL + Docker socket proxy + one-shot migrate and
+  first-account services, with an optional bundled Caddy under the `tls`
+  profile; the reference file is `docker-compose.prod.yml` (§12.4).
 - Phoenix endpoint uses `Bandit.PhoenixAdapter` explicitly (Phoenix otherwise
   defaults to Cowboy2, which is not a Cadence dependency).
 - All config via environment variables read in `config/runtime.exs`.
@@ -1923,7 +1925,8 @@ schemas, with different adapters (SQLite vs PostgreSQL). Name them explicitly:
     host Docker daemon; §8.3)
   - PostgreSQL data
 - Docker socket mounted read-only, preferably through a socket proxy.
-- TLS terminated by the host's reverse proxy (TrueNAS built-in, Caddy, nginx).
+- TLS terminated by the optional bundled Caddy profile, or by the host's
+  reverse proxy (TrueNAS built-in, Caddy, nginx).
 
 ### 12.4 Reference compose stack
 
@@ -1997,12 +2000,23 @@ volumes:
 ```
 
 The reference file is `docker-compose.prod.yml` (8a). It matches the stack
-above and adds a one-shot `migrate` service that runs
-`Cadence.Server.Release.migrate/0`; the `cadence` service starts only after it
-exits successfully. The action volume name and `CAD_ACTIONS_VOLUME` both read
-`CAD_ACTIONS_VOLUME` (default `cadence_actions`) so the host daemon can mount the
-same volume into action containers, and no source or `/app` tree is
-bind-mounted. See `docs/deploy.md`.
+above and adds one-shot `migrate` and `bootstrap` services. `migrate` runs
+`Cadence.Server.Release.migrate/0`; `bootstrap` runs the idempotent
+`Cadence.Server.Release.bootstrap_admin/0` from `CAD_ADMIN_EMAIL` /
+`CAD_ADMIN_PASSWORD` (a no-op when the password is empty). The `cadence` service
+starts only after both exit successfully. `CAD_DATABASE_URL` is derived from
+`CAD_DB_USER` / `CAD_DB_PASS` / `CAD_DB_NAME` so the app and PostgreSQL cannot
+drift. The app port publishes on `CAD_HTTP_BIND` (default `127.0.0.1`) and
+`CAD_HTTP_PORT` (default `4000`).
+
+The optional `tls` profile adds Caddy 2 with `docker/caddy/Caddyfile.auto`
+(automatic Let's Encrypt) or `Caddyfile.internal` (local CA), selected by
+`CAD_TLS_MODE`. `scripts/setup-prod.sh` generates `.env`, including the secret
+key base, database password, and first admin password, and starts the stack.
+The action volume name and `CAD_ACTIONS_VOLUME` both read `CAD_ACTIONS_VOLUME`
+(default `cadence_actions`) so the host daemon can mount the same volume into
+action containers, and no source or `/app` tree is bind-mounted. See
+`docs/deploy.md`.
 
 The repository also ships a **local demo stack** (`docker-compose.yml` +
 `docker/Dockerfile.demo`): `postgres:16-alpine` plus a `MIX_ENV=dev` server that
@@ -2062,6 +2076,21 @@ end
 
 Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 
+**Reference compose helpers** (read by `docker-compose.prod.yml`, not by the
+app; `CAD_DATABASE_URL` is derived from the first three):
+
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `CAD_DB_USER` | yes | — | PostgreSQL user |
+| `CAD_DB_PASS` | yes | — | PostgreSQL password (URL-safe) |
+| `CAD_DB_NAME` | no | `cadence` | PostgreSQL database |
+| `CAD_HTTP_BIND` | no | `127.0.0.1` | Host interface for the app port |
+| `CAD_TLS_MODE` | no | `auto` | `auto` (Let's Encrypt), `internal` (local CA), or `external` (no Caddy profile) |
+| `CAD_ADMIN_EMAIL` | no | — | First-account bootstrap email |
+| `CAD_ADMIN_NAME` | no | — | First-account display name |
+| `CAD_ADMIN_PASSWORD` | no | — | First-account password; remove after the first sign-in |
+| `CAD_SERVER_IMAGE` | no | `cadence-server:prod` | Image tag used by `migrate` / `bootstrap` / app |
+
 **Server:**
 
 | Variable | Required | Default | Purpose |
@@ -2070,7 +2099,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_SECRET_KEY_BASE` | yes | — | Phoenix secret |
 | `CAD_LIVE_VIEW_SALT` | no | `CAD_SECRET_KEY_BASE` | LiveView static-token signing salt |
 | `CAD_TOKEN_SIGNING_SECRET` | no | `CAD_SECRET_KEY_BASE` | JWT/AshAuthentication signing secret |
-| `CAD_DATABASE_URL` | yes | — | PostgreSQL connection |
+| `CAD_DATABASE_URL` | yes | — | PostgreSQL connection; the reference compose file derives it from `CAD_DB_*` |
 | `CAD_DB_POOL_SIZE` | no | `10` | Ecto pool |
 | `CAD_GIT_STORE_PATH` | no | `/data/git` | Git object storage |
 | `CAD_SYNC_PULL_LIMIT` | no | `100` | Max nodes returned per pull batch |
@@ -2216,7 +2245,8 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 
 ### 12.7 First-boot sequence (server)
 
-1. Generate `CAD_SECRET_KEY_BASE` via `mix phx.gen.secret`.
+1. Run `scripts/setup-prod.sh <hostname> <admin-email>` (add `--up` to start),
+   or generate `CAD_SECRET_KEY_BASE` manually and fill `.env`.
 2. Create OAuth apps; set redirect URIs to
    `https://<CAD_PHX_HOST>/auth/user/github/callback` and
    `https://<CAD_PHX_HOST>/auth/user/google/callback` (the paths
@@ -2224,16 +2254,14 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 3. Create TrueNAS dataset for `/data/git` and `/data/artifacts`, or bind-mount
    host paths.
 4. PostgreSQL volume initialized on first run.
-5. Run migrations (8a: `docker compose -f docker-compose.prod.yml up` runs this
-   automatically as the one-shot `migrate` service):
-   ```bash
-   docker compose -f docker-compose.prod.yml run --rm migrate
-   # or, against a running container:
-   docker compose -f docker-compose.prod.yml exec cadence \
-     /app/bin/cadence eval "Cadence.Server.Release.migrate()"
-   ```
-6. Configure reverse proxy for TLS.
-7. Confirm the Docker socket proxy is reachable.
+5. Start the stack
+   (`docker compose -f docker-compose.prod.yml --profile tls up -d --build`).
+   The one-shot `migrate` service applies migrations, then `bootstrap` creates
+   the first account from `CAD_ADMIN_*` when configured. The app starts only
+   after both succeed.
+6. TLS is served by the bundled Caddy profile (`CAD_TLS_MODE=auto` or
+   `internal`), or by an external reverse proxy.
+7. Confirm the Docker socket proxy is reachable (only needed for actions).
 
 ### 12.8 Build & release
 
@@ -2246,10 +2274,11 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   and curl for the `/health` healthcheck; it runs as the non-root `cadence`
   user and starts `bin/cadence start`. `Cadence.Server.Release.migrate/0` is
   the migration entry point; the compose `migrate` service runs it before the
-  app starts, and the same command works by hand. Persistent paths are
-  `/data/git`, `/data/artifacts`, and `/data/actions`; the app listens on 4000
-  inside the container. The reference stack is `docker-compose.prod.yml`
-  (§12.4); operator steps are in `docs/deploy.md`.
+  app starts, and the same command works by hand. `bootstrap_admin/0` is the
+  idempotent first-account entry point. Persistent paths are `/data/git`,
+  `/data/artifacts`, and `/data/actions`; the app listens on 4000 inside the
+  container. The reference stack is `docker-compose.prod.yml` (§12.4);
+  operator steps are in `docs/deploy.md`.
 - **Daemon release (Phase 8b, shipped):** the root `mix.exs` defines a
   `cadence_daemon` release containing the `cadence_daemon` + `cadence_shared`
   application closure (no Phoenix/PostgreSQL/LiveView); the entry point is
@@ -2273,6 +2302,10 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - Docker socket access is the highest-risk surface. Always use the socket
   proxy. Never expose the raw socket to the Cadence container in a
   publicly-reachable deployment.
+- The bundled Caddy profile is optional. `CAD_TLS_MODE=internal` uses Caddy's
+  local CA; clients must trust its root certificate. `auto` requires a public
+  DNS name and reachable ports 80/443. Remove `CAD_ADMIN_PASSWORD` from `.env`
+  after the first sign-in.
 - The daemon's auth token is a bearer token issued by the server. Store it in
   `~/.config/cadence/env` (chmod 600), never in source or `config/`.
 - All sync traffic over HTTPS only.
@@ -2532,9 +2565,10 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   `cadence` release (`cadence_server` + `cadence_shared`); `Cadence.Server.Release`
   provides `migrate/0`; `docker/Dockerfile` is a multi-stage `MIX_ENV=prod`
   build with a Debian-slim non-root runtime, `/health` healthcheck, and no demo
-  auth; `docker-compose.prod.yml` is the §12.4 stack plus a one-shot `migrate`
-  service; `docs/deploy.md` documents first boot, upgrades, volumes, actions,
-  and security (§12.3/§12.4/§12.7/§12.8).
+  auth; `docker-compose.prod.yml` is the §12.4 stack plus one-shot `migrate`
+  and `bootstrap` services and an optional Caddy `tls` profile;
+  `scripts/setup-prod.sh` generates `.env`; `docs/deploy.md` documents first
+  boot, upgrades, volumes, actions, and security (§12.3/§12.4/§12.7/§12.8).
 - 8b — daemon release (shipped): root `mix.exs` defines `cadence_daemon`
   (daemon + shared only); `Cadence.Daemon.Release` provides `migrate/0`
   (state-dir creation + SQLite migrations), `repos/0`, `migrations_path/1`, and

@@ -112,7 +112,7 @@ When `cadence.nvim` changes, syntax-check every Lua file and run the headless
 specs:
 
 ```bash
-find cadence.nvim -name '*.lua' -exec luac -p {} +
+find cadence.nvim lua plugin -name '*.lua' -exec luac -p {} +
 nvim --headless -l cadence.nvim/spec/graph_spec.lua
 nvim --headless -l cadence.nvim/spec/diff_spec.lua
 nvim --headless -l cadence.nvim/spec/doc_spec.lua

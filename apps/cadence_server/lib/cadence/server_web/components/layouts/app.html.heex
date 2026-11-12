@@ -70,8 +70,10 @@
         {render_slot(@inner_block)}
       <% end %>
     </main>
-    <script src="/assets/vendor/phoenix.min.js"></script>
-    <script src="/assets/vendor/phoenix_live_view.min.js"></script>
-    <script src="/assets/js/app.js"></script>
+    <%= if assigns[:load_app_scripts] != false do %>
+      <script src="/assets/vendor/phoenix.min.js"></script>
+      <script src="/assets/vendor/phoenix_live_view.min.js"></script>
+      <script src="/assets/js/app.js"></script>
+    <% end %>
   </body>
 </html>

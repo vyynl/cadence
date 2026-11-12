@@ -1,0 +1,7 @@
+# Private/LAN hostname: Caddy's local CA issues the certificate. Trust
+# /data/caddy/pki/authorities/local/root.crt on the clients that connect.
+{$CAD_PHX_HOST} {
+	tls internal
+	encode zstd gzip
+	reverse_proxy cadence:4000
+}

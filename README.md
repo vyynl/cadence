@@ -62,101 +62,81 @@ production deployment. See [`docs/demo.md`](docs/demo.md) for the guided tour.
 
 ## Run it in production
 
-The production stack is `docker-compose.prod.yml`: a `MIX_ENV=prod` release,
-PostgreSQL, a one-shot migration service, and a Docker socket proxy. Each step
-below is the minimum to get a working instance; [`docs/deploy.md`](docs/deploy.md)
-is the full operator guide.
+The reference stack is `docker-compose.prod.yml`: a `MIX_ENV=prod` release,
+PostgreSQL, one-shot migration and first-account services, and optional bundled
+Caddy TLS. The setup script generates every secret, writes `.env`, and can
+start the stack.
 
 ### 1. Prerequisites
 
 - Docker Engine 26+ and Docker Compose v2.17+.
-- A DNS hostname pointing at the machine.
-- A TLS-terminating reverse proxy (Caddy, nginx, or your platform's ingress).
-  Production session cookies are `secure`, so **sign-in only works over HTTPS**.
-- Nothing else: PostgreSQL and the release build run in containers. Docker
-  actions are optional (see step 9).
+- A DNS name that resolves to the server.
+- Ports 80 and 443 open when using bundled Caddy. Nothing else needs to be
+  installed on the server.
+- Optional: your own TLS proxy if you choose `--tls external`.
 
-### 2. Get the code and create the env file
+### 2. Clone and run the setup script
 
 ```bash
 git clone https://github.com/vyynl/cadence.git
 cd cadence
-cp .env.example .env
-chmod 600 .env
+./scripts/setup-prod.sh cadence.example.com you@example.com --up
 ```
 
-### 3. Fill in the required settings
+The script generates `CAD_SECRET_KEY_BASE`, the database password, and the
+first admin password; writes `.env` with `chmod 600`; prints the admin password
+once; and starts the stack with `--up`. Add `--no-actions` if you do not want
+the Docker action runner.
 
-Edit `.env` and set at least these values:
+TLS modes:
+
+- `--tls auto` (default): bundled Caddy obtains a Let's Encrypt certificate.
+  Use a public DNS name; ports 80/443 must be reachable.
+- `--tls internal`: bundled Caddy uses its local CA for a private/LAN
+  hostname. The script prints how to trust the root certificate.
+- `--tls external`: no Caddy; point your proxy at `127.0.0.1:4000`.
+
+Without `--up`, start it yourself:
 
 ```bash
-CAD_PHX_HOST=cadence.example.com
-CAD_PUBLIC_URL=https://cadence.example.com
-CAD_SECRET_KEY_BASE=<output of: openssl rand -base64 48>
-CAD_DATABASE_URL=ecto://cadence:<db-password>@postgres:5432/cadence
-CAD_DB_USER=cadence
-CAD_DB_PASS=<db-password>
+docker compose -f docker-compose.prod.yml --profile tls up -d --build
 ```
 
-`CAD_PUBLIC_URL` must be the exact public HTTPS origin; it is used for OAuth
-callbacks and proposal links. Replace the sample database password in both
-places. Do not commit `.env`.
+Use `--profile tls` for `auto`/`internal`; omit it for `external`. The manual
+`.env` path and every reference detail are in
+[`docs/deploy.md`](docs/deploy.md).
 
-Optional: add `CAD_LLM_API_KEY` for AI commit messages, melds, and docs, and
-`CAD_WEBAUTHN_*` to enable passkeys. Both are off/unconfigured by default. If
-you do not want Docker actions, set `CAD_ACTIONS_ENABLED=false`.
-
-### 4. Start the stack
-
-```bash
-docker compose -f docker-compose.prod.yml up -d --build
-```
-
-Compose builds `cadence-server:prod`, runs the one-shot `migrate` service, and
-starts `cadence` only after migrations succeed.
-
-### 5. Verify, then put TLS in front
+### 3. Verify
 
 ```bash
 docker compose -f docker-compose.prod.yml ps
-docker compose -f docker-compose.prod.yml logs migrate
-curl -fsS http://127.0.0.1:4000/health   # {"status":"ok"}
+docker compose -f docker-compose.prod.yml logs migrate bootstrap
+curl -fsS https://cadence.example.com/health   # {"status":"ok"}
 ```
 
-Point your reverse proxy at port `4000` and serve `CAD_PUBLIC_URL` over HTTPS.
-Do not expose the container's plain HTTP port to users directly.
+With `--tls internal`, use `curl -k` or trust Caddy's CA first.
 
-### 6. Create the first account
+### 4. Sign in and enroll TOTP
 
-There is no public registration; accounts are operator-created. Run this once
-against the running container:
+Open `https://cadence.example.com/sign-in` with the admin email and the password
+printed by the script. The first sign-in forces TOTP enrollment: scan the QR
+code, confirm a code, and save the recovery codes — they are shown once.
 
-```bash
-docker compose -f docker-compose.prod.yml exec cadence \
-  /app/bin/cadence eval 'Cadence.Server.Release.create_user("you@example.com", "Your Name", "a long password")'
-```
+After this succeeds, remove `CAD_ADMIN_PASSWORD` from `.env`; the bootstrap
+service then becomes a no-op on later `up`s.
 
-Use a password of at least 12 characters (`CAD_AUTH_PASSWORD_MIN_LENGTH`).
+### 5. Connect a daemon
 
-### 7. Sign in and enroll TOTP
+Create a daemon token at `/account` (or `/auth/tokens/new`), copy it once, and
+follow [`docs/daemon-setup.md`](docs/daemon-setup.md) to install the daemon, run
+its migration, register a project, and sync.
 
-Open `https://cadence.example.com/sign-in` with the account and password from
-step 6. The first sign-in forces TOTP enrollment: scan the QR code, confirm a
-code, and save the recovery codes — they are shown once.
-
-### 8. Connect a daemon
-
-In the web UI, open `/account` (or `/auth/tokens/new`) and create a daemon
-token. Copy it once, then follow
-[`docs/daemon-setup.md`](docs/daemon-setup.md) to install the daemon, run its
-migration, register a project, and sync.
-
-### 9. Operate it
+### 6. Operate it
 
 ```bash
-# Upgrade after pulling a new release
+# Upgrade after pulling a new release (omit --profile tls for external TLS)
 git pull
-docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml --profile tls up -d --build
 
 # Logs
 docker compose -f docker-compose.prod.yml logs -f cadence
@@ -170,6 +150,26 @@ docker compose -f docker-compose.prod.yml logs -f cadence
 - Migrations are idempotent and run on every `up`. Volumes, ownership, image
   publishing, passkeys, and troubleshooting are in
   [`docs/deploy.md`](docs/deploy.md).
+
+## Neovim
+
+The daemon's editor front end installs from this repository — no separate
+plugin checkout or build step:
+
+```lua
+{
+  "vyynl/cadence",
+  dependencies = { "nvim-lua/plenary.nvim" },
+  config = function()
+    require("cadence").setup()
+  end,
+}
+```
+
+Drop that in `lua/plugins/cadence.lua` for LazyVim, or use the Packer /
+vim-plug / mini.deps snippets in
+[`cadence.nvim/README.md`](cadence.nvim/README.md). The plugin talks to the
+local daemon; see [`docs/daemon-setup.md`](docs/daemon-setup.md).
 
 ## How it works
 
@@ -217,8 +217,9 @@ there is no shared runtime and no distributed Erlang.
 ## Status
 
 Cadence **1.0.0** is released. The planned build order (Phases 1–8) is complete.
-Phase 9 (Git import), WebAuthn/passkeys, and the local-account/TOTP/session
-auth rebuild are on `master` and recorded as unreleased; see
+Phase 9 (Git import), WebAuthn/passkeys, the local-account/TOTP/session auth
+rebuild, and the turnkey self-hosting/plugin packaging are on `master` and
+recorded as unreleased; see
 [`docs/release-notes.md`](docs/release-notes.md) for the release summary,
 upgrade notes, and known limitations.
 

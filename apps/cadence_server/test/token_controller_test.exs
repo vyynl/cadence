@@ -25,7 +25,7 @@ defmodule Cadence.ServerWeb.TokenControllerTest do
       |> TokenController.new(%{})
 
     assert conn.status == 200
-    assert conn.resp_body =~ "Create a Cadence API key"
+    assert conn.resp_body =~ "Create a daemon token"
   end
 
   test "POST /auth/tokens issues a plaintext key once", %{conn: conn, user: user} do

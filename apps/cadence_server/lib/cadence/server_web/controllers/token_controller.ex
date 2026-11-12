@@ -20,13 +20,16 @@ defmodule Cadence.ServerWeb.TokenController do
         # strings this page used to send are gone. The explicit "new.html"
         # template form keeps rendering independent of conn.params, because the
         # controller tests call these actions directly on a bare conn.
-        # Both token pages carry a CSRF token and (on create) a live PAT, so
-        # every cache in the path must keep its own copy.
+        # The app layout supplies the site styling but loads no JavaScript: the
+        # create page carries a live PAT, so it must not share a document with
+        # scripts. Both pages are uncacheable.
         conn
         |> put_resp_header("cache-control", "private, no-store")
         |> put_view(Cadence.ServerWeb.TokenHTML)
         |> render("new.html",
-          layout: false,
+          layout: {Cadence.ServerWeb.Layouts, :app},
+          load_app_scripts: false,
+          page_title: "Create a daemon token · Cadence",
           email: to_string(user.email),
           csrf: Plug.CSRFProtection.get_csrf_token()
         )
@@ -49,7 +52,12 @@ defmodule Cadence.ServerWeb.TokenController do
             |> put_resp_header("cache-control", "private, no-store")
             |> put_status(201)
             |> put_view(Cadence.ServerWeb.TokenHTML)
-            |> render("create.html", layout: false, plaintext: plaintext)
+            |> render("create.html",
+              layout: {Cadence.ServerWeb.Layouts, :app},
+              load_app_scripts: false,
+              page_title: "Your Cadence API key · Cadence",
+              plaintext: plaintext
+            )
 
           {:error, _reason} ->
             json(conn, 422, %{error: "could not create api key"})

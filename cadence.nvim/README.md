@@ -13,16 +13,67 @@ socket and provides the DAG picker plus convenience commands: `:CadOpen`,
 - A running Cadence daemon — see [daemon setup](../docs/daemon-setup.md) for the
   token, migration, boot command, and project registration
 
-## Install (lazy.nvim)
+## Install
+
+The plugin source lives in `cadence.nvim/`, and the repository root exposes
+the standard `lua/` and `plugin/` entrypoints. Install the repository itself;
+no separate plugin repository or build step is needed.
+
+### lazy.nvim / LazyVim
+
+Add this to `lua/plugins/cadence.lua` (LazyVim) or your lazy.nvim spec:
 
 ```lua
 {
-  "cadence.nvim", -- local dev path, e.g. "~/code/cadence/cadence.nvim"
+  "vyynl/cadence",
   dependencies = { "nvim-lua/plenary.nvim" },
   config = function()
     require("cadence").setup({
       -- socket_path = "/custom/path/daemon.sock", -- optional override
     })
+  end,
+}
+```
+
+### Packer
+
+```lua
+use({
+  "vyynl/cadence",
+  requires = { "nvim-lua/plenary.nvim" },
+  config = function()
+    require("cadence").setup()
+  end,
+})
+```
+
+### vim-plug
+
+```vim
+Plug 'nvim-lua/plenary.nvim'
+Plug 'vyynl/cadence'
+```
+
+Then call `require("cadence").setup()` from your config (optional; the default
+configuration works).
+
+### mini.deps
+
+```lua
+add({ source = "vyynl/cadence", depends = { "nvim-lua/plenary.nvim" } })
+```
+
+### Local development
+
+Point the manager at the plugin subdirectory instead (the root shims are not
+involved):
+
+```lua
+{
+  dir = vim.fn.expand("~/code/cadence/cadence.nvim"),
+  dependencies = { "nvim-lua/plenary.nvim" },
+  config = function()
+    require("cadence").setup()
   end,
 }
 ```

@@ -46,6 +46,90 @@ defmodule Cadence.Server.Release do
   end
 
   @doc """
+  Creates the first operator account from `CAD_ADMIN_*` on first boot.
+
+  The reference compose stack runs this module as a one-shot `bootstrap`
+  service. When `CAD_ADMIN_PASSWORD` is unset the call is a no-op, so removing
+  it after the first sign-in is safe and an operator can still create accounts
+  by hand. When the account already exists the call is also a no-op, which
+  makes every `up` safe.
+
+      bin/cadence eval 'Cadence.Server.Release.bootstrap_admin()'
+  """
+  @spec bootstrap_admin() :: :ok
+  def bootstrap_admin do
+    case admin_config(System.get_env()) do
+      :skip ->
+        IO.puts("CAD_ADMIN_EMAIL/CAD_ADMIN_PASSWORD not set; skipping first-account bootstrap.")
+
+      {:ok, %{email: email, name: name, password: password}} ->
+        ensure_user(email, name, password)
+
+      {:error, message} ->
+        raise message
+    end
+
+    :ok
+  end
+
+  @doc """
+  Parses the first-account bootstrap environment.
+
+  The password is the trigger: a blank `CAD_ADMIN_PASSWORD` is always `:skip`
+  (so removing it after the first sign-in is safe). A password without an email
+  is a readable `{:error, message}`.
+  """
+  @spec admin_config(map()) :: :skip | {:ok, map()} | {:error, String.t()}
+  def admin_config(env) when is_map(env) do
+    email = env |> Map.get("CAD_ADMIN_EMAIL") |> blank_to_nil()
+    password = env |> Map.get("CAD_ADMIN_PASSWORD") |> blank_to_nil()
+    name = env |> Map.get("CAD_ADMIN_NAME") |> blank_to_nil()
+
+    cond do
+      is_nil(password) ->
+        :skip
+
+      is_nil(email) ->
+        {:error, "CAD_ADMIN_EMAIL is required when CAD_ADMIN_PASSWORD is set."}
+
+      true ->
+        {:ok, %{email: email, name: name, password: password}}
+    end
+  end
+
+  @doc """
+  Creates `email` when it does not exist yet; otherwise leaves it untouched.
+
+  This is the idempotent form used by the compose `bootstrap` service, so a
+  normal `docker compose up` cannot fail just because the account was already
+  created.
+  """
+  @spec ensure_user(String.t(), String.t() | nil, String.t()) :: :ok
+  def ensure_user(email, name, password) do
+    with_repo(fn ->
+      case Cadence.Server.Accounts.LocalAuth.get_by_email(email) do
+        {:ok, nil} ->
+          case Cadence.Server.Accounts.LocalAuth.create_user(%{
+                 email: email,
+                 name: name,
+                 password: password
+               }) do
+            {:ok, user} -> IO.puts("Created Cadence account #{user.email}.")
+            {:error, error} -> raise "Could not create account: #{inspect(error)}"
+          end
+
+        {:ok, user} ->
+          IO.puts("Cadence account #{user.email} already exists; bootstrap unchanged.")
+
+        {:error, error} ->
+          raise "Could not read accounts: #{inspect(error)}"
+      end
+    end)
+
+    :ok
+  end
+
+  @doc """
   Creates a local account from a release shell.
 
       bin/cadence eval 'Cadence.Server.Release.create_user("you@example.com", "You", "a long password")'
@@ -125,10 +209,19 @@ defmodule Cadence.Server.Release do
     :ok
   end
 
+  defp blank_to_nil(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp blank_to_nil(_value), do: nil
+
   defp with_repo(fun) do
     load_app()
 
-    case Ecto.Migrator.with_repo(Cadence.Server.Repo, fun) do
+    case Ecto.Migrator.with_repo(Cadence.Server.Repo, fn _repo -> fun.() end) do
       {:ok, _repo, result} -> result
       {:error, error} -> raise "Could not start the server repo: #{inspect(error)}"
     end

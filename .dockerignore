@@ -16,5 +16,7 @@ docker-compose.prod.yml
 .env
 erl_crash.dump
 cadence.nvim
+lua
+plugin
 scripts
 tmp

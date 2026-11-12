@@ -2,7 +2,8 @@ defmodule Cadence.ServerWeb.TokenControllerFlowTest do
   @moduledoc """
   Pins what the hand-built HTML strings in `TokenController` used to get wrong:
   every interpolation is escaped, and the pages render through the real
-  `:browser` pipeline (session -> CSRF -> response) with no app layout.
+  `:browser` pipeline (session -> CSRF -> response) with the site styling but
+  no JavaScript.
   """
 
   use Cadence.ServerWeb.ConnCase, async: false
@@ -47,7 +48,10 @@ defmodule Cadence.ServerWeb.TokenControllerFlowTest do
   end
 
   describe "GET then POST /auth/tokens through the browser pipeline" do
-    test "issues a key once, uncached, without the app layout", %{conn: conn, user: user} do
+    test "issues a key once, uncached, with site styling and no scripts", %{
+      conn: conn,
+      user: user
+    } do
       conn =
         conn
         |> signed_conn(user)
@@ -55,7 +59,10 @@ defmodule Cadence.ServerWeb.TokenControllerFlowTest do
 
       assert html_response(conn, 200)
       assert get_resp_header(conn, "cache-control") == ["private, no-store"]
-      refute conn.resp_body =~ "site-header"
+      assert conn.resp_body =~ "site-header"
+      assert conn.resp_body =~ "/assets/css/app.css"
+      assert conn.resp_body =~ "auth-card"
+      refute conn.resp_body =~ "<script"
 
       conn = post(conn, "/auth/tokens", %{"_csrf_token" => csrf_token!(conn), "name" => "daemon"})
 
@@ -65,8 +72,9 @@ defmodule Cadence.ServerWeb.TokenControllerFlowTest do
       assert conn.resp_body =~ "cad_"
       assert conn.resp_body =~ "CAD_AUTH_TOKEN"
       assert get_resp_header(conn, "cache-control") == ["private, no-store"]
-      refute conn.resp_body =~ "site-header"
-      refute conn.resp_body =~ "<nav"
+      assert conn.resp_body =~ "site-header"
+      assert conn.resp_body =~ "token-value"
+      refute conn.resp_body =~ "<script"
     end
   end
 

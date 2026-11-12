@@ -1,0 +1,6 @@
+# Public hostname: Caddy obtains and renews a TLS certificate automatically.
+# Use this when the DNS name resolves to this host and ports 80/443 are open.
+{$CAD_PHX_HOST} {
+	encode zstd gzip
+	reverse_proxy cadence:4000
+}

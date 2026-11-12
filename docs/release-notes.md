@@ -56,6 +56,20 @@ projects stay at `1.0.0` until then. This section is the candidate text for
 - Visual pass: the DAG-fork mark, a real SVG favicon (`/favicon.ico` answers
   too), one centered auth card, and consistent account sections. No new font or
   site-wide redesign.
+- The one-time API-key pages now use the normal site layout and auth-card
+  styling, still with no JavaScript on the page.
+
+**Self-hosting and editor install**
+- `scripts/setup-prod.sh` generates `.env` (secret key base, database password,
+  first admin password), prints the admin password once, and can start the
+  reference stack.
+- The reference compose stack derives `CAD_DATABASE_URL` from `CAD_DB_*`, adds
+  an idempotent `bootstrap` service for the first account
+  (`CAD_ADMIN_EMAIL` / `CAD_ADMIN_PASSWORD`), and optionally bundles Caddy under
+  the `tls` profile (automatic Let's Encrypt or a local CA).
+- The monorepo root now exposes `lua/` and `plugin/` entrypoints, so
+  `vyynl/cadence` installs directly with lazy.nvim/LazyVim, Packer, vim-plug,
+  or mini.deps. The plugin source stays in `cadence.nvim/`.
 
 ### Upgrade notes
 
@@ -72,9 +86,16 @@ projects stay at `1.0.0` until then. This section is the candidate text for
   `--build-arg` from deployment tooling. The demo image no longer takes it.
 - **Existing browser sessions are invalidated once.** Ash `jti:sub` cookies are
   not database sessions, so every user signs in again after the upgrade.
-- **First account:** create it from the server shell before the first sign-in
-  (`Release.create_user/3` or `mix cadence.user`); the first password login
-  forces TOTP enrollment. Password/TOTP resets are operator-only.
+- **First account:** the reference stack can now create it from
+  `CAD_ADMIN_EMAIL` / `CAD_ADMIN_PASSWORD` through the one-shot `bootstrap`
+  service; the manual `Release.create_user/3` / `mix cadence.user` path still
+  works. The first password login forces TOTP enrollment. Password/TOTP resets
+  are operator-only. Remove `CAD_ADMIN_PASSWORD` after the first sign-in.
+- **New compose helpers:** `CAD_ADMIN_*`, `CAD_TLS_MODE`, `CAD_HTTP_BIND`, and
+  `CAD_DB_*`. The reference stack derives `CAD_DATABASE_URL` from `CAD_DB_*`;
+  set it explicitly only outside compose (or through an override for an
+  external database). Run `scripts/setup-prod.sh` to generate a complete
+  `.env`.
 - **New env:** `CAD_AUTH_PASSWORD_MIN_LENGTH`, `CAD_AUTH_TOTP_REQUIRED`,
   `CAD_AUTH_TOTP_ISSUER`, `CAD_TOTP_KEY`, `CAD_AUTH_SUDO_MINUTES`,
   `CAD_AUTH_LOGIN_*`, `CAD_AUTH_TOTP_RATE_*`, `CAD_SESSION_TTL_DAYS`, and

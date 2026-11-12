@@ -19,8 +19,8 @@ before implementing.
 
 ## Operate
 
-- [Production deployment](deploy.md) — build the server image, run the compose
-  stack, migrate, and manage volumes.
+- [Production deployment](deploy.md) — run `scripts/setup-prod.sh`, start the
+  compose stack with bundled TLS, and manage migrations and volumes.
 - [Docker actions](deploy.md#docker-actions) — socket proxy, isolation limits,
   and the volume prerequisite.
 - [Troubleshooting](deploy.md#troubleshooting) — server boot, migration, and
@@ -47,8 +47,9 @@ before implementing.
 ## Project status
 
 Cadence 1.0.0 is released (2026-11-11), completing the planned build order
-(Phases 1–8). Phase 9 (Git import), WebAuthn/passkeys, and the local-account/
-TOTP/session auth rebuild are on `master` and recorded as unreleased in the
+(Phases 1–8). Phase 9 (Git import), WebAuthn/passkeys, the local-account/
+TOTP/session auth rebuild, and the turnkey self-hosting/plugin packaging are on
+`master` and recorded as unreleased in the
 [release notes](release-notes.md). Remaining work is optional and tracked in
 [spec §16](spec.md#16-open-decisions).
 

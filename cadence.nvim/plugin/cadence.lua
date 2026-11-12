@@ -1,3 +1,10 @@
+-- Root-level shims and a direct `dir =` install can both be on the runtimepath
+-- (for example during a local development switch); define the commands once.
+if vim.g.loaded_cadence then
+  return
+end
+vim.g.loaded_cadence = true
+
 local cadence = require("cadence")
 local client = require("cadence.client")
 local doc = require("cadence.doc")

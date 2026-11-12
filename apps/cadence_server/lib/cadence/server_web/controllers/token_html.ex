@@ -2,9 +2,10 @@ defmodule Cadence.ServerWeb.TokenHTML do
   @moduledoc """
   Templates for personal access token issuance.
 
-  These pages deliberately render without the app layout: the plaintext key is
-  shown exactly once on a bare page, so it is never embedded in a page that
-  also loads the site's scripts.
+  These pages render through the app layout for consistent styling, but the
+  controller disables the layout's JavaScript (`load_app_scripts: false`): the
+  plaintext key is shown exactly once and never shares a document with the
+  site's scripts.
   """
 
   use Cadence.ServerWeb, :html
