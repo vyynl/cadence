@@ -901,26 +901,44 @@ is optional and recorded in spec §16.
   limit, CSP, sleeps/coverage/CI, `mix_audit`, `libgraph`), with acceptance
   criteria, effort, and the rubric-only items that should stay documented
   exemptions (Mox, streams, the Phoenix endpoint/router compile cycle).
-- **Audit 100 slice, wave 2 (2026-11-11)** — **S1 + S2 shipped.**
+- **Audit 100 slice, P1 (2026-11-11)** — `Accounts.users_by_ids/1` is now one
+  query. It casts and dedupes ids, returns `%{}` without querying when none are
+  usable, and loads the rest with a single `id in ids` read (AshPostgres emits
+  `= ANY($1::uuid[])`) instead of one `Ash.get/3` per member. Keys stay
+  canonical lowercase UUID strings, malformed ids are dropped, and an
+  infrastructure failure now raises instead of silently rendering a partial
+  identity map. A telemetry counter on `[:cadence, :server, :repo, :query]`
+  (prefix from the repo module name) filtered to `source: "users"` pins one
+  query for N ids and zero for `[]`. Gate: 1210 tests (332 + 635 + 243),
+  Sobelow exit 0, format and dev/prod compile clean.
+- **Audit 100 slice, wave 2 (2026-11-11)** — **S1 + S2 + S3 shipped.**
   **S1:** `sobelow` 0.18.1 is a dev/test-only `cadence_server` dependency (spec
   §11 row; run from `apps/cadence_server`, the umbrella root refuses). Its scan
   found two real `XSS.SendResp` mediums — the one-time API key page
   interpolated the plaintext key into hand-built HTML — so both token pages now
   render escaped HEEx templates (`Cache-Control: private, no-store`, POST
   `log: false`), with new tests pinning template escaping and the full browser
-  CSRF round-trip. `mix sobelow --exit medium` is 0 medium / 1 high
-  (`Config.CSP`, deliberately deferred to S3) / 26 low triaged as false
-  positives (25 `Traversal.FileModule` on server-derived paths, 1 `XSS.Raw` on
-  MDEx-sanitized output). **S2:** `/sync/*` is bounded per authenticated user
-  by a Hammer fix-window limiter run after `AuthPlug` (`Cadence.Server.SyncRateLimit`
-  + `Plugs.SyncRateLimit`): `CAD_SYNC_RATE_LIMIT` (300) per
-  `CAD_SYNC_RATE_SCALE` (60000 ms), non-positive disables, denial is `429` +
-  `Retry-After` + `{"error":"rate_limited"}` before any controller work. The
-  meld limiter stays the inner per-project bound. 9 request tests cover the
-  accept boundary, per-user (not per-token) keying, denied mutations, the
-  401-before-limiter order, runtime config reads, and disabled mode. Gate:
-  1202 tests; format and dev/prod compile clean. The daemon's union 429 message
-  is now neutral ("rate limited; retry shortly").
+  CSRF round-trip. **S2:** `/sync/*` is bounded per authenticated user by a
+  Hammer fix-window limiter run after `AuthPlug`
+  (`Cadence.Server.SyncRateLimit` + `Plugs.SyncRateLimit`):
+  `CAD_SYNC_RATE_LIMIT` (300) per `CAD_SYNC_RATE_SCALE` (60000 ms),
+  non-positive disables, denial is `429` + `Retry-After` +
+  `{"error":"rate_limited"}` before any controller work. The meld limiter stays
+  the inner per-project bound; 9 request tests cover the accept boundary,
+  per-user (not per-token) keying, denied mutations, the 401-before-limiter
+  order, runtime config reads, and disabled mode. The daemon's union 429
+  message is now neutral. **S3:** the `:browser` pipeline sends a static CSP
+  (`default-src 'self'`; `script-src 'self'`; `style-src 'self'
+  'unsafe-inline'` for the DAG/pane attributes and the token page;
+  `img-src 'self' https:` for README badges and the sign-in banner;
+  `connect-src 'self'`; `object-src 'none'`; base-uri/form-action/
+  frame-ancestors), passed as a literal map so Sobelow's `Config.CSP` stays
+  clean. Exact-policy tests cover `/`, a LiveView dead render, and an anonymous
+  member-route 302; a headless Chromium smoke over the seeded demo (public and
+  signed-in project/node/reviews/runs pages for both projects) showed no CSP
+  violations and connected websockets. **Sobelow is now green:**
+  `mix sobelow --exit medium` exits 0 (0 high/medium, 26 triaged lows). Gate:
+  1205 tests; format and dev/prod compile clean.
 - **Audit 100 slice, wave 1 (2026-11-11)** — **T1 + T2 shipped.**
   **T1:** 36 of 42 fixed `Process.sleep` sites were removed from the daemon and
   server suites; `Cadence.{Daemon,Server}.TestHelpers` now provides bounded
@@ -977,15 +995,42 @@ is optional and recorded in spec §16.
 
 ## Next
 
-**Audit 100 cleanup is in progress** (see `docs/audit-100-plan.md`). Waves 1–2
-shipped: T1 (fixed sleeps), T2 (80% coverage floor), S1 (Sobelow + two XSS
-fixes), S2 (`/sync/*` per-user rate limit). Next in this run: **S3 (CSP)** —
-it is also what turns `mix sobelow --exit medium` green (the single remaining
-high is `Config.CSP`); then P1 (batch `users_by_ids/1`), which reaches the
-session cap of 6 committed items. Remaining after that: P2/P3, A2/A1, D1/D2,
-T4, and the A3/P4/T3 exemption notes.
+**Audit 100 cleanup — slice summary** (see `docs/audit-100-plan.md`).
+Shipped this run: T1 (fixed sleeps), T2 (80% coverage floor + AGENTS docs),
+S1 (Sobelow 0.18 + two XSS fixes), S2 (`/sync/*` per-user rate limit),
+S3 (CSP; Sobelow now exits 0), P1 (`users_by_ids/1` batching). That completes
+the 6-item slice; the rest is listed below in wave order.
 
-**Immediate product step:** **Phase 9d — web scale and provenance.** 9a–9c are shipped,
+**Remaining audit items, in wave order** (resume with `/audit-100 <IDs>`):
+
+1. **P2** — fold `Portfolio.preview_node/1` into one `ORDER BY pinned DESC,
+   functioning DESC, created_at DESC, id DESC LIMIT 1`; the three precedence
+   tests in `portfolio_test.exs` pin it.
+2. **P3** — cache the public proposal diff. Research says key on content, not
+   proposal id: `{project_id, result_commit_sha, first_parent_sha, max_files,
+   scan_max_files, scan_max_bytes}`, value is the `%{quarantined?, truncated?,
+   hidden_count, summary, files}` payload only. Keep `ProposalView.isolated?/1`
+   uncached and **before** the lookup (one indexed `EXISTS`), never cache
+   `{:error, _}`, bound with `CAD_PROPOSAL_CACHE_ENTRIES` (256, 0 disables), and
+   never route `result_integrity/3` or `verify_resolution/1` through it.
+3. **A2** — extract `Components.ProposalResult`; the two isolation sentinels
+   differ by copy ("Resolve it before deciding" vs read-only) and must stay.
+4. **A1** — split `ProjectLive` into a plain `ProjectPane` module + function
+   component (not a LiveComponent: all 16 test event sites dispatch at the root
+   view). Target 8 outgoing edges; keep the `phx-update="replace"` pane id, the
+   `{node_id, blocking_node?}` quarantine cache as one unit, and `raw_view?`
+   derivation in `handle_params`. Extraction order is in the run ledger.
+5. **D1** — `mix_audit` **needs a new dev/test dependency + spec §11 row and
+   explicit user approval** before the child starts.
+6. **D2** — `libgraph` 0.17.1; run `graph_test.exs`, the DAG layout tests, and
+   the project page.
+7. **T4** — CI workflow last, so it can call `sobelow` (from
+   `apps/cadence_server`) and `mix deps.audit`. `mix test.coverage` needs
+   `mix test --cover --export-coverage default` first. A3/P4/T3 are
+   documentation-only exemptions; fold their one-line rationales into the final
+   audit doc.
+
+**Immediate product step (after the audit slice):** **Phase 9d — web scale and provenance.** 9a–9c are shipped,
 so an imported merge history can publish. The full plan is
 `docs/phase-9-prep.md` (D1–D10 approved). 9d must:
 
@@ -1178,6 +1223,20 @@ expected for the closeout follow-ups.
   the visual layer; anything that can appear on hover belongs in the overlay.
   The SVG's accessible name is an `aria-label`, never a `<title>` (browsers show
   titles as native hover tooltips). Recorded in spec §7.3.
+- **Audit 100 notes (2026-11-11)** — (a) Sobelow runs from
+  `apps/cadence_server`; the umbrella root refuses to scan. Its `Config.CSP`
+  check only understands a **literal map** passed to
+  `put_secure_browser_headers` with a lowercase key — any indirection silently
+  downgrades to low confidence and still passes `--exit medium`. (b)
+  `mix test --cover` reads each child's config while `mix test.coverage` reads
+  the umbrella root, so the 80% floor lives in both; the latter needs
+  `mix test --cover --export-coverage default` first. (c) The `/sync/*` limiter
+  is per authenticated user (not token or IP); tests disable it by default and
+  opt in per file. (d) Unmatched-path 404s are rendered from the pre-pipeline
+  conn and are the only browser surface without the CSP. (e) Ecto telemetry for
+  `Cadence.Server.Repo` is `[:cadence, :server, :repo, :query]` (prefix from the
+  repo module name, not the OTP app). (f) `users_by_ids/1` raises on a read
+  failure instead of rendering a partial identity map.
 - **Closeout slice 3 notes (2026-11-11)** — (a) `ash_postgres` moved to 2.15.2
   (Hex retired 2.14.5); after any Ecto bump, rebuild `ecto` and `ecto_sql`
   together in every MIX_ENV or the test build loses the Postgres adapter
@@ -1680,6 +1739,15 @@ expected for the closeout follow-ups.
   the review UI (optional 4d/UI-pass work).
 
 ## Last Updated
+2026-11-11 (audit 100, slice complete) — **T1, T2, S1, S2, S3, P1 shipped**
+(`73c9d65`, `0bb6dfc`, `9113d8e`, `7564087`, `ed382b1`, `c4d7cb9`) — the
+6-item slice is done. Coverage has an explicit 80% floor; fixed sleeps are
+gone; Sobelow runs at 0 high/medium; `/sync/*` is bounded per user; the browser
+pipeline carries a CSP; `users_by_ids/1` is one query. Gate: 1210 tests
+(332 + 635 + 243), format and dev/prod compile clean, `mix sobelow --exit
+medium` exit 0. **Resume** with `/audit-100 P2 P3 A2 A1` (then `D1` — needs
+dependency approval — `D2 T4`), or `quick` for the cheap subset. Run ledger:
+`.claude/plans/audit-100/progress.md`.
 2026-11-11 (audit 100, wave 2) — **S1 + S2 shipped.** Sobelow 0.18.1 (dev/test,
 server only, spec §11) found two real XSS mediums in the token pages, now
 escaped HEEx with `no-store`; `mix sobelow --exit medium` is 0 medium / 1 high
