@@ -150,6 +150,33 @@ if config_env() != :test and server_artifact? do
       )
     )
 
+  webauthn_enabled = System.get_env("CAD_WEBAUTHN_ENABLED", "false") == "true"
+
+  # In dev the origin follows CAD_PUBLIC_URL (the same source as the endpoint
+  # URLs). In prod it must be set explicitly: a TLS-terminating proxy makes the
+  # request scheme/host internal, so a derived origin would reject every
+  # ceremony (plan §7.4).
+  webauthn_origin =
+    case System.get_env("CAD_WEBAUTHN_ORIGIN") do
+      value when value in [nil, ""] ->
+        if config_env() == :prod, do: nil, else: public_url
+
+      url ->
+        String.trim_trailing(url, "/")
+    end
+
+  webauthn_config = [
+    enabled: webauthn_enabled,
+    rp_id: System.get_env("CAD_WEBAUTHN_RP_ID", "localhost"),
+    rp_name: System.get_env("CAD_WEBAUTHN_RP_NAME", "Cadence"),
+    origin: webauthn_origin,
+    user_verification: System.get_env("CAD_WEBAUTHN_USER_VERIFICATION", "required"),
+    timeout_ms: String.to_integer(System.get_env("CAD_WEBAUTHN_TIMEOUT_MS", "120000")),
+    max_credentials: String.to_integer(System.get_env("CAD_WEBAUTHN_MAX_CREDENTIALS", "10")),
+    rate_limit: String.to_integer(System.get_env("CAD_WEBAUTHN_RATE_LIMIT", "10")),
+    rate_scale: String.to_integer(System.get_env("CAD_WEBAUTHN_RATE_SCALE", "60000"))
+  ]
+
   config :cadence_server,
     public_url: public_url,
     token_signing_secret: System.get_env("CAD_TOKEN_SIGNING_SECRET") || secret_key_base,
@@ -232,7 +259,15 @@ if config_env() != :test and server_artifact? do
         client_secret: System.get_env("CAD_OAUTH_GOOGLE_CLIENT_SECRET"),
         redirect_uri: public_url <> "/auth/user/google/callback"
       ]
-    ]
+    ],
+    webauthn: webauthn_config
+
+  # Boot validation for the passkey layer. Disabled by default; when enabled,
+  # a bad RP ID or origin must fail the boot rather than every ceremony at
+  # runtime (plan §7.4).
+  if webauthn_enabled do
+    Cadence.Server.Passkeys.Config.validate!(webauthn_config, config_env())
+  end
 
   # Demo auth is a build-time flag (see config/config.exs and
   # Cadence.Server.Accounts.User). A prod release must never carry it.

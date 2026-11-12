@@ -50,6 +50,7 @@ defmodule Cadence.Server.MixProject do
       {:bcrypt_elixir, "~> 3.0"},
       {:ex_docker_api, "~> 1.55"},
       {:hammer, "~> 7.5"},
+      {:wax_, "~> 0.7"},
       {:sourceror, "~> 1.7", only: [:dev, :test]},
       {:sobelow, "~> 0.18", only: [:dev, :test], runtime: false},
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},

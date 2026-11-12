@@ -36,6 +36,17 @@ config :cadence_server,
   demo_auth: true,
   token_signing_secret: String.duplicate("test-token-signing-secret-", 4),
   public_url: "http://localhost:4000",
+  webauthn: [
+    enabled: true,
+    rp_id: "localhost",
+    rp_name: "Cadence Test",
+    origin: "http://localhost:4000",
+    user_verification: "required",
+    timeout_ms: 120_000,
+    max_credentials: 10,
+    rate_limit: 0,
+    rate_scale: 60_000
+  ],
   git_store_path:
     Path.join(System.tmp_dir!(), "cadence_test_git_#{System.unique_integer([:positive])}"),
   artifact_path:

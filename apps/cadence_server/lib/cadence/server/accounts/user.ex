@@ -92,6 +92,8 @@ defmodule Cadence.Server.Accounts.User do
     has_many :valid_api_keys, Cadence.Server.Accounts.ApiKey do
       filter(expr(valid))
     end
+
+    has_many :webauthn_credentials, Cadence.Server.Accounts.WebAuthnCredential
   end
 
   actions do

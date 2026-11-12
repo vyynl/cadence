@@ -16,6 +16,7 @@ defmodule Cadence.Server.Accounts do
     resource(Cadence.Server.Accounts.Token)
     resource(Cadence.Server.Accounts.UserIdentity)
     resource(Cadence.Server.Accounts.ApiKey)
+    resource(Cadence.Server.Accounts.WebAuthnCredential)
   end
 
   @doc """
