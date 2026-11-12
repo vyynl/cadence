@@ -1529,7 +1529,7 @@ inserts); the daemon can mark only that node failed and retry the rest.
 | LiveView test DOM | `lazy_html` (test only; required by `Phoenix.LiveViewTest`) |
 | Docker API | `ex_docker_api` `~> 1.55` (Tesla + the built-in httpc adapter; requires Elixir 1.20) |
 | Rate limiting | `Hammer` (declared in `cadence_shared`; used by the daemon's `LLMRateLimit` and the server's `LLMRateLimit` / `MeldWorker` / `SyncRateLimit`) |
-| Graph model | `libgraph` |
+| Graph model | `libgraph` `~> 0.17.1` (declared in `cadence_shared`; used only by `Cadence.Shared.DAG` for `new/1`, `topsort/1`, `in_neighbors/2`, `add_vertex/2`, and `add_edge/3`) |
 | TUI (optional, daemon-side) | `ExRatatui` |
 | Neovim plugin | Lua + plenary.nvim |
 | HTTP client (daemon → cloud) | `Req` |

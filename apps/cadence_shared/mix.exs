@@ -33,7 +33,7 @@ defmodule Cadence.Shared.MixProject do
     [
       {:ecto, "~> 3.14"},
       {:jason, "~> 1.4"},
-      {:libgraph, "~> 0.16.0"},
+      {:libgraph, "~> 0.17.1"},
       {:axiom_ai, "~> 0.1.14"},
       {:hammer, "~> 7.5"},
       {:yaml_elixir, "~> 2.12"}

@@ -173,7 +173,7 @@ T1, D1) lands at ~97 and costs about half the effort.
 
 **D2. Bump `libgraph` to 0.17.1.**
 - The constraint is `~> 0.16.0`; 0.17.1 exists. Bump it and run the DAG tests
-  (`graph_test.exs`, `dag_layout` tests, the project page) to prove the graph
+  (`dag_test.exs`, `dag_layout` tests, the project page) to prove the graph
   APIs are unchanged.
 - Acceptance: full suite green; `mix hex.outdated` shows no "update possible"
   for the runtime set (patch-level noise excluded).
