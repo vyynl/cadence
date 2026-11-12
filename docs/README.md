@@ -13,6 +13,7 @@ there, resolve it in the spec (or add it to §16) before implementing.
 | [`deploy.md`](deploy.md) | Production server: release image, compose stack, migrations, volumes, actions |
 | [`demo.md`](demo.md) | One-command demo stack, seeded accounts, and the guided tour |
 | [`webauthn-plan.md`](webauthn-plan.md) | Approved WebAuthn/passkey (FIDO2) design: YubiKey, recovery, schema, phases |
+| [`passkeys.md`](passkeys.md) | Security keys and passkeys: operator config, YubiKey/phone enrollment, recovery, RP ID, troubleshooting |
 | [`ui-notes.md`](ui-notes.md) | UI/tuning backlog — visual, layout, and copy observations |
 | [`images/`](images/) | Screenshots referenced by the docs |
 
@@ -37,11 +38,12 @@ Project entry points:
 | Phase 7 — Storage engineering | Complete (7a pack layer, 7b repacker, 7c existence handshake, 7d multi-pack/index/delta-depth/repack verification + demo-stack smoke); pack consolidation remains a §16 delta |
 | Phase 8 — Release engineering | Complete (8a production server image, umbrella release, `Cadence.Server.Release.migrate/0`, prod compose, deploy docs; 8b `cadence_daemon` release with `Cadence.Daemon.Release.migrate/0`, release registration, systemd/install/upgrade docs) |
 | Phase 9 — Import a local Git repository | Complete (9a shared primitives, 9b daemon importer/API/CLI, 9c multi-parent push + body limit, 9d capped DAG + paged History + provenance, 9e docs/spec/live smoke) |
-| WebAuthn / passkeys | G1–G3 shipped (credential store, Wax verification, config, account-security registration, passkey sign-in); G4–G5 management/recovery and hardening pending |
+| WebAuthn / passkeys | G1–G3 shipped (credential store, Wax verification, config, account-security registration, passkey sign-in); G4 management/recovery shipped; G5 hardening/docs shipped except the physical browser/key matrix |
 
 Current release: **1.0.0** (2026-11-11) — the planned build order (Phases 1–8)
-is complete; remaining work is optional and recorded in spec §16 and
-`release-notes.md`.
+is complete; Phase 9 import and WebAuthn/passkeys are on `master` and recorded
+as unreleased in `release-notes.md`; remaining work is optional and tracked in
+spec §16.
 
 ## Documentation conventions
 

@@ -5,13 +5,14 @@ defmodule Cadence.ServerWeb.Endpoint do
 
   use Phoenix.Endpoint, otp_app: :cadence_server
 
-  @session_options [
-    store: :cookie,
-    key: "_cadence_key",
-    signing_salt: "cadence-session",
-    same_site: "Lax",
-    http_only: true
-  ]
+  # `Plug.Session` options are baked into the endpoint at compile time. The
+  # `secure` flag is derived from the build environment rather than a runtime
+  # variable: a `MIX_ENV=prod` release is served over HTTPS (§12.9) and always
+  # gets `secure: true`; dev, test, and the demo image stay on
+  # `http://localhost`, which both the browser and WebAuthn treat as a secure
+  # context (§7.4). A prod release served over plain HTTP is a misconfiguration,
+  # not a supported mode.
+  @session_options Cadence.ServerWeb.SessionOptions.cookie(Mix.env())
 
   socket("/socket", Cadence.ServerWeb.UserSocket,
     websocket: [connect_info: [:x_headers]],

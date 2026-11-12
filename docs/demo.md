@@ -47,6 +47,16 @@ hub; `outsider` can only see public pages. The imported project has no
 proposals, so its owner-only membership is enough. Registration is disabled in
 every environment — these accounts are seeded.
 
+Passkeys are enabled in this stack for the same accounts:
+`CAD_WEBAUTHN_ENABLED=true`, `CAD_WEBAUTHN_RP_ID=localhost`, and
+`CAD_WEBAUTHN_ORIGIN=http://localhost:4000`. The demo origin is `localhost`,
+which browsers treat as a secure context even over plain HTTP, so the browser's
+WebAuthn prompt works without TLS. A real YubiKey must be plugged into the
+machine running the browser (or be reachable from it); a browser on another
+computer cannot use a key attached to the Docker host. For the same reason the
+production deployment requires HTTPS and an explicit public origin — see
+[`passkeys.md`](passkeys.md).
+
 ## Guided tour
 
 Click order that covers every surface:
@@ -89,7 +99,18 @@ Click order that covers every surface:
     `secret_detected` incident and the public view is quarantined. Sign in as
     owner and **Show raw content** to inspect it; the import did not bypass
     the scan.
-13. **Navigation** — the header shows the signed-in email plus **Sign out**, or
+13. **Security key / passkey** — sign in as `owner@demo.local`, open **Account**
+    in the header, then **Add a security key or passkey**. Give it a name (for
+    example *Demo YubiKey*) and complete the browser prompt: touch a plugged-in
+    FIDO2 key, use a platform passkey, or choose **Use a phone** and scan the
+    browser's own QR code. The key appears in the account list with its
+    transport and added date. Now **Sign out**, open `/sign-in`, and choose
+    **Sign in with a security key or passkey**; you land back on the portfolio
+    signed in. The **Remove** action on `/account/security` is a two-step,
+    CSRF-safe flow. If a key is lost, sign in with the demo password and remove
+    it there — OAuth or the demo password is the recovery path. A virtual
+    authenticator in Chromium DevTools works for a no-hardware tour.
+14. **Navigation** — the header shows the signed-in email plus **Sign out**, or
     **Sign in** when anonymous. Signing out is a two-step, CSRF-safe flow (a
     confirmation page that submits DELETE).
 

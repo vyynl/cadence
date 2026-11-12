@@ -8,6 +8,9 @@ session nodes rather than Git branches.
 - **Status:** 1.0.0 — the planned build order is complete; see
   [docs/release-notes.md](docs/release-notes.md) for the release summary,
   upgrade notes, and known limitations.
+- **Security keys / passkeys:** [docs/passkeys.md](docs/passkeys.md) for
+  operator configuration, YubiKey/phone enrollment, recovery, and
+  troubleshooting.
 
 ## Quick overview
 

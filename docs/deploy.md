@@ -42,6 +42,7 @@ Set at least:
 | `CAD_DATABASE_URL` | `ecto://USER:PASS@postgres:5432/DB` for the compose stack. |
 | `CAD_DB_USER` / `CAD_DB_PASS` / `CAD_DB_NAME` | Read by the compose Postgres service; keep them consistent with `CAD_DATABASE_URL`. |
 | `CAD_OAUTH_GITHUB_*` / `CAD_OAUTH_GOOGLE_*` | Client id/secret for human sign-in. Redirect URI: `https://<CAD_PHX_HOST>/auth/user/<provider>/callback`. |
+| `CAD_WEBAUTHN_*` | Optional passkey/security-key sign-in (default off). Requires a permanent `RP_ID` and the exact public `ORIGIN`; see [`passkeys.md`](passkeys.md). |
 | `CAD_LLM_API_KEY` | Required for melds/docs that need the model; conflict-free melds skip it. |
 
 `CAD_LIVE_VIEW_SALT` and `CAD_TOKEN_SIGNING_SECRET` fall back to

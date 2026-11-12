@@ -1,7 +1,9 @@
 # Cadence — WebAuthn / Passkey (FIDO2) Plan
 
-> **Status:** approved 2026-11-11; G1 (data/config/Wax verification) shipped;
-> G2 (registration) and G3 (passkey sign-in) shipped; G4–G5 pending.
+> **Status:** approved 2026-11-11; G1–G4 shipped (data/config/Wax verification,
+> registration, passkey sign-in, management/recovery); G5 hardening and docs
+> shipped except the physical browser/YubiKey matrix (§10.3), which stays on
+> the release checklist.
 > **Date:** 2026-11-11
 > **Scope:** `apps/cadence_server` only. No daemon, shared-schema, or sync changes.
 > **Approval:** `wax_ ~> 0.7` and the defaults below are approved. The §11/§12.6/§16
@@ -720,8 +722,8 @@ Assumes one engineer familiar with the codebase; days are focused dev days.
 | **G1 — data + config + Wax spike (shipped)** | `wax_` dependency; `CoseKey` type; `WebAuthnCredential` resource + migration + snapshots; `Passkeys` challenge/verify skeleton; runtime config + boot validation; unit tests. Prove registration/sign-in against a localhost fake authenticator. | §11 approval | 1.5–2 d |
 | **G2 — registration (shipped)** | `/account/security` + `/account/security/keys/new`; challenge in session; `create()`; `passkeys.js`; labels, cap, duplicate handling; nav link. | G1 | 2 d |
 | **G3 — sign-in (shipped)** | Cadence-owned `/sign-in` (AAP components + passkey CTA); discoverable `get()`; `POST /auth/passkeys/sign-in`; session renewal; generic errors; QR/security-key copy. | G1 | 1.5 d |
-| **G4 — management + recovery** | Rename/remove, last-key rule, device list, last-used metadata, recovery copy, operator runbook, optional mix task. | G2 | 1.5 d |
-| **G5 — hardening + docs** | Strict sign-count/CAS, rate limiter, error-copy table, origin/proxy tests, fake-authenticator matrix, manual browser matrix, spec §7.4/§11/§12.6/§12.9/§16 updates, `docs/release-notes.md`, `docs/demo.md`. | G2–G4 | 2 d |
+| **G4 — management + recovery (shipped)** | Rename/remove, last-key rule, device list, last-used metadata, recovery copy, operator runbook (`docs/passkeys.md`), optional mix task. | G2 | 1.5 d |
+| **G5 — hardening + docs (shipped; hardware matrix pending)** | Strict sign-count/CAS, rate limiter, error-copy table, origin/proxy tests, fake-authenticator matrix, manual browser matrix, spec §7.4/§11/§12.6/§12.9/§16 updates, `docs/release-notes.md`, `docs/demo.md`. The production session-cookie `secure` flag and demo-stack enablement shipped; the physical browser/key matrix remains a release-checklist item. | G2–G4 | 2 d |
 | **G6 (optional)** | Conditional UI (username input + `mediation: "conditional"`), step-up before PAT minting, `mix cadence.passkeys` task. | G5 | 1–1.5 d |
 
 Total: **~8–9 focused dev days** for G1–G5. Option C adds ~1 day; Option A
@@ -806,7 +808,7 @@ The nine `CAD_WEBAUTHN_*` rows in §9, inserted with the other server vars.
 | YubiKey PIN setup friction / key capacity | Failed registration | Clear pre-prompt and error copy; 25/100 slot note; suggest a second key. |
 | Lost keys | Lockout | OAuth fallback, last-key guard, operator runbook. |
 | No automated browser tests | Regressions in the ceremony JS | Manual release matrix + optional CDP virtual authenticator; server-side fixture tests cover verification. |
-| Session cookie lacks `secure` in prod | Session theft over HTTP (pre-existing) | Fix as a G5 prerequisite; note in §12.9. |
+| Session cookie lacked `secure` in prod | Session theft over HTTP (pre-existing) | Fixed in G5: the endpoint sets `secure` for `MIX_ENV=prod` and keeps dev/test/localhost working; documented in §12.9 and `docs/passkeys.md`. |
 | Rate limiter is ETS (per node) | Weak bound in a multi-node deploy | Acceptable for the current single-node deployment; document; swap Hammer backend if scaled. |
 | Attestation `none` allows any software authenticator | Weaker device assurance | Intentional (matches Yubico’s guidance not to allowlist models); UV + possession still required. |
 | Passkeys don’t protect a compromised session | XSS/CSRF remains the front door | CSP, CSRF, `renew: true`, authorization on every mutation; step-up before PAT minting deferred. |

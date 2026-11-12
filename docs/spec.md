@@ -975,9 +975,15 @@ The shipped surface (G1–G3) is:
 Both ceremony posts carry `log: false`, delete the one-shot challenge before
 verification, and map every verification failure to the same generic sign-in
 copy (no account/key enumeration). The endpoint is hidden when the feature is
-disabled. Management/recovery polish (G4) and hardening (G5 — including the
-pre-existing production session-cookie `secure` flag) remain tracked in
-`docs/webauthn-plan.md`.
+disabled.
+
+Credential management is complete: list, rename, remove-after-confirmation,
+per-user cap, and last-key removal guarded by a warning (OAuth remains the
+recovery path). The signed session cookie is `secure` in a `MIX_ENV=prod`
+build (dev/test and the localhost demo stay non-`secure` so WebAuthn works over
+`http://localhost`, §12.9). Operator and end-user procedures live in
+`docs/passkeys.md`; the remaining G5 item is the physical browser/YubiKey
+matrix in `docs/webauthn-plan.md` §10.3.
 
 ### 7.5 Repository browser
 
@@ -2195,10 +2201,16 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - The Docker socket proxy is root-equivalent (§8.4); keep action containers off
   its network and treat project `Dockerfile` `FROM` references as able to reach
   any registry the daemon can reach.
-- The signed session cookie (`_cadence_key`) does not set `secure` in production
-  today. This is a pre-existing gap, recorded as a G5 WebAuthn prerequisite
-  (§16); do not weaken it further, and passkey hardening must not ship without
-  revisiting it.
+- The signed session cookie (`_cadence_key`) is `http_only`, `same_site: "Lax"`,
+  and `secure` in a `MIX_ENV=prod` build. The flag is fixed when the endpoint is
+  compiled; dev/test and the localhost demo stay non-`secure` so
+  `http://localhost` (a browser secure context) keeps working for WebAuthn. A
+  production release must be served over HTTPS: a prod build served over plain
+  HTTP will drop its session cookies. Rotating `CAD_SECRET_KEY_BASE` invalidates
+  sessions and in-flight WebAuthn challenges.
+- WebAuthn RP ID and origin: `CAD_WEBAUTHN_RP_ID` is a permanent hostname and
+  `CAD_WEBAUTHN_ORIGIN` must be the exact public origin behind TLS termination
+  (§7.4). Changing the RP ID invalidates every registered credential.
 
 ---
 
@@ -2511,10 +2523,13 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   plus the passkey CTA, `GET`/`POST /auth/passkeys/sign-in`, discoverable
   credentials, session renewal, generic failure copy, and the IP ceremony
   limiter.
-- G4–G5 (pending): management/recovery polish beyond the shipped list/rename/
-  remove (operator runbook, optional mix task) and hardening (strict sign-count
-  CAS review, proxy/origin tests, browser/key matrix, and the production
-  session-cookie `secure` flag). See `docs/webauthn-plan.md`.
+- G4 (shipped): list/rename/remove, per-user cap, last-key warning, and
+  recovery copy on `/account/security`.
+- G5 (shipped, hardware matrix pending): strict sign-count/CAS review, IP rate
+  limit, origin/proxy tests, the production session-cookie `secure` flag,
+  demo-stack enablement, the `docs/passkeys.md` runbook, and the spec/docs
+  updates. The physical browser/key matrix remains a release-checklist item.
+  See `docs/webauthn-plan.md`.
 
 ---
 
@@ -2839,13 +2854,17 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - [x] **WebAuthn implementation:** resolved — `wax_` 0.7 behind a
       Cadence-owned layer on AshAuthentication 4.15.1; the credential table is
       shaped to match the AA5 WebAuthn strategy. G1 (store, verification,
-      config), G2 (account-security registration), and G3 (Cadence-owned
-      sign-in page, passkey ceremony) ship; G4–G5 hardening follows. Revisit
-      the AA5 strategy when 5.0 is stable.
-- [ ] **WebAuthn hardening (G5):** finish the strict sign-count/CAS review,
-      proxy/origin test matrix, and browser/key manual matrix. The session
-      cookie's pre-existing production `secure` flag gap is a G5 prerequisite
-      and is not changed by the G2/G3 slice (§12.9).
+      config), G2 (account-security registration), G3 (Cadence-owned sign-in
+      page, passkey ceremony), G4 (management/recovery), and G5
+      (hardening/docs, except the physical hardware matrix) ship. Revisit the
+      AA5 strategy when 5.0 is stable.
+- [ ] **WebAuthn hardware matrix (G5 residual):** the strict sign-count/CAS
+      review, IP rate limiter, proxy/origin tests, session-cookie `secure`
+      flag, demo enablement, and operator runbook are shipped (§7.4, §12.9).
+      What remains is the manual browser/OS/YubiKey matrix in
+      `docs/webauthn-plan.md` §10.3 (USB/NFC, PIN/fingerprint, platform and
+      cross-device passkeys, wrong-PIN retries, key-full, proxy mismatch); keep
+      it on the release checklist for the hardware actually supported.
 - [x] **WebAuthn attestation policy:** resolved — `none`; no FIDO MDS, AAGUID
       allowlist, or enterprise attestation. Possession plus user verification
       is the assurance model.
