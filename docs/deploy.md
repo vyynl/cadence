@@ -1,26 +1,38 @@
 # Production deployment
 
 The server ships as a self-contained Elixir release inside the image built from
-`docker/Dockerfile` (spec §12.3, §12.8). `docker-compose.prod.yml` is the
-reference stack from spec §12.4 plus a one-shot `migrate` service.
+`docker/Dockerfile` ([spec §12.3](spec.md#123-server),
+[§12.8](spec.md#128-build-release)). `docker-compose.prod.yml` is the
+reference stack: the app, PostgreSQL, a Docker socket proxy, and a one-shot
+migration service.
 
 This is **not** the demo stack. The demo (`docker-compose.yml`,
 `docker/Dockerfile.demo`) builds with `MIX_ENV=dev`, compiles in a password
-strategy, seeds fake data, and exists for browsing the UI. See `docs/demo.md`.
+strategy, seeds fake data, and exists for browsing the UI. See
+[`demo.md`](demo.md).
 
----
+## At a glance
+
+- **Server:** a `MIX_ENV=prod` release in a non-root Debian container.
+- **Database:** PostgreSQL 16, migrated by a one-shot `migrate` service before
+  the app starts.
+- **TLS:** terminated by your reverse proxy; Cadence serves plain HTTP on
+  `CAD_HTTP_PORT` (default 4000).
+- **State:** named volumes for PostgreSQL, Git object stores, action
+  artifacts, and staged action snapshots.
+- **Actions:** optional; require Docker 26+ and the socket proxy.
 
 ## Prerequisites
 
 - Docker Engine 26 or newer (the action runner uses the `volume-subpath` mount
   option, Docker API `v1.45`) and Docker Compose v2.17+.
-- A TLS-terminating reverse proxy (Caddy, nginx, TrueNAS built-in). Cadence
-  serves plain HTTP on `CAD_HTTP_PORT`; TLS is the proxy's job.
-- Postgres 16 (the reference stack runs it in a container).
-- For Docker actions: a filesystem with a size limit for `CAD_ACTIONS_VOLUME_PATH`
-  (§8.4), and the socket **proxy** — never the raw socket.
+- A TLS-terminating reverse proxy (Caddy, nginx, or TrueNAS built-in).
+- PostgreSQL 16 (the reference stack runs it in a container).
+- For Docker actions: a filesystem with a size limit for
+  `CAD_ACTIONS_VOLUME_PATH` ([spec §8.4](spec.md#84-security)) and the
+  socket **proxy** — never the raw socket.
 
-## Secrets
+## Secrets and configuration
 
 Production boots raise if `CAD_SECRET_KEY_BASE`, `CAD_DATABASE_URL`, or
 `CAD_PUBLIC_URL` is missing. Generate the secret and keep the env file private:
@@ -40,16 +52,16 @@ Set at least:
 | `CAD_PUBLIC_URL` | Absolute public URL (`https://cadence.example.com`), used for OAuth callbacks and proposal links. |
 | `CAD_SECRET_KEY_BASE` | 64+ random bytes; rotating it invalidates sessions. |
 | `CAD_DATABASE_URL` | `ecto://USER:PASS@postgres:5432/DB` for the compose stack. |
-| `CAD_DB_USER` / `CAD_DB_PASS` / `CAD_DB_NAME` | Read by the compose Postgres service; keep them consistent with `CAD_DATABASE_URL`. |
-| `CAD_OAUTH_GITHUB_*` / `CAD_OAUTH_GOOGLE_*` | Client id/secret for human sign-in. Redirect URI: `https://<CAD_PHX_HOST>/auth/user/<provider>/callback`. |
-| `CAD_WEBAUTHN_*` | Optional passkey/security-key sign-in (default off). Requires a permanent `RP_ID` and the exact public `ORIGIN`; see [`passkeys.md`](passkeys.md). |
-| `CAD_LLM_API_KEY` | Required for melds/docs that need the model; conflict-free melds skip it. |
+| `CAD_DB_USER` / `CAD_DB_PASS` / `CAD_DB_NAME` | Read by the compose PostgreSQL service; keep them consistent with `CAD_DATABASE_URL`. |
+| `CAD_OAUTH_GITHUB_*` / `CAD_OAUTH_GOOGLE_*` | Client id and secret for human sign-in. Redirect URI: `https://<CAD_PHX_HOST>/auth/user/<provider>/callback`. |
+| `CAD_WEBAUTHN_*` | Optional passkey/security-key sign-in (default off). See [Passkeys](#passkeys). |
+| `CAD_LLM_API_KEY` | Optional. Required only for melds or docs that need the model; conflict-free melds skip it. |
 
 `CAD_LIVE_VIEW_SALT` and `CAD_TOKEN_SIGNING_SECRET` fall back to
-`CAD_SECRET_KEY_BASE`. The production image has **no password strategy** — users
-sign in through OAuth.
+`CAD_SECRET_KEY_BASE`. The production image has no password strategy: humans
+sign in through OAuth, a passkey, or both.
 
-## First boot
+## Quick start
 
 ```bash
 docker compose -f docker-compose.prod.yml up -d --build
@@ -57,14 +69,14 @@ docker compose -f docker-compose.prod.yml up -d --build
 
 Compose builds `cadence-server:prod`, runs the `migrate` service
 (`/app/bin/cadence eval "Cadence.Server.Release.migrate()"`), and starts
-`cadence` only after the migration exits 0. The same command appears in spec
-§12.7.
+`cadence` only after the migration exits 0. The same sequence is in
+[spec §12.7](spec.md#127-first-boot-sequence-server).
 
 The compose project is `cadence-prod`, distinct from the demo project
 (`cadence`), so `down` / `down -v` on one stack cannot touch the other. The
 pinned `cadence_actions` volume is shared with the host Docker daemon by design.
 
-Check it:
+## Verify
 
 ```bash
 docker compose -f docker-compose.prod.yml ps
@@ -72,15 +84,45 @@ docker compose -f docker-compose.prod.yml logs migrate
 curl -fsS https://cadence.example.com/health   # {"status":"ok"}
 ```
 
-Then sign in at `/sign-in` and register a project from the daemon
-(`docs/daemon-setup.md`). The daemon's `CAD_SERVER_URL` must be reachable **by
-the daemon**; public proposal links come from the server's `CAD_PUBLIC_URL`, so
-an internal daemon URL is fine.
+Then sign in at `/sign-in`, open `/account/security` if passkeys are enabled,
+and register a project from the daemon ([`daemon-setup.md`](daemon-setup.md)).
+The daemon's `CAD_SERVER_URL` must be reachable **by the daemon**; public
+proposal links come from the server's `CAD_PUBLIC_URL`, so an internal daemon
+URL is fine.
 
 The compose app listens on 4000 inside the container and publishes
 `CAD_HTTP_PORT` (default 4000). Point the reverse proxy at that port. Running the
 image outside compose is supported: set `CAD_HTTP_PORT` and expose the same port
 (the image healthcheck follows it).
+
+## Passkeys
+
+Passkeys are an additional browser sign-in method for existing accounts and are
+off by default. They do not create accounts; OAuth remains the recovery path.
+The operator and end-user runbook is [`passkeys.md`](passkeys.md); the design
+record is [`webauthn-plan.md`](webauthn-plan.md).
+
+The complete contract is
+[spec §12.6](spec.md#126-environment-variable-contract); the nine
+`CAD_WEBAUTHN_*` keys and their defaults are listed in
+[`passkeys.md`](passkeys.md#configuration). A production deployment normally
+sets only these three:
+
+| Variable | Default | Notes |
+|---|---|---|
+| `CAD_WEBAUTHN_ENABLED` | `false` | Enable registration, the account security page, and passkey sign-in. |
+| `CAD_WEBAUTHN_RP_ID` | `localhost` | Relying Party ID: a hostname only, no scheme, port, or path. **Permanent** — changing it invalidates every credential. |
+| `CAD_WEBAUTHN_ORIGIN` | `CAD_PUBLIC_URL` in dev; required in prod | Exact public origin (`https://host[:port]`), with no trailing slash. Required behind a TLS-terminating proxy. |
+
+```bash
+CAD_WEBAUTHN_ENABLED=true
+CAD_WEBAUTHN_RP_ID=cadence.example.com
+CAD_WEBAUTHN_ORIGIN=https://cadence.example.com
+CAD_WEBAUTHN_RP_NAME=Cadence
+```
+
+A bad RP ID or origin fails the boot when the feature is enabled. Pick the
+permanent hostname before the first key is registered; there is no migration.
 
 ## Migrations and upgrades
 
@@ -112,10 +154,10 @@ backup. Do not point two independently-started stacks at one database.
 
 | Volume | Mount | Contents |
 |---|---|---|
-| `cadence_data` | `/data` | Git object stores (loose objects + packs). |
+| `cadence_data` | `/data` | Git object stores (loose objects and packs). |
 | `cadence_artifacts` | `/data/artifacts` | Action logs and collected artifacts. |
 | `cadence_actions` | `/data/actions` | Staged snapshots and `/out` subpaths for action containers (`CAD_ACTIONS_VOLUME`). |
-| `postgres_data` | `/var/lib/postgresql/data` | Postgres. |
+| `postgres_data` | `/var/lib/postgresql/data` | PostgreSQL. |
 
 The logical names above are what the compose file declares. The pinned action
 volume keeps `cadence_actions` exactly; the others are prefixed with the compose
@@ -143,11 +185,13 @@ sync; compose prefixing the volume would break actions.
 
 - `CAD_ACTIONS_ENABLED=false` disables the runner, run pages, and downloads. The
   reference stack still starts the proxy; you may remove it if actions are off.
-- The socket proxy is **root-equivalent** on the host (§8.4). The app reaches it
-  at `http://docker-proxy:2375`; action containers run with no network by default
+- The socket proxy is **root-equivalent** on the host
+  ([spec §8.4](spec.md#84-security)). The app reaches it at
+  `http://docker-proxy:2375`; action containers run with no network by default
   and cannot reach it.
-- Point `CAD_ACTIONS_VOLUME_PATH` at a filesystem with a size limit: an action can
-  fill it during its timeout; post-exit collection caps only the copy (§8.3).
+- Point `CAD_ACTIONS_VOLUME_PATH` at a filesystem with a size limit: an action
+  can fill it during its timeout; post-exit collection caps only the copy
+  ([spec §8.3](spec.md#83-isolation)).
 - Project `Dockerfile` `FROM` pulls run on the host Docker daemon, so treat them
   as able to reach any registry the daemon can reach.
 
@@ -156,14 +200,17 @@ sync; compose prefixing the volume would break actions.
 The compose file builds locally. To publish a versioned image:
 
 ```bash
-docker build -f docker/Dockerfile -t ghcr.io/you/cadence-server:0.1.0 .
-docker push ghcr.io/you/cadence-server:0.1.0
+docker build -f docker/Dockerfile -t ghcr.io/you/cadence-server:1.0.0 .
+docker push ghcr.io/you/cadence-server:1.0.0
 ```
 
-Then set `CAD_SERVER_IMAGE=ghcr.io/you/cadence-server:0.1.0` in `.env` and run
+Then set `CAD_SERVER_IMAGE=ghcr.io/you/cadence-server:1.0.0` in `.env` and run
 `docker compose -f docker-compose.prod.yml pull` (the `cadence` service still
-declares a local `build:`; `pull` uses the tagged image). There is no CI
-pipeline in this repository.
+declares a local `build:`; `pull` uses the tagged image).
+
+CI ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) runs the merge
+gate but does not build or publish images. Registry publishing and version
+pinning are operator-managed; the workflow's first remote run is operator-side.
 
 ## Troubleshooting
 
@@ -171,19 +218,32 @@ pipeline in this repository.
 |---|---|
 | Boot raises on a missing env var | `runtime.exs` requires `CAD_SECRET_KEY_BASE`, `CAD_DATABASE_URL`, `CAD_PUBLIC_URL` in `MIX_ENV=prod`. Set them in `.env`. |
 | `CAD_DEMO_AUTH must never be set…` | The demo flag is compile-time only. Unset it in the environment and rebuild without `--build-arg CAD_DEMO_AUTH=…` (the Dockerfile rejects it). |
-| `migrate` exits non-zero | Check `docker compose … logs migrate`; usually the database URL/user/password or a missing extension. The app will not start until it passes. |
+| `migrate` exits non-zero | Check `docker compose … logs migrate`; usually the database URL, user, password, or a missing extension. The app will not start until it passes. |
 | Container is `unhealthy` | `docker compose … logs cadence`; the healthcheck calls `/health` on port 4000. A config raise happens before the endpoint binds. |
-| Permission denied under `/data` | The volume or bind mount is not writable by the `cadence` uid. See *Volumes and ownership*. |
-| Action run fails `docker_unavailable` | Proxy not reachable or Docker older than 26. Check `CAD_DOCKER_SOCKET` and proxy logs. |
-| Sign-in shows no form | Expected in production: only OAuth strategies are compiled in. Configure an OAuth client. |
+| Permission denied under `/data` | The volume or bind mount is not writable by the `cadence` uid. See [Volumes and ownership](#volumes-and-ownership). |
+| Action run fails `docker_unavailable` | Proxy not reachable or Docker older than 26. Check `CAD_DOCKER_SOCKET` and the proxy logs. |
+| Sign-in shows no form | No OAuth client is configured and passkeys are disabled. Configure an OAuth client, or enable `CAD_WEBAUTHN_ENABLED` with a valid RP ID and origin. |
+| Passkey prompt never appears | Origin is not a secure context, or `CAD_WEBAUTHN_ORIGIN`/`RP_ID` does not match. See [`passkeys.md`](passkeys.md#troubleshooting). |
 
 ## Security checklist
 
 - TLS at the proxy; `CAD_PUBLIC_URL` is `https://`.
 - `.env` is `chmod 600`; never commit it.
-- Docker socket via the allowlisted proxy only; never bind the raw socket into
-  the app container on a reachable host.
+- Docker socket access goes through the allowlisted proxy only; never bind the
+  raw socket into the app container on a reachable host.
 - Review `CAD_ACTIONS_*` limits before enabling actions; keep the artifact
   volume size-limited.
-- Back up `postgres_data` and `cadence_data` together (metadata + object store).
-  There is no built-in backup task yet (spec §16).
+- Back up `postgres_data` and `cadence_data` together (metadata and object
+  store). There is no built-in backup task yet
+  ([spec §16](spec.md#16-open-decisions)).
+- If passkeys are enabled, keep OAuth configured for every human account and
+  treat `CAD_WEBAUTHN_RP_ID` as permanent.
+
+## Related docs
+
+- [Daemon setup](daemon-setup.md) — the local half and project registration.
+- [Demo stack](demo.md) — a browsable local server.
+- [Import a Git repository](import.md) — history adoption after deployment.
+- [Security keys and passkeys](passkeys.md) — enable and operate WebAuthn.
+- [Spec §12](spec.md#12-deployment-model) — deployment contract.
+- [Security policy](../SECURITY.md) — private vulnerability reporting.

@@ -1,8 +1,8 @@
-# Cadence Release Notes
+# Cadence release notes
 
-## Unreleased (after 1.0.0)
+## Unreleased — 1.1.0 (on master)
 
-Phase 9 (import a local Git repository) and the WebAuthn/passkey slice are on
+Phase 9 (import a local Git repository) and the WebAuthn/passkey work are on
 `master`; the version bump waits for the release cut, so the four `mix.exs`
 projects stay at `1.0.0` until then. This section is the candidate text for
 `1.1.0`.
@@ -79,7 +79,7 @@ projects stay at `1.0.0` until then. This section is the candidate text for
 ## 1.0.0 — 2026-11-11
 
 The planned build order (spec §13, Phases 1–8) is complete. Cadence is a
-local-first, self-hosted source control system built on a DAG of session nodes.
+local-first, self-hosted source control system built on a DAG of snapshots.
 This is the first release with the documented contract considered stable; the
 items still open in spec §16 are optional and listed under **Known
 limitations**.
@@ -133,6 +133,20 @@ limitations**.
 - `docker compose up --build` gives a seeded, browsable server on
   <http://localhost:4000> (`docs/demo.md`).
 
+**Editor independence**
+- Neovim is optional. Nodes are created by the daemon's watcher from
+  working-tree changes, and the sync worker pushes them. Any process writing
+  inside a registered project directory — an IDE, another editor, a script, an
+  AI coding tool — produces nodes. The plugin only adds the DAG picker and
+  convenience commands; its daemon endpoints are plain HTTP over `daemon.sock`
+  (`docs/daemon-setup.md`).
+
+**Continuous integration**
+- One merge-gate workflow (`.github/workflows/ci.yml`) runs formatting, dev and
+  prod compiles, tests, the per-app 80% coverage floor, Hex retirement and
+  unused-lock checks, Sobelow, dependency CVE scanning, and a fail-closed
+  advisory-database check.
+
 ### Upgrade notes
 
 - **Back up `CAD_STATE_DIR` before upgrading the daemon.** This release's
@@ -150,16 +164,7 @@ limitations**.
 - The daemon release is built per OS/arch (`exqlite` ships a precompiled NIF).
   Linux needs `inotifywait` (`inotify-tools`) or `CAD_WATCH_BACKEND=fs_poll`.
 
-### Editor independence
-
-Neovim is optional. Nodes are created by the daemon's watcher from working-tree
-changes, and the sync worker pushes them. Any process writing inside a
-registered project directory — an IDE, another editor, a script, an AI agent —
-produces nodes. The plugin only adds the DAG picker and convenience commands;
-its daemon endpoints are plain HTTP over `daemon.sock` (`docs/daemon-setup.md`
-§9).
-
-### Known limitations (spec §16)
+### Known limitations
 
 - Conflict-bearing melds and doc generation have not been smoke-tested live
   with a real `CAD_LLM_API_KEY`; conflict-free unions skip the model.

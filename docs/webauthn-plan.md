@@ -1,9 +1,16 @@
-# Cadence — WebAuthn / Passkey (FIDO2) Plan
+# Cadence — WebAuthn / Passkey (FIDO2) design note
 
-> **Status:** approved 2026-11-11; G1–G4 shipped (data/config/Wax verification,
-> registration, passkey sign-in, management/recovery); G5 hardening and docs
-> shipped except the physical browser/YubiKey matrix (§10.3), which stays on
-> the release checklist.
+## Status
+
+Approved 2026-11-11. G1–G4 shipped: the credential store and Wax verification,
+the `/account/security` registration flow, passkey sign-in, and
+management/recovery. G5 hardening and documentation also shipped, except the
+physical browser/OS/YubiKey matrix in [§10.3](#103-browser-level), which stays
+on the release checklist. This document is the design record; the operator and
+end-user guide is [`passkeys.md`](passkeys.md), and the normative configuration
+contract is [spec §7.4](spec.md#74-auth) and
+[§12.6](spec.md#126-environment-variable-contract).
+
 > **Date:** 2026-11-11
 > **Scope:** `apps/cadence_server` only. No daemon, shared-schema, or sync changes.
 > **Approval:** `wax_ ~> 0.7` and the defaults below are approved. The §11/§12.6/§16
@@ -304,7 +311,7 @@ would rather not own the ceremony JS; Option A is the path when AshAuthenticatio
 
 ### 7.1 Components
 
-```
+```text
 apps/cadence_server/lib/cadence/server/
 ├── accounts/
 │   ├── user.ex                         (+ has_many :webauthn_credentials)
@@ -554,7 +561,7 @@ not needed once we render the OAuth links ourselves. A smaller alternative
   - base64url ↔ `Uint8Array`;
   - `get()` / `create()` with the options from `data-*` attributes;
   - fill hidden form fields and submit;
-  - map `DOMException.name` to copy (§7.10);
+  - map `DOMException.name` to copy (this document §7.10);
   - `data-confirm` handling for remove buttons;
   - optional conditional-UI wiring.
 - CSP stays `script-src 'self'`; no inline handlers, no `unsafe-eval`, no
@@ -625,10 +632,13 @@ not needed once we render the OAuth links ourselves. A smaller alternative
 
 ---
 
-## 9. Configuration (proposed `CAD_WEBAUTHN_*`)
+## 9. Configuration (shipped)
 
 All values are read in `config/runtime.exs` and stored in the application env;
-nothing is hardcoded (spec §12.6).
+nothing is hardcoded. The authoritative table is
+[spec §12.6](spec.md#126-environment-variable-contract); the operator
+guide is [`passkeys.md`](passkeys.md#configuration). This section records the
+defaults the design was approved with.
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
@@ -662,7 +672,8 @@ env-tunable in v1 (fewer ways to weaken the deployment).
 - `Passkeys` config: rp_id/origin parsing and the boot-validation rules
   (hostname only, suffix match, https/localhost, missing origin in prod).
 - Sign-count rule: 0/0, 0/N, N/0, N/N+1, N/N, N/N-1.
-- Last-credential rule: allowed with OAuth configured, refused without.
+- Last-credential rule: shipped as removable with a warning because OAuth is
+  the recovery path (the original plan proposed refusing without OAuth).
 
 ### 10.2 Integration with a fake authenticator
 

@@ -1,15 +1,17 @@
 # cadence.nvim
 
-Neovim front-end for the Cadence daemon (spec §13 Phase 1e). Provides `:CadOpen`,
-`:CadSpawn`, and `:CadSwitch`, all talking to the daemon over its Unix socket.
+Neovim front-end for the Cadence daemon. It talks to the daemon over its Unix
+socket and provides the DAG picker plus convenience commands: `:CadOpen`,
+`:CadSwitch`, `:CadSpawn`, `:CadUnion`, `:CadProposals`, `:CadDocSync`, and
+`:CadDocDiff`.
 
 ## Requirements
 
 - Neovim 0.9+
 - [plenary.nvim](https://github.com/nvim-lua/plenary.nvim)
 - `curl` on `PATH`
-- A running Cadence daemon — see `../docs/daemon-setup.md` (token, migration,
-  boot command, project registration)
+- A running Cadence daemon — see [daemon setup](../docs/daemon-setup.md) for the
+  token, migration, boot command, and project registration
 
 ## Install (lazy.nvim)
 
@@ -25,36 +27,40 @@ Neovim front-end for the Cadence daemon (spec §13 Phase 1e). Provides `:CadOpen
 }
 ```
 
-The socket path is resolved as: `setup({socket_path})` → `$CAD_STATE_DIR/daemon.sock`
-→ `~/.local/state/cadence/daemon.sock`.
+The socket path is resolved as: `setup({socket_path})` →
+`$CAD_STATE_DIR/daemon.sock` → `~/.local/state/cadence/daemon.sock`.
 
 ## Commands
 
-| Command          | Behavior                                                        |
-|------------------|-----------------------------------------------------------------|
-| `:CadOpen`       | Open the DAG picker for the current project.                    |
-| `:CadSwitch`     | Same picker (Enter moves the session pointer to the node).      |
-| `:CadUnion`      | Open the picker in union mode (`CR` toggles `✓`; submission needs the server). |
-| `:CadProposals`  | List recent union proposals and copy the chosen public URL (or token when the server URL is unset). |
+| Command | Behavior |
+|---|---|
+| `:CadOpen` | Open the DAG picker for the current project. |
+| `:CadSwitch` | Open the same picker; `<CR>` moves the session pointer to the node. |
 | `:CadSpawn [name]` | Spawn a `sandbox` child from the current node (prompts if no name). |
+| `:CadUnion` | Open the picker in union mode (`<CR>` toggles `✓`; submission needs the server). |
+| `:CadProposals` | List recent union proposals and copy the chosen public URL (or token when the server URL is unset). |
+| `:CadDocSync [node]` | Trigger documentation automation for the current or named node. |
+| `:CadDocDiff [node]` | Show the documentation diff attached to the current or named node. |
 
 ## Picker
 
 The DAG renders as a left-aligned rail (`clamp(20% of width, 20, 60)` columns,
-configurable via `require("cadence").setup({ graph = { ... } })`).
+configurable through `require("cadence").setup({ graph = { ... } })`).
 
 - `h`/`j`/`k`/`l` (and arrows) move between nodes.
 - `<CR>` switches the session pointer to the highlighted node.
 - Hovering a node opens a panel with committer, date/time, flags, the commit
   message, and a GitHub-style color-coded diff of the node against its parent
   (added/removed lines, file headers, `…` for collapsed context).
-- `<Tab>` enters/leaves the hover panel (e.g. to scroll a long message/diff).
+- `<Tab>` enters or leaves the hover panel, for example to scroll a long message
+  or diff.
 - `q`/`<Esc>` close.
 
 When Neovim starts inside a registered project directory, the picker opens
-automatically (spec §6.3). Disable with `setup({ auto_open = false })`.
+automatically ([spec §6.3](../docs/spec.md#63-default-selection-logic)). Disable
+it with `setup({ auto_open = false })`.
 
-The "current project" is determined by matching `vim.fn.getcwd()` against the
+The current project is determined by matching `vim.fn.getcwd()` against the
 `work_dir` of registered projects (`GET /projects`). Open Neovim from inside the
 project's working directory.
 
@@ -75,7 +81,7 @@ require("cadence").setup({
 ## Manual smoke test
 
 ```bash
-# terminal A — daemon (see docs/daemon-setup.md for token + migration)
+# terminal A — daemon (see docs/daemon-setup.md for token and migration)
 mix run --no-start --no-halt -e 'Application.ensure_all_started(:cadence_daemon)'
 
 # terminal B — register a project (work_dir must be an existing directory)
@@ -86,8 +92,10 @@ nvim
 #   :CadOpen       -> DAG rail; hover shows metadata/message; <CR> switches
 #   :CadSpawn      -> spawns a sandbox child, then :CadOpen shows it branched
 #   :CadSwitch     -> same picker, titled "switch"
-#   :CadUnion      -> picker in union mode (CR toggles ✓)
+#   :CadUnion      -> picker in union mode (<CR> toggles ✓)
 #   :CadProposals  -> list recent unions; choose one to copy its public URL
+#   :CadDocSync    -> queue documentation for the current node
+#   :CadDocDiff    -> show the documentation diff, if one exists
 ```
 
 Run the pure-Lua unit tests (no daemon needed):
@@ -97,7 +105,17 @@ nvim --headless -l cadence.nvim/spec/graph_spec.lua
 nvim --headless -l cadence.nvim/spec/diff_spec.lua
 nvim --headless -l cadence.nvim/spec/doc_spec.lua
 nvim --headless -l cadence.nvim/spec/proposal_spec.lua
+nvim --headless -l cadence.nvim/spec/client_spec.lua
 ```
 
-Note: a normal commit advances the session pointer automatically (spec §5.3), so
-`:CadSpawn` works immediately after any commit.
+A normal commit advances the session pointer automatically
+([spec §5.3](../docs/spec.md#53-commit-pipeline)), so `:CadSpawn` works
+immediately after any commit.
+
+## Related docs
+
+- [Daemon setup](../docs/daemon-setup.md) — install, token, environment, and
+  troubleshooting.
+- [Import a Git repository](../docs/import.md) — history without the editor.
+- [Spec §6.1](../docs/spec.md#61-neovim-plugin-commands) — plugin command
+  contract.

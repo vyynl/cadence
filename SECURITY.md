@@ -9,7 +9,7 @@ and are handled privately.
 
 | Version | Supported |
 |---|---|
-| 1.x (current: 1.0.0) | Yes |
+| 1.x (current release: 1.0.0; 1.1.0 is unreleased on `master`) | Yes |
 | < 1.0 | No |
 
 Fixes land on the latest 1.x release and on `master`. There are no maintained
@@ -63,9 +63,10 @@ In scope:
 
 - **Server** (`cadence_server`): the public portfolio, DAG, repository browser,
   proposal pages, and review UI; authentication and personal access tokens;
-  the `/sync/*` API, rate limiting, and body limits; the meld/union pipeline;
-  secret detection, quarantine, and incident handling; action runs and artifact
-  downloads; the Docker socket-proxy boundary.
+  passkey registration and sign-in ceremonies, the account security page, and
+  `passkeys.js`; the `/sync/*` API, rate limiting, and body limits; the
+  meld/union pipeline; secret detection, quarantine, and incident handling;
+  action runs and artifact downloads; the Docker socket-proxy boundary.
 - **Daemon** (`cadence_daemon`): the Unix socket API, file watcher, commit and
   doc queues, local SQLite state, and the sync client.
 - **Neovim plugin** (`cadence.nvim`): command handling and the socket client.

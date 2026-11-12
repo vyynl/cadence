@@ -1,4 +1,4 @@
-# Cadence — Self-Hosted Source Control Warehouse
+# Cadence — Self-Hosted Source Control System
 
 **Canonical spec.** This document is the source of truth for the Cadence
 project. Anywhere the codebase or older notes refer to `superposition` /
@@ -12,7 +12,27 @@ project. Anywhere the codebase or older notes refer to `superposition` /
 - Umbrella apps: `cadence_shared`, `cadence_daemon`, `cadence_server`
 
 A local-first, self-hosted source control system designed around a **DAG of
-session nodes** rather than Git's branch model. Built in Elixir.
+snapshots** rather than Git's branch model. Built in Elixir.
+
+## Contents
+
+- [1. Vision](#1-vision)
+- [2. Architecture Overview](#2-architecture-overview)
+- [3. Core Concepts & Terminology](#3-core-concepts-terminology)
+- [4. Data Model](#4-data-model)
+- [5. Phase 1 — Local Daemon & Auto-Commit](#5-phase-1-local-daemon-auto-commit)
+- [6. Phase 2 — DAG, Spawn, Switch, Union](#6-phase-2-dag-spawn-switch-union)
+- [7. Phase 3 — Web UI & Portfolio](#7-phase-3-web-ui-portfolio)
+- [8. Phase 6 — Docker Actions Layer](#8-phase-6-docker-actions-layer)
+- [9. Documentation Automation](#9-documentation-automation)
+- [10. Sync Protocol (Local ↔ Cloud)](#10-sync-protocol-local-cloud)
+- [11. Technology Stack](#11-technology-stack)
+- [12. Deployment Model](#12-deployment-model)
+- [13. Suggested Build Order](#13-suggested-build-order)
+- [14. Non-Goals](#14-non-goals)
+- [15. Guiding Principles](#15-guiding-principles)
+- [16. Open Decisions](#16-open-decisions)
+- [17. Glossary of File Paths](#17-glossary-of-file-paths)
 
 ---
 
@@ -39,7 +59,7 @@ The system is:
 - **Self-hosted.** The server runs on the owner's hardware (TrueNAS), not a
   third-party SaaS.
 
-### Primary use cases
+### 1.1 Primary use cases
 
 1. **Portfolio showcase.** A public, read-only web view of projects with
    rendered docs, DAG visualization, and optional interactive notebooks.
@@ -55,7 +75,7 @@ The system is:
 
 ## 2. Architecture Overview
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────┐
 │  LOCAL MACHINE                                                   │
 │                                                                  │
@@ -64,7 +84,7 @@ The system is:
 │  │  Plugin     │                        │  (Elixir/OTP)    │    │
 │  └─────────────┘                        │                  │    │
 │                                          │  - file watcher  │    │
-│  ┌─────────────┐                        │  - local git repo│    │
+│  ┌─────────────┐                        │  - local Git repo│    │
 │  │  Working    │◄────── watches ────────│  - commit queue  │    │
 │  │  Directory  │                        │  - doc agent     │    │
 │  └─────────────┘                        │  - sync ledger   │    │
@@ -86,7 +106,7 @@ The system is:
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-### Key architectural principle
+### 2.1 Key architectural principle
 
 **Commits are local-first. Unions are server-first.**
 
@@ -97,13 +117,13 @@ The system is:
 - The daemon and server communicate **only** via the HTTP sync protocol
   (§10). No shared runtime, no distributed Erlang, no shared process tree.
 
-### Why two apps
+### 2.2 Why two apps
 
 The daemon and server have fundamentally different concerns:
 
 | Concern | Daemon | Server |
 |---|---|---|
-| Database | SQLite (`ecto_sqlite3`) | Postgres |
+| Database | SQLite (`ecto_sqlite3`) | PostgreSQL |
 | Web stack | None (Unix socket only) | Phoenix + LiveView |
 | Filesystem | Watches user's project dirs | Doesn't touch user filesystems |
 | Network | Outbound to cloud + LLM APIs | Inbound from clients |
@@ -121,6 +141,8 @@ via `cadence_shared`. They do **not** share a runtime.
 | Term | Meaning |
 |---|---|
 | **Node** | An immutable snapshot = one Git commit + metadata. The atomic unit of the graph. |
+| **Snapshot** | The file tree stored by a node's Git commit. |
+| **Commit** | The Git commit object a node points at through `git_commit_sha`. |
 | **DAG** | The project's directed acyclic graph of nodes. |
 | **Session pointer** | Per-user, per-project cursor indicating which node that user is currently editing from. |
 | **Active head** | A node in a user's active heads set. Normally the most recent commit; spawns add the parent to this set. |
@@ -160,7 +182,7 @@ job is to produce the tree; the human's job is to verify it.
 
 ### 4.1 Node
 
-```
+```text
 Node
   id                :uuid
   project_id        :uuid
@@ -192,7 +214,7 @@ schema, so the daemon's SQLite store is unaffected.
 
 ### 4.2 Project
 
-```
+```text
 Project
   id                :uuid
   name              :string
@@ -205,7 +227,7 @@ Project
 
 ### 4.3 Membership (per-user, per-project)
 
-```
+```text
 Membership
   user_id           :uuid
   project_id        :uuid
@@ -221,7 +243,7 @@ sync to the cloud so your machines agree on where you left off.
 
 ### 4.4 Preview node resolution
 
-```
+```text
 pinned_sorted = project.nodes.filter(pinned).sort_by(created_at desc)
 preview_node  = pinned_sorted.first
              ?? project.nodes.filter(:functioning).sort_by(created_at desc).first
@@ -279,27 +301,33 @@ and how credit is displayed.
 
 ### 5.2 Supervision tree
 
-```
+```text
 Cadence.Daemon.Application
 ├── Cadence.Daemon.Repo                (SQLite via ecto_sqlite3)
 ├── Cadence.Daemon.LLMRateLimit        (Hammer, shared ETS)
 ├── Cadence.Daemon.AgentWorker         (Task.Supervisor for LLM calls)
+├── Cadence.Daemon.DocAgentWorker      (Task.Supervisor for doc calls)
 ├── Cadence.Daemon.MessageQueue        (async commit-message retry)
+├── Cadence.Daemon.DocQueue            (doc jobs, retries, and ordering)
+├── Cadence.Daemon.SyncLedger          (persistent pending queue + cursors)
+├── {Task.Supervisor, Cadence.Daemon.SyncTasks}
+├── {Registry, Cadence.Daemon.Queues}
 ├── Cadence.Daemon.ProjectRegistry     (DynamicSupervisor)
 │   └── Cadence.Daemon.ProjectSupervisor  (per project, :rest_for_one)
 │       ├── Cadence.Daemon.CommitQueue (serialized commits per project)
 │       └── Cadence.Daemon.Watcher     (file_system + debounce)
-├── Cadence.Daemon.SyncLedger          (persistent pending queue + cursors)
-├── Cadence.Daemon.SyncTasks           (Task.Supervisor for network cycles)
+├── {Task.Supervisor, Cadence.Daemon.ImportTasks}
+├── Cadence.Daemon.Importer            (one import at a time)
 ├── Cadence.Daemon.SyncWorker          (scheduler: one task per project)
+├── Cadence.Daemon.SyncSocket          (optional notification channel)
 └── Cadence.Daemon.API                 (Bandit/Plug, Unix socket)
 ```
 
 `Cadence.Daemon.SyncClient` is a stateless Req wrapper used by sync tasks (it
 is not a supervised child). `Cadence.Shared.GitStore` is stateless and lives in
 `cadence_shared`; each project's `CommitQueue` holds a handle to its object
-store. The doc agent (planned) will run as a supervised `Task` so it can be
-cancelled if a new commit arrives.
+store. The doc queue runs the doc agent as a supervised `Task` so it can be
+cancelled if a new commit arrives (§9.6).
 
 **Design notes:**
 
@@ -320,7 +348,7 @@ cancelled if a new commit arrives.
 
 ### 5.3 Commit pipeline
 
-```
+```text
 file event
   → debounce (2s idle)
   → snapshot working tree into the Git object store
@@ -360,7 +388,7 @@ an older node and committing branches from there (spec §3.2).
 
 **Prompt template (initial):**
 
-```
+```text
 You are generating a commit message for a session-based version control
 system. Given the diff below, produce:
 
@@ -522,8 +550,7 @@ window (§7.3).
 
 ### 6.3 Default selection logic
 
-1. Attempt cloud sync with a short timeout (default ~500ms, configurable via
-   `CAD_SYNC_TIMEOUT_MS`).
+1. Attempt cloud sync with a short timeout (about 500 ms).
 2. If sync succeeds: default to most-recent node by the current user.
 3. If sync fails: default to most-recent node by the current user in the
    local repo.
@@ -821,7 +848,7 @@ Each node is a filled circle (`r ≈ 8`), fill color by flag:
 
 **Edge routing:** elbow path, diagonal to the target X, then straight down.
 
-```
+```text
 M px,py
 L cx, py + |cx - px|
 L cx,cy
@@ -835,7 +862,7 @@ Edge `stroke` inherits the **child's** flag color.
 
 **Y-axis mapping:** topological depth, with a fixed per-layer spacing.
 
-```
+```text
 y_node = depth(node) * layer_height
 ```
 
@@ -1340,7 +1367,7 @@ child.
 
 ### 9.3 Pipeline
 
-```
+```text
 code diff
   → DocAgent prompt: schema + current docs + diff
   → revised docs (only affected sections)
@@ -1350,7 +1377,7 @@ code diff
 
 **Prompt template (initial):**
 
-```
+```text
 You are updating project documentation. You have:
 1. A documentation schema (below).
 2. The current documentation files.
@@ -1444,7 +1471,7 @@ recovery, or `:CadDocSync`.
 server is immutable and is never rewritten. If its docs resolve afterwards — a
 push lands while the model runs, a manual `:CadDocSync` targets a code-only
 pushed node, or a reconnect retry resumes a stamped pushed node whose docs were
-deferred — the job writes `C2` (git parent `C1`) and inserts it as a **docs
+deferred — the job writes `C2` (Git parent `C1`) and inserts it as a **docs
 child node** instead:
 
 - `git_commit_sha: C2`, `parents: [code_node.id]`, `docs_state: :current`,
@@ -1619,14 +1646,14 @@ without disabling sync.
 
 Every Git object is transferred as:
 
-```
+```text
 %{sha: "40hex", type: "commit" | "tree" | "blob", data: base64(payload)}
 ```
 
 `payload` is the raw object data without Git's `<type> <size>\0` header; the
 receiver reconstructs the header and validates that `sha` matches the content.
 
-```
+```text
 SyncMessage.PushNodes
   nodes: [%{local_id, git_objects, metadata}]
 
@@ -1713,7 +1740,7 @@ inserts); the daemon can mark only that node failed and retry the rest.
 | Phoenix auth routes | `ash_authentication_phoenix` |
 | Ash DSL formatting / codegen | `sourceror` (dev/test only) |
 | Static security analysis | `sobelow` (dev/test only, `~> 0.18`) |
-| CVE scanning (Mix dependencies) | `mix_audit` (dev/test only, `~> 2.1`; declared in `cadence_server`); run `mix deps.audit --ignore-file .mix_audit.ignore` from the **umbrella root** — an app-local run finds no `mix.lock` and scans nothing. Audits the whole umbrella lock (dev/test packages included). The advisory DB is a `~/.local/share/elixir-security-advisories-mirego` git clone, so a missing or stale checkout still prints a clean pass; CI must guard it |
+| CVE scanning (Mix dependencies) | `mix_audit` (dev/test only, `~> 2.1`; declared in `cadence_server`) |
 | LiveView test DOM | `lazy_html` (test only; required by `Phoenix.LiveViewTest`) |
 | Docker API | `ex_docker_api` `~> 1.55` (Tesla + the built-in httpc adapter; requires Elixir 1.20) |
 | Rate limiting | `Hammer` (declared in `cadence_shared`; used by the daemon's `LLMRateLimit` and the server's `LLMRateLimit` / `MeldWorker` / `SyncRateLimit`) |
@@ -1731,6 +1758,12 @@ inserts); the daemon can mark only that node failed and retry the rest.
 | Cloud database | PostgreSQL (`postgrex`) |
 | PubSub | `Phoenix.PubSub` |
 | SVG rendering (web) | Hand-rolled LiveComponent |
+
+Run `mix deps.audit --ignore-file .mix_audit.ignore` from the **umbrella root**:
+an app-local run finds no `mix.lock` and scans nothing. It audits the whole
+umbrella lock, including dev/test packages. The advisory database is a
+`~/.local/share/elixir-security-advisories-mirego` Git clone, so a missing or
+stale checkout still prints a clean pass; CI guards it.
 
 **Dependency discipline:** do not add dependencies beyond this list without
 justification. If a new dependency is needed, add it to this table first.
@@ -1751,22 +1784,28 @@ recorded here first.
 
 ### 12.1 Umbrella structure
 
-```
+```text
 cadence/
 ├── apps/
 │   ├── cadence_shared/    # schemas, sync protocol, LLM client, GitStore
 │   ├── cadence_daemon/    # headless local process (mix release)
-│   └── cadence_server/    # Phoenix + Postgres + Docker (container)
+│   └── cadence_server/    # Phoenix + PostgreSQL + Docker (container)
 ├── config/
 ├── docs/
 │   ├── spec.md            # this document
-│   ├── architecture.md
-│   ├── daemon.md
-│   ├── server.md
-│   └── sync-protocol.md
+│   ├── README.md          # documentation index
+│   ├── demo.md
+│   ├── import.md
+│   ├── daemon-setup.md
+│   ├── deploy.md
+│   ├── passkeys.md
+│   ├── release-notes.md
+│   ├── ui-notes.md
+│   └── webauthn-plan.md
 ├── mix.exs                # umbrella root
 ├── CONTRIBUTING.md        # contributor setup and merge gate
-└── docker-compose.yml     # server deployment
+├── docker-compose.yml     # local demo stack
+└── docker-compose.prod.yml # production deployment stack
 ```
 
 `cadence_shared` is a `path` dependency of both. It contains:
@@ -1778,7 +1817,7 @@ cadence/
 - `Cadence.Shared.RepoBehaviour` (adapter-agnostic queries used by both)
 
 Both daemon and server define their own `Repo` module pointing at the shared
-schemas, with different adapters (SQLite vs Postgres). Name them explicitly:
+schemas, with different adapters (SQLite vs PostgreSQL). Name them explicitly:
 
 - `Cadence.Daemon.Repo`
 - `Cadence.Server.Repo`
@@ -1788,7 +1827,7 @@ schemas, with different adapters (SQLite vs Postgres). Name them explicitly:
 - Distributed as a `mix release` (`cadence_daemon`, §12.8) installed per dev
   machine. The release contains the `cadence_daemon` + `cadence_shared`
   application closure and excludes the server app: no Phoenix/LiveView, and no
-  Postgres server or connection (`Cadence.Daemon.Repo` is SQLite). Optional Ecto
+  PostgreSQL server or connection (`Cadence.Daemon.Repo` is SQLite). Optional Ecto
   adapter libraries may still be assembled into the release and started inert by
   OTP, but they are never configured and open no connection.
 - The daemon release runs with Erlang distribution off
@@ -1833,7 +1872,7 @@ schemas, with different adapters (SQLite vs Postgres). Name them explicitly:
 
 - Distributed as a Docker image (`docker/Dockerfile`, spec §12.8).
 - Targets TrueNAS SCALE or any Docker host.
-- Compose stack: app + Postgres + Docker socket proxy; the reference file is
+- Compose stack: app + PostgreSQL + Docker socket proxy; the reference file is
   `docker-compose.prod.yml` (§12.4).
 - Phoenix endpoint uses `Bandit.PhoenixAdapter` explicitly (Phoenix otherwise
   defaults to Cowboy2, which is not a Cadence dependency).
@@ -1843,11 +1882,11 @@ schemas, with different adapters (SQLite vs Postgres). Name them explicitly:
   - `/data/artifacts` — action outputs
   - `/data/actions` — staged action snapshots (named volume shared with the
     host Docker daemon; §8.3)
-  - Postgres data
+  - PostgreSQL data
 - Docker socket mounted read-only, preferably through a socket proxy.
 - TLS terminated by the host's reverse proxy (TrueNAS built-in, Caddy, nginx).
 
-### 12.4 docker-compose.yml (reference)
+### 12.4 Reference compose stack
 
 ```yaml
 services:
@@ -1966,10 +2005,10 @@ if config_env() == :prod do
       System.get_env("CAD_TOKEN_SIGNING_SECRET", System.fetch_env!("CAD_SECRET_KEY_BASE"))
 
   config :cadence_shared, Cadence.Shared.LLM,
-    provider: System.fetch_env!("CAD_LLM_PROVIDER"),
-    api_key: System.fetch_env!("CAD_LLM_API_KEY"),
-    model: System.fetch_env!("CAD_LLM_MODEL"),
-    base_url: System.get_env("CAD_LLM_BASE_URL")
+    provider: System.get_env("CAD_LLM_PROVIDER", "deepseek"),
+    api_key: System.get_env("CAD_LLM_API_KEY"),
+    model: System.get_env("CAD_LLM_MODEL", "deepseek-chat"),
+    base_url: System.get_env("CAD_LLM_BASE_URL", "https://api.deepseek.com")
 
   config :cadence_server,
     actions_enabled: System.get_env("CAD_ACTIONS_ENABLED", "true") == "true",
@@ -1995,7 +2034,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_SECRET_KEY_BASE` | yes | — | Phoenix secret |
 | `CAD_LIVE_VIEW_SALT` | no | `CAD_SECRET_KEY_BASE` | LiveView static-token signing salt |
 | `CAD_TOKEN_SIGNING_SECRET` | no | `CAD_SECRET_KEY_BASE` | JWT/AshAuthentication signing secret |
-| `CAD_DATABASE_URL` | yes | — | Postgres connection |
+| `CAD_DATABASE_URL` | yes | — | PostgreSQL connection |
 | `CAD_DB_POOL_SIZE` | no | `10` | Ecto pool |
 | `CAD_GIT_STORE_PATH` | no | `/data/git` | Git object storage |
 | `CAD_SYNC_PULL_LIMIT` | no | `100` | Max nodes returned per pull batch |
@@ -2065,10 +2104,10 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_OAUTH_GOOGLE_CLIENT_ID` | no | — | Google OAuth |
 | `CAD_OAUTH_GOOGLE_CLIENT_SECRET` | no | — | Google OAuth |
 | `CAD_DEMO_AUTH` | no | `false` | **Build-time** switch for the demo password strategy (§7.4); must be absent in prod |
-| `CAD_LLM_PROVIDER` | yes | — | `deepseek` \| `openai` \| `anthropic` \| … |
-| `CAD_LLM_API_KEY` | yes | — | Provider key |
-| `CAD_LLM_MODEL` | no | provider default | Model ID |
-| `CAD_LLM_BASE_URL` | no | provider default | Base URL (DeepSeek: `https://api.deepseek.com`) |
+| `CAD_LLM_PROVIDER` | no | `deepseek` | `deepseek` \| `openai` \| `anthropic` \| … |
+| `CAD_LLM_API_KEY` | no | — | Provider key; absent ⇒ AI features are skipped |
+| `CAD_LLM_MODEL` | no | `deepseek-chat` | Model ID |
+| `CAD_LLM_BASE_URL` | no | `https://api.deepseek.com` | Provider base URL |
 | `CAD_DOCKER_SOCKET` | no | `http://localhost:2375` | Docker API (via proxy) |
 | `CAD_ACTIONS_ENABLED` | no | `true` | Disable action layer |
 | `CAD_PUBLIC_URL` | yes | — | Canonical URL for links |
@@ -2080,13 +2119,11 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 |---|---|---|---|
 | `CAD_SERVER_URL` | no | — | Cloud sync target (absence ⇒ offline mode) |
 | `CAD_AUTH_TOKEN` | no | — | Personal access token (absence ⇒ offline mode) |
-| `CAD_PROJECTS_ROOT` | no | `~/code` | Where projects live |
-| `CAD_STATE_DIR` | no | `~/.local/state/cadence` | Socket, cache |
-| `CAD_CONFIG_DIR` | no | `~/.config/cadence` | TOML + env |
-| `CAD_LLM_PROVIDER` | yes | — | Same as server |
-| `CAD_LLM_API_KEY` | yes | — | Same as server |
-| `CAD_LLM_MODEL` | no | provider default | Same as server |
-| `CAD_LLM_BASE_URL` | no | provider default | Same as server |
+| `CAD_STATE_DIR` | no | `~/.local/state/cadence` | Socket, SQLite database, and Git stores |
+| `CAD_LLM_PROVIDER` | no | `deepseek` | Same as server; AI features are optional |
+| `CAD_LLM_API_KEY` | no | — | Same as server; absent ⇒ AI features are skipped |
+| `CAD_LLM_MODEL` | no | `deepseek-chat` | Same as server |
+| `CAD_LLM_BASE_URL` | no | `https://api.deepseek.com` | Same as server |
 | `CAD_WATCH_DEBOUNCE_MS` | no | `2000` | Idle before commit |
 | `CAD_WATCH_BACKEND` | no | `fs_inotify` (Linux), `fs_poll` (macOS) | `file_system` backend; `fs_poll` everywhere, `fs_mac` opt-in on macOS |
 | `CAD_LOCAL_USER_ID` | no | `00000000-0000-0000-0000-000000000000` | Local user UUID used for `created_by` and membership |
@@ -2094,7 +2131,6 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_GIT_AUTHOR_EMAIL` | no | `cadence@local` | Author email written into local Git commits |
 | `CAD_SYNC_ENABLED` | no | `true` | Enable automatic background sync |
 | `CAD_SYNC_CHANNEL_ENABLED` | no | `true` | Enable the optional notification socket (polling remains active) |
-| `CAD_SYNC_TIMEOUT_MS` | no | `500` | Picker sync attempt |
 | `CAD_SYNC_REQUEST_TIMEOUT_MS` | no | `5000` | Background sync HTTP request timeout |
 | `CAD_SYNC_UNION_TIMEOUT_MS` | no | `180000` | Synchronous union HTTP timeout (must exceed the server's `(CAD_MELD_RETRY_ATTEMPTS + 1) × CAD_MELD_TIMEOUT_MS + CAD_MELD_RETRY_BACKOFF_MS`) |
 | `CAD_SYNC_INTERVAL_MS` | no | `30000` | Delay between background sync passes |
@@ -2139,10 +2175,10 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
    `config/runtime.exs` passes to AshAuthentication).
 3. Create TrueNAS dataset for `/data/git` and `/data/artifacts`, or bind-mount
    host paths.
-4. Postgres volume initialized on first run.
+4. PostgreSQL volume initialized on first run.
 5. Run migrations (8a: `docker compose -f docker-compose.prod.yml up` runs this
    automatically as the one-shot `migrate` service):
-   ```
+   ```bash
    docker compose -f docker-compose.prod.yml run --rm migrate
    # or, against a running container:
    docker compose -f docker-compose.prod.yml exec cadence \
@@ -2169,7 +2205,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   (§12.4); operator steps are in `docs/deploy.md`.
 - **Daemon release (Phase 8b, shipped):** the root `mix.exs` defines a
   `cadence_daemon` release containing the `cadence_daemon` + `cadence_shared`
-  application closure (no Phoenix/Postgres/LiveView); the entry point is
+  application closure (no Phoenix/PostgreSQL/LiveView); the entry point is
   `bin/cadence_daemon`. `Cadence.Daemon.Release` provides `migrate/0` (creates
   the state directory owner-only, then runs the SQLite migrations under
   `Ecto.Migrator.with_repo/2`), `repos/0`, `migrations_path/1`, and
@@ -2512,7 +2548,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   headless Chromium checked 1440px and 390px without horizontal overflow.
   Phase 9 is complete.
 
-**Post-1.0 — WebAuthn / passkeys (in progress)**
+**Post-1.0 — WebAuthn / passkeys (shipped; hardware matrix pending)**
 - G1 (shipped): `wax_` 0.7 dependency, `webauthn_credentials` store, `CoseKey`
   type, challenge lifecycle, attestation/assertion verification, credential
   CRUD, sign-count rules, and the `CAD_WEBAUTHN_*` boot validation.
@@ -2567,6 +2603,136 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 
 ## 16. Open Decisions
 
+Status as of 2026-11-11. Open items are the current backlog; resolved items are
+kept for traceability. Section numbers are stable and are not renumbered.
+
+### Open
+
+- [ ] **Secret filter overrides:** per-project allowlists or custom patterns for
+      legitimate files that trip the scanner. Deferred until false positives are
+      observed.
+- [ ] **Syntax highlighting:** plain escaped code vs. a server-side highlighter
+      (e.g. Makeup) vs. a vendored client-side highlighter. Must be recorded in
+      §11 before implementation.
+- [ ] **Public flags:** the full public DAG exposes `broken`/`sandbox` nodes and
+      their snapshots. Revisit if those should be members-only while keeping the
+      rest of the DAG public.
+- [ ] **Project visibility/publishing (Phase 3):** all projects are publicly
+      discoverable by default (portfolio index + `/p/:slug`). A per-project
+      `visibility`/`published` column and owner control are deferred until a
+      concrete need appears; adding them later requires a migration. Public
+      proposal links must respect project visibility once it exists.
+- [ ] **Web docs review (approve/reject):** deferred from Phase 5. Nodes are
+      immutable, so rejecting generated docs needs a review object (like a
+      proposal) rather than mutating the node. Until then the web UI shows a
+      read-only `docs_state` badge (linking the docs child node when the
+      generation happened after the snapshot was pushed), and review happens in
+      Neovim via `:CadDocDiff` (§9.4).
+- [ ] **Neovim plugin distribution:** plain Lua files, or a proper plugin with
+      lazy.nvim/packer specs.
+- [ ] **Docker-in-Docker vs. host socket proxy:** host socket proxy is the
+      current plan (§8.4). Revisit if isolation needs increase.
+- [ ] **Docker Engine floor / API version:** action staging relies on
+      `volume-subpath` (API 1.45, Docker 26+). `CAD_DOCKER_API_VERSION` defaults
+      to `v1.45` because that is the compatible floor for Docker 26–29; there is
+      no negotiation, so pointing it at a version the daemon does not support
+      fails creates as `create_failed`. Add `GET /version` negotiation if a
+      mixed fleet appears.
+- [ ] **Action staging/output quota (deployment prerequisite):** `/out` is a
+      per-run subpath on the shared volume with no quota while the action runs,
+      so a hostile action can fill the host volume during its timeout. Before
+      enabling actions, `CAD_ACTIONS_VOLUME_PATH` must be placed on a filesystem
+      with a size/space limit (or monitored with a kill); the demo stack is a
+      dev aid and does not provision one. The collection caps bound only the
+      copy after exit.
+- [ ] **Action container user namespace:** action containers run with the
+      image's `USER` and the host's default user namespace (no `UsernsMode` or
+      forced uid). `/out` is world-writable so non-root images work, but a
+      root-owned image still runs uid 0 inside the container. Consider
+      `userns-remap` or a forced non-root uid for stronger isolation.
+- [ ] **`Project.docker_image` has no writer:** the runner honors the column,
+      but only tests set it today. An admin surface must provide a way to
+      set/clear it (and to validate that the image can run against
+      `/workspace`). 6c did not add one.
+- [ ] **Action log streaming is post-exit:** 6b captures logs after the
+      container exits (TTY mode, stderr merged into stdout), and 6c follows the
+      `{:action_run_updated, project_id, run_id, status}` PubSub event on the
+      member run page. Partial/live output streaming would need a follow API on
+      the Docker client; until then the page shows status live and output at the
+      end. Logs contain terminal/ANSI escapes and are stripped before rendering
+      (§8.3).
+- [ ] **Public preview auth:** fully anonymous, or require a lightweight
+      signed-URL / API key to avoid scraping.
+- [ ] **Backup strategy for the cloud server:** PostgreSQL WAL archiving +
+      object store for Git packfiles.
+- [ ] **Multi-user conflict UX:** when two trusted users spawn from the same
+      node, how does the picker display the divergence?
+- [ ] **Team/supervisor schema:** exact shape and sync channel for the
+      lightweight §4.6 relationships.
+- [ ] **Incident planning integrations:** Phase 4 ships alerts with
+      `open | resolved` only. Assignee, comments/threads, and external issue
+      tracker integrations are deferred (§6.7).
+- [ ] **Parents `uuid[]` → edges migration threshold:** when the materialized
+      parent array should become a separate edge table. Independent of the
+      storage repack trigger above.
+- [ ] **Multi-node notification fan-out:** Phoenix Channels/PubSub broadcasts
+      are local to one server node. Revisit if the server runs multi-node;
+      polling remains the correctness fallback in the meantime.
+- [ ] **Ash policy authorizer / SAT solver:** server Ash resources currently
+      rely on controller-level checks rather than `Ash.Policy.Authorizer`.
+      Revisit when the web UI exposes Ash actions directly; enabling policies
+      requires adding `picosat_elixir` or `simple_sat` to spec §11.
+- [ ] **Import sources beyond a local path:** only a local worktree or bare
+      repository is supported today (§5.7). Importing from a remote URL,
+      incremental background mirroring of an upstream, and a web-side import
+      UI are deferred; the re-run of an advanced ref is the incremental path.
+- [ ] **WebAuthn hardware matrix (G5 residual):** the strict sign-count/CAS
+      review, IP rate limiter, proxy/origin tests, session-cookie `secure`
+      flag, demo enablement, and operator runbook are shipped (§7.4, §12.9).
+      What remains is the manual browser/OS/YubiKey matrix in
+      `docs/webauthn-plan.md` §10.3 (USB/NFC, PIN/fingerprint, platform and
+      cross-device passkeys, wrong-PIN retries, key-full, proxy mismatch); keep
+      it on the release checklist for the hardware actually supported.
+- [ ] **Conditional UI and passkey step-up:** deferred — conditional/autofill
+      credential UI and a fresh passkey assertion before minting a daemon PAT
+      are later hardening slices.
+- [ ] **Image publishing / CI:** `docker-compose.prod.yml` builds
+      `cadence-server:prod` (or `CAD_SERVER_IMAGE`) locally and the image is
+      otherwise operator-managed. Registry publishing, version pinning, and a
+      build pipeline are deferred until a registry workflow exists.
+- [ ] **Accepted hackney and assent advisories (time-boxed):** `mix hex.audit`
+      and `mix deps.audit` report known advisories against **hackney 1.25.0**
+      and **assent 0.2.13**. They are ignored by exact advisory ID in
+      `.mix_audit.ignore` and `mix.exs` (`ignore_advisories`), never by package,
+      so a new advisory still fails.
+      - hackney: GHSA-gp9c-pm5m-5cxr / CVE-2026-47071 (SOCKS5 TLS upgrade
+        ignores the caller timeout, high), GHSA-j9wq-vxxc-94wf / CVE-2026-47075
+        (query CR/LF injection, moderate), GHSA-mp55-p8c9-rfw2 /
+        CVE-2026-47069 (CRLF injection via `domain`/`path`, low),
+        GHSA-pj7v-xfvx-wmjq / CVE-2026-47076 (SSRF allowlist bypass, moderate),
+        and CVE-2026-115693 (custom `cacerts`/`cacertfile` do not restrict
+        trust, critical). Mitigations: no SOCKS5 proxy is configured; query
+        strings come from fixed provider paths with no user input; no
+        `domain`/`path` option is passed; there is no host allowlist (the only
+        host is `CAD_LLM_BASE_URL`); and no custom CA option is set, so the
+        certifi default bundle is used.
+      - assent: CVE-2026-117656 / GHSA-9fr5-g44g-9526 (an unverified Sign in
+        with Apple callback parameter can override verified claims, critical).
+        Cadence configures only GitHub and Google OAuth; the Apple strategy is
+        not enabled, so that callback path is unreachable.
+      - Constraints: hackney is pinned below 2.0 by `axiom_ai ~> 1.9` and
+        `httpoison ~> 1.21`; every patched hackney release is 4.x. assent is
+        pinned below 0.3 by AshAuthentication 4.15; assent 0.3/0.4 arrive with
+        the AshAuthentication 5 upgrade. Clear these by moving the LLM
+        transport to Req and/or taking the AA5 upgrade when stable.
+      - Revisit by 2027-02-11 or when either constraint relaxes.
+
+---
+
+### Resolved
+
+- [x] **Local store:** resolved in Phase 1 — SQLite via `ecto_sqlite3` is the
+      daemon's metadata store, and PostgreSQL is the server store. See §12.1.
 - [x] **Public DAG visibility (Phase 3):** resolved — anonymous visitors see the
       full read-only DAG and may browse any node's repository snapshot (§7.1,
       §7.5), subject to mandatory server-side secret filtering (§7.6). Public
@@ -2587,20 +2753,6 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       also wakes every member's daemon via `sync_available`. If the cursor bump
       itself fails, the change is not redelivered until the next change/poll;
       the pin is still committed.
-- [ ] **Secret filter overrides:** per-project allowlists or custom patterns for
-      legitimate files that trip the scanner. Deferred until false positives are
-      observed.
-- [ ] **Syntax highlighting:** plain escaped code vs. a server-side highlighter
-      (e.g. Makeup) vs. a vendored client-side highlighter. Must be recorded in
-      §11 before implementation.
-- [ ] **Public flags:** the full public DAG exposes `broken`/`sandbox` nodes and
-      their snapshots. Revisit if those should be members-only while keeping the
-      rest of the DAG public.
-- [ ] **Project visibility/publishing (Phase 3):** all projects are publicly
-      discoverable by default (portfolio index + `/p/:slug`). A per-project
-      `visibility`/`published` column and owner control are deferred until a
-      concrete need appears; adding them later requires a migration. Public
-      proposal links must respect project visibility once it exists.
 - [x] **Review/promotion UI placement:** resolved in 4c/4e — the review hub and
       detail page ship with approve/reject, integrity and isolation state, and
       the incident panel above the queue (§7.2). Live DAG refresh on
@@ -2618,12 +2770,6 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - [x] **Doc agent model:** resolved for Phase 5 — the doc agent uses the
       configured `CAD_LLM_*` client through `Cadence.Shared.LLM`; per-project
       model overrides remain deferred.
-- [ ] **Web docs review (approve/reject):** deferred from Phase 5. Nodes are
-      immutable, so rejecting generated docs needs a review object (like a
-      proposal) rather than mutating the node. Until then the web UI shows a
-      read-only `docs_state` badge (linking the docs child node when the
-      generation happened after the snapshot was pushed), and review happens in
-      Neovim via `:CadDocDiff` (§9.4).
 - [x] **Docs for server-created meld nodes:** resolved — meld approval records
       `docs_state: :skipped` (§6.5/§9.4) because no local session can generate
       docs for a server-created node. The alternative (an explicit pulled-node
@@ -2631,12 +2777,6 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       The badge therefore shows "docs skipped" instead of pending work that can
       never run. Meld nodes approved before this change keep their stored
       `:pending` state (no backfill; immutable nodes are not rewritten).
-- [ ] **Local store:** SQLite via `ecto_sqlite3` is the obvious pick; confirm
-      it fits the daemon's needs.
-- [ ] **Neovim plugin distribution:** plain Lua files, or a proper plugin with
-      lazy.nvim/packer specs.
-- [ ] **Docker-in-Docker vs. host socket proxy:** host socket proxy is the
-      current plan (§8.4). Revisit if isolation needs increase.
 - [x] **Action `expose` semantics (Phase 6c):** resolved — the action panel
       and run pages remain member-only (§7.1/§7.2): members see the list,
       owner/trusted run an action, and anonymous visitors see nothing. `expose`
@@ -2676,40 +2816,11 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       so concurrent submissions cannot both slip past it; over-cap submissions
       return `:queue_full` and the project page flashes a refusal. `:running` is
       still bounded by `CAD_ACTIONS_MAX_CONCURRENT_RUNS` (§8.3, §12.6).
-- [ ] **Docker Engine floor / API version:** action staging relies on
-      `volume-subpath` (API 1.45, Docker 26+). `CAD_DOCKER_API_VERSION` defaults
-      to `v1.45` because that is the compatible floor for Docker 26–29; there is
-      no negotiation, so pointing it at a version the daemon does not support
-      fails creates as `create_failed`. Add `GET /version` negotiation if a
-      mixed fleet appears.
 - [x] **Action image retention:** resolved in the same slice — the cleanup
       sweep keeps the newest `CAD_ACTIONS_IMAGE_RETENTION_PER_PROJECT` (default
       5, `0` disables) `cadence-action-<slug>-<sha12>` images per project and
       removes older tags; a removed image is rebuilt on demand. The Docker
       build cache is not pruned (still operator-managed).
-- [ ] **Action staging/output quota (deployment prerequisite):** `/out` is a
-      per-run subpath on the shared volume with no quota while the action runs,
-      so a hostile action can fill the host volume during its timeout. Before
-      enabling actions, `CAD_ACTIONS_VOLUME_PATH` must be placed on a filesystem
-      with a size/space limit (or monitored with a kill); the demo stack is a
-      dev aid and does not provision one. The collection caps bound only the
-      copy after exit.
-- [ ] **Action container user namespace:** action containers run with the
-      image's `USER` and the host's default user namespace (no `UsernsMode` or
-      forced uid). `/out` is world-writable so non-root images work, but a
-      root-owned image still runs uid 0 inside the container. Consider
-      `userns-remap` or a forced non-root uid for stronger isolation.
-- [ ] **`Project.docker_image` has no writer:** the runner honors the column,
-      but only tests set it today. An admin surface must provide a way to
-      set/clear it (and to validate that the image can run against
-      `/workspace`). 6c did not add one.
-- [ ] **Action log streaming is post-exit:** 6b captures logs after the
-      container exits (TTY mode, stderr merged into stdout), and 6c follows the
-      `{:action_run_updated, project_id, run_id, status}` PubSub event on the
-      member run page. Partial/live output streaming would need a follow API on
-      the Docker client; until then the page shows status live and output at the
-      end. Logs contain terminal/ANSI escapes and are stripped before rendering
-      (§8.3).
 - [x] **`Project.actions_manifest` is unused:** resolved — removed from the
       shared schema and from both databases (server and daemon migrations).
       The action manifest is read from the selected node snapshot (§4.2, §8.1).
@@ -2719,12 +2830,6 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       and `:CadProposals` returns the stored link. Rows written before the
       upgrade and older servers fall back to deriving it from
       `CAD_SERVER_URL` (§6.1, §6.5, §10.6).
-- [ ] **Public preview auth:** fully anonymous, or require a lightweight
-      signed-URL / API key to avoid scraping.
-- [ ] **Backup strategy for the cloud server:** Postgres WAL archiving +
-      object store for Git packfiles.
-- [ ] **Multi-user conflict UX:** when two trusted users spawn from the same
-      node, how does the picker display the divergence?
 - [x] **Promotion target:** resolved for Phase 4 — approval sets `pinned`.
       `functioning` remains validator-owned and is never set by approval (§6.6).
 - [x] **Proposal model:** resolved for Phase 4 — a single approver (owner, or
@@ -2737,15 +2842,10 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - [x] **Meld flag validation:** resolved for Phase 4 — an AI meld is
       `in-progress`; approval promotes/pins the line. Never auto-promote to
       `functioning` until a real validator exists (§6.6, §6.7).
-- [ ] **Team/supervisor schema:** exact shape and sync channel for the
-      lightweight §4.6 relationships.
 - [x] **Proposal link format:** resolved for Phase 4 — a stable high-entropy
       URL-safe token renders the parents, result diff/tree (filtered), flags,
       status, and timestamps. Reviewer/proposer identities are not exposed to
       anonymous visitors. Mutations are auth-gated.
-- [ ] **Incident planning integrations:** Phase 4 ships alerts with
-      `open | resolved` only. Assignee, comments/threads, and external issue
-      tracker integrations are deferred (§6.7).
 - [x] **Storage repack trigger:** resolved 2026-11-07 (before 7b) — a
       best-effort async check after a successful push, plus a periodic backstop
       (6 h) and a manual `mix cadence.repack`. Defaults: 1,000 loose objects or
@@ -2756,7 +2856,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       (§15). Implemented in 7b (`Cadence.Server.Storage` + `Storage.Repacker`):
       the threshold counts on-disk loose objects and bytes, the queue is
       process-local and the cross-node/CLI fence is a transaction-scoped
-      Postgres advisory lock, and a failed push-triggered run cools down for one
+      PostgreSQL advisory lock, and a failed push-triggered run cools down for one
       interval. One run is bounded by `CAD_REPACK_TIMEOUT_MS` (default 10 min;
       `0` disables): the worker kills a task past the bound, which rolls back the
       transaction and releases both the advisory lock and its pooled connection;
@@ -2766,21 +2866,11 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       progress per interval. The manual `mix cadence.repack` task is
       operator-controlled and not interrupted. Residual: no pack
       consolidation/multi-pack index (each run adds packs).
-- [ ] **Parents `uuid[]` → edges migration threshold:** when the materialized
-      parent array should become a separate edge table. Independent of the
-      storage repack trigger above.
 - [x] **Daemon token issuance (Phase 2b):** resolved in 2b-1 — an
       OAuth-session-guarded `POST /auth/tokens` endpoint mints an
       `AshAuthentication` API key. No `mix` task or seeded token.
 - [x] **Pull cursor representation (Phase 2b):** resolved in 2b-1 — server-only
       `nodes.seq bigserial` plus an index. See phase-2b plan §5.
-- [ ] **Multi-node notification fan-out:** Phoenix Channels/PubSub broadcasts
-      are local to one server node. Revisit if the server runs multi-node;
-      polling remains the correctness fallback in the meantime.
-- [ ] **Ash policy authorizer / SAT solver:** server Ash resources currently
-      rely on controller-level checks rather than `Ash.Policy.Authorizer`.
-      Revisit when the web UI exposes Ash actions directly; enabling policies
-      requires adding `picosat_elixir` or `simple_sat` to spec §11.
 - [x] **Push batch semantics (Phase 2b):** resolved in 2b-2 — fail-fast,
       single-project batches, parents-first ordering, and at most one parent per
       pushed node (melds stay server-side). Phase 9c adds the owner-only
@@ -2838,10 +2928,6 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       Imported snapshots are still subject to the §7.6 scan: a historical
       secret quarantines that node and opens an incident, which is never
       bypassed by an import.
-- [ ] **Import sources beyond a local path:** only a local worktree or bare
-      repository is supported today (§5.7). Importing from a remote URL,
-      incremental background mirroring of an upstream, and a web-side import
-      UI are deferred; the re-run of an advanced ref is the incremental path.
 - [x] **`mix cad.import` summary path:** resolved — an absent `--json` is
       treated as `false`, so the default summary path no longer raises after a
       successful job and the exit status reflects the job result. The
@@ -2858,13 +2944,6 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       page, passkey ceremony), G4 (management/recovery), and G5
       (hardening/docs, except the physical hardware matrix) ship. Revisit the
       AA5 strategy when 5.0 is stable.
-- [ ] **WebAuthn hardware matrix (G5 residual):** the strict sign-count/CAS
-      review, IP rate limiter, proxy/origin tests, session-cookie `secure`
-      flag, demo enablement, and operator runbook are shipped (§7.4, §12.9).
-      What remains is the manual browser/OS/YubiKey matrix in
-      `docs/webauthn-plan.md` §10.3 (USB/NFC, PIN/fingerprint, platform and
-      cross-device passkeys, wrong-PIN retries, key-full, proxy mismatch); keep
-      it on the release checklist for the hardware actually supported.
 - [x] **WebAuthn attestation policy:** resolved — `none`; no FIDO MDS, AAGUID
       allowlist, or enterprise attestation. Possession plus user verification
       is the assurance model.
@@ -2874,56 +2953,21 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       operator path and is deferred.
 - [x] **WebAuthn user verification:** resolved — `required` for both
       ceremonies; U2F-only keys are unsupported and fail with a clear error.
-- [ ] **Conditional UI and passkey step-up:** deferred — conditional/autofill
-      credential UI and a fresh passkey assertion before minting a daemon PAT
-      are later hardening slices.
-- [ ] **Image publishing / CI:** `docker-compose.prod.yml` builds
-      `cadence-server:prod` (or `CAD_SERVER_IMAGE`) locally and the image is
-      otherwise operator-managed. Registry publishing, version pinning, and a
-      build pipeline are deferred until a registry workflow exists.
-- [ ] **Accepted hackney and assent advisories (time-boxed):** `mix hex.audit`
-      and `mix deps.audit` report known advisories against **hackney 1.25.0**
-      and **assent 0.2.13**. They are ignored by exact advisory ID in
-      `.mix_audit.ignore` and `mix.exs` (`ignore_advisories`), never by package,
-      so a new advisory still fails.
-      * hackney: GHSA-gp9c-pm5m-5cxr / CVE-2026-47071 (SOCKS5 TLS upgrade
-        ignores the caller timeout, high), GHSA-j9wq-vxxc-94wf / CVE-2026-47075
-        (query CR/LF injection, moderate), GHSA-mp55-p8c9-rfw2 /
-        CVE-2026-47069 (CRLF injection via `domain`/`path`, low),
-        GHSA-pj7v-xfvx-wmjq / CVE-2026-47076 (SSRF allowlist bypass, moderate),
-        and CVE-2026-115693 (custom `cacerts`/`cacertfile` do not restrict
-        trust, critical). Mitigations: no SOCKS5 proxy is configured; query
-        strings come from fixed provider paths with no user input; no
-        `domain`/`path` option is passed; there is no host allowlist (the only
-        host is `CAD_LLM_BASE_URL`); and no custom CA option is set, so the
-        certifi default bundle is used.
-      * assent: CVE-2026-117656 / GHSA-9fr5-g44g-9526 (an unverified Sign in
-        with Apple callback parameter can override verified claims, critical).
-        Cadence configures only GitHub and Google OAuth; the Apple strategy is
-        not enabled, so that callback path is unreachable.
-      * Constraints: hackney is pinned below 2.0 by `axiom_ai ~> 1.9` and
-        `httpoison ~> 1.21`; every patched hackney release is 4.x. assent is
-        pinned below 0.3 by AshAuthentication 4.15; assent 0.3/0.4 arrive with
-        the AshAuthentication 5 upgrade. Clear these by moving the LLM
-        transport to Req and/or taking the AA5 upgrade when stable.
-      * Revisit by 2027-02-11 or when either constraint relaxes.
-
----
 
 ## 17. Glossary of File Paths
 
-| Path                                        | Purpose                              |
-|---------------------------------------------|--------------------------------------|
-| `apps/cadence_shared/lib/cadence/shared/`   | Shared schemas, protocol, LLM client |
-| `apps/cadence_daemon/lib/cadence/daemon/`   | Watcher, commit queue, socket API    |
-| `apps/cadence_server/lib/cadence/server/`   | Phoenix, LiveView, meld worker       |
-| `apps/cadence_server/priv/templates/`       | Dockerfile language templates        |
-| `apps/cadence_server/priv/repo/migrations/` | Postgres migrations                  |
-| `apps/cadence_daemon/priv/repo/migrations/` | SQLite migrations                    |
-| `~/.config/cadence/env`                     | Daemon secrets (chmod 600)           |
-| `<project>/.env`                            | Daemon/server env vars               |
-| `~/.local/state/cadence/daemon.sock`        | Daemon Unix socket                   |
-| `~/.local/state/cadence/cadence.db`         | Daemon SQLite database               |
-| `/data/git`                                 | Server Git object storage            |
-| `/data/artifacts`                           | Server action outputs                |
-| `docs/spec.md`                              | This document                        |
+| Path | Purpose |
+|---|---|
+| `apps/cadence_shared/lib/cadence/shared/` | Shared schemas, protocol, LLM client |
+| `apps/cadence_daemon/lib/cadence/daemon/` | Watcher, commit queue, socket API |
+| `apps/cadence_server/lib/cadence/server/` | Phoenix, LiveView, meld worker |
+| `apps/cadence_server/priv/templates/` | Dockerfile language templates |
+| `apps/cadence_server/priv/repo/migrations/` | PostgreSQL migrations |
+| `apps/cadence_daemon/priv/repo/migrations/` | SQLite migrations |
+| `~/.config/cadence/env` | Daemon secrets (chmod 600) |
+| `<project>/.env` | Daemon and server env vars |
+| `~/.local/state/cadence/daemon.sock` | Daemon Unix socket |
+| `~/.local/state/cadence/cadence.db` | Daemon SQLite database |
+| `/data/git` | Server Git object storage |
+| `/data/artifacts` | Server action outputs |
+| `docs/spec.md` | This document |

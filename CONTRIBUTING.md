@@ -1,7 +1,7 @@
 # Contributing to Cadence
 
 Cadence is a local-first, self-hosted source control system built around a DAG
-of session nodes rather than Git branches. The umbrella contains three Elixir
+of snapshots rather than Git branches. The umbrella contains three Elixir
 apps — `cadence_shared`, `cadence_daemon`, and `cadence_server` — plus the
 `cadence.nvim` Neovim plugin.
 
@@ -10,14 +10,14 @@ Read these first, in order:
 1. `docs/spec.md` — the canonical contract. If a design question is not
    answered there, resolve it in the spec (or add a §16 entry) before
    implementing.
-2. `docs/release-notes.md` — current release, upgrade notes, and known
+2. `docs/README.md` — the documentation index and operator guides.
+3. `docs/release-notes.md` — current release, upgrade notes, and known
    limitations.
-3. `docs/README.md` — the documentation index and operator guides.
 
 ## Prerequisites
 
 - Elixir `~> 1.20` and OTP 29 — the versions CI and `docker/Dockerfile` use.
-- Docker, for the Postgres test database and the demo stack.
+- Docker, for the PostgreSQL test database and the demo stack.
 - Neovim 0.9+ and `luac` (or `luajit`) only if you work on the plugin; the
   daemon and server do not need it.
 - On Linux, `inotifywait` from `inotify-tools` for the default watcher backend,
@@ -31,7 +31,7 @@ Fetch dependencies from the umbrella root:
 mix deps.get
 ```
 
-Server tests need Postgres on `localhost:55432`, matching `config/test.exs` and
+Server tests need PostgreSQL on `localhost:55432`, matching `config/test.exs` and
 the CI service:
 
 ```bash
@@ -45,7 +45,7 @@ Configuration is environment-only: every setting is a `CAD_*` variable read in
 configurable value in code, and do not commit secrets — tokens belong in
 `~/.config/cadence/env` (chmod 600) or a git-ignored `.env` file.
 
-For a browsable stack, `docker compose up --build` starts Postgres plus a seeded
+For a browsable stack, `docker compose up --build` starts PostgreSQL plus a seeded
 dev server on <http://localhost:4000> (`docs/demo.md`). Operator setup is in
 `docs/deploy.md`; local daemon setup is in `docs/daemon-setup.md`.
 
@@ -90,6 +90,21 @@ mix test apps/cadence_server/test/proposals_test.exs
 Run `mix format` before you finish. `mix format --check-formatted` is the
 authority — the `mix` formatter can rewrite files after an edit, so re-check
 rather than assuming an edit was formatted.
+
+### Docs changes
+
+- Use one H1 per file and sentence-case headings; write instructions in the
+  imperative and describe shipped behavior in the present tense.
+- Link other documents with relative Markdown links, not code spans. Do not link
+  local-only files that are not tracked in the repository.
+- Define an acronym on first use, and use the project terms: **node** (a
+  session snapshot), **snapshot** (a node's tree), **commit** (the Git object),
+  **Git** in prose, `git` only in commands.
+- Update `docs/spec.md` for behavior changes and `docs/release-notes.md` for
+  user-visible changes. Configuration belongs in spec §12.6 and
+  `.env.example`.
+- Run a relative-link and anchor check before opening the pull request; broken
+  cross-references are review blockers.
 
 ### Plugin checks
 
@@ -142,8 +157,8 @@ These are enforced in review:
   are load-bearing.
 
 Respect the app boundaries: `cadence_shared` must not depend on Phoenix,
-Postgres, Bandit, or any web stack, and `cadence_daemon` must not depend on
-Phoenix, Postgres, or LiveView.
+PostgreSQL, Bandit, or any web stack, and `cadence_daemon` must not depend on
+Phoenix, PostgreSQL, or LiveView.
 
 ## Workflow
 

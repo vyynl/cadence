@@ -1,56 +1,65 @@
-# Cadence Docs
+# Cadence documentation
 
 `docs/spec.md` is the canonical contract. If a design question is not answered
-there, resolve it in the spec (or add it to §16) before implementing.
+there, resolve it in the spec (or add it to [§16 Open Decisions](spec.md#16-open-decisions))
+before implementing.
 
-## Where to start
+## Start here
 
-| Document | Purpose |
-|---|---|
-| [`spec.md`](spec.md) | Canonical product and technical contract |
-| [`release-notes.md`](release-notes.md) | Release history, upgrade notes, and known limitations |
-| [`daemon-setup.md`](daemon-setup.md) | Local daemon: release or source install, token, env file, migration, boot, registration, upgrades |
-| [`deploy.md`](deploy.md) | Production server: release image, compose stack, migrations, volumes, actions |
-| [`demo.md`](demo.md) | One-command demo stack, seeded accounts, and the guided tour |
-| [`webauthn-plan.md`](webauthn-plan.md) | Approved WebAuthn/passkey (FIDO2) design: YubiKey, recovery, schema, phases |
-| [`passkeys.md`](passkeys.md) | Security keys and passkeys: operator config, YubiKey/phone enrollment, recovery, RP ID, troubleshooting |
-| [`ui-notes.md`](ui-notes.md) | UI/tuning backlog — visual, layout, and copy observations |
-| [`images/`](images/) | Screenshots referenced by the docs |
+- [Demo stack](demo.md) — run a seeded server with one command and take the
+  guided tour.
+- [Import a Git repository](import.md) — adopt an existing local repository and
+  publish its history.
+- [Daemon setup](daemon-setup.md) — install the local daemon, mint a token,
+  register a project, and keep it running.
+- [Security keys and passkeys](passkeys.md) — enable WebAuthn, enroll a YubiKey
+  or phone passkey, and recover access.
 
-Project entry points:
+## Operate
 
-- [`../README.md`](../README.md) — overview, quickstart, and the CI gate
-- [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — setup, tests, hard rules, and pull requests
-- [`../SECURITY.md`](../SECURITY.md) — supported versions and private vulnerability reporting
+- [Production deployment](deploy.md) — build the server image, run the compose
+  stack, migrate, and manage volumes.
+- [Docker actions](deploy.md#docker-actions) — socket proxy, isolation limits,
+  and the volume prerequisite.
+- [Troubleshooting](deploy.md#troubleshooting) — server boot, migration, and
+  action failures. Daemon symptoms are in
+  [daemon setup](daemon-setup.md#troubleshooting).
+
+## Reference
+
+- [Specification](spec.md) — canonical product, protocol, and deployment
+  contract.
+- [Release notes](release-notes.md) — what ships, upgrade notes, and known
+  limitations. Current release: **1.0.0**; 1.1.0 is unreleased on `master`.
+- [WebAuthn design note](webauthn-plan.md) — the approved passkey design and the
+  remaining hardware matrix.
+- [UI backlog](ui-notes.md) — internal visual, layout, and copy follow-ups.
+
+## Contribute
+
+- [Contributing](../CONTRIBUTING.md) — setup, tests, the merge gate, and the
+  hard rules.
+- [Security policy](../SECURITY.md) — supported versions and private reporting.
+- [MIT License](../LICENSE) — copyright and terms.
 
 ## Project status
 
-| Phase | Status |
-|---|---|
-| Phase 1 — local daemon, commits, DAG picker, AI messages | Complete |
-| Phase 2a — DAG structure, Neovim picker, diffs | Complete |
-| Phase 2b — cloud sync, auth, preferences, notifications | Complete |
-| Phase 3 — web UI & portfolio | Complete |
-| Phase 4 — unions & review | Complete |
-| UI styling & freshness pass (4e) | Complete |
-| Phase 5 — doc automation | Code complete (5a shared primitives, 5b daemon worker, 5c daemon API + Neovim, P4 deferred/pushed docs + docs badge); P5 release verification pending |
-| Phase 6 — Docker actions | Complete (6a manifest foundation, 6b runner, 6c web run experience, post-close run queue, retention and run/artifact paging); action log streaming remains a §16 delta |
-| Phase 7 — Storage engineering | Complete (7a pack layer, 7b repacker, 7c existence handshake, 7d multi-pack/index/delta-depth/repack verification + demo-stack smoke); pack consolidation remains a §16 delta |
-| Phase 8 — Release engineering | Complete (8a production server image, umbrella release, `Cadence.Server.Release.migrate/0`, prod compose, deploy docs; 8b `cadence_daemon` release with `Cadence.Daemon.Release.migrate/0`, release registration, systemd/install/upgrade docs) |
-| Phase 9 — Import a local Git repository | Complete (9a shared primitives, 9b daemon importer/API/CLI, 9c multi-parent push + body limit, 9d capped DAG + paged History + provenance, 9e docs/spec/live smoke) |
-| WebAuthn / passkeys | G1–G3 shipped (credential store, Wax verification, config, account-security registration, passkey sign-in); G4 management/recovery shipped; G5 hardening/docs shipped except the physical browser/key matrix |
-
-Current release: **1.0.0** (2026-11-11) — the planned build order (Phases 1–8)
-is complete; Phase 9 import and WebAuthn/passkeys are on `master` and recorded
-as unreleased in `release-notes.md`; remaining work is optional and tracked in
-spec §16.
+Cadence 1.0.0 is released (2026-11-11), completing the planned build order
+(Phases 1–8). Phase 9 (Git import) and WebAuthn/passkeys are on `master` and
+recorded as unreleased in the [release notes](release-notes.md). Remaining work
+is optional and tracked in [spec §16](spec.md#16-open-decisions).
 
 ## Documentation conventions
 
-- Anchor links use spec section numbers (`§7.3`) so a change can be traced from
-  code and tests back to the contract.
-- User-facing behavior changes update `spec.md` and `release-notes.md` in the
+- Anchor links use spec section numbers (`§7.3`) so code and tests can be traced
+  back to the contract.
+- A user-facing behavior change updates `spec.md` and `release-notes.md` in the
   same change.
-- Configuration belongs in spec §12.6 and `.env.example`; do not hide defaults
-  in prose only.
-- Screenshots live in `images/` and are referenced from the doc that uses them.
+- Configuration belongs in [spec §12.6](spec.md#126-environment-variable-contract)
+  (authoritative) and `.env.example` (the deployable subset); do not document
+  defaults only in prose.
+- Terminology: **node** is the graph object, **snapshot** is its tree, and
+  **commit** is the Git object. Write **Git** in prose and `git` only in
+  commands.
+- Screenshots live in `docs/images/` and are referenced from the document that
+  uses them.

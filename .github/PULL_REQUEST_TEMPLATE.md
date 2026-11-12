@@ -42,7 +42,7 @@
 
 - [ ] Code is formatted (`mix format --check-formatted` passes).
 - [ ] Dev and prod compile clean (`mix compile --warnings-as-errors`, `MIX_ENV=prod mix compile --warnings-as-errors`).
-- [ ] Relevant tests pass (`mix test`; server tests used the Postgres container on port 55432).
+- [ ] Relevant tests pass (`mix test`; server tests used the PostgreSQL container on port 55432).
 - [ ] New public functions have tests.
 - [ ] Coverage floor holds (`mix test --cover` exits 0).
 - [ ] No hardcoded configuration values were introduced (`CAD_*` env vars, spec §12.6).
