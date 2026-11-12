@@ -144,7 +144,9 @@ defmodule Cadence.ServerWeb.AccountLiveTest do
     |> form("#disable-totp-form", %{"code" => NimbleTOTP.verification_code(secret)})
     |> render_submit()
 
-    assert render(view) =~ "TOTP is not enabled."
+    # The account sections reload with assign_async; wait for that render
+    # instead of racing it on a slower runner.
+    assert render_async(view) =~ "TOTP is not enabled."
     {:ok, disabled} = Ash.get(User, aged.id, domain: Accounts)
     refute TOTP.enabled?(disabled)
   end
