@@ -7,12 +7,6 @@ FROM elixir:1.20-otp-29
 
 ENV MIX_ENV=dev
 
-# Compile-time gate for the demo password strategy (spec §7.4). The value is
-# baked into the build; compose sets the same value at runtime. A production
-# build must never pass this flag.
-ARG CAD_DEMO_AUTH=true
-ENV CAD_DEMO_AUTH=${CAD_DEMO_AUTH}
-
 WORKDIR /app
 
 RUN apt-get update \

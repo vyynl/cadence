@@ -763,8 +763,8 @@ Public routes: `/` is the portfolio index, `/p/:slug` is the project home,
 `/p/:slug/history` is the paged commit history (§7.3),
 `/p/:slug/n/:node_id/tree/*path` is a directory view,
 `/p/:slug/n/:node_id/blob/*path` is a file view, and `/proposals/:token` is the
-public read-only proposal page. `/sign-in` renders the sign-in methods (OAuth,
-the compile-gated demo password, and — when enabled — the passkey CTA) and
+public read-only proposal page. `/sign-in` renders the email/password form, any
+configured OAuth providers, and — when enabled — the passkey CTA;
 `/auth/passkeys/sign-in` (GET challenge, POST assertion) is the public passkey
 ceremony (§7.4). `/p/:slug/reviews` and `/p/:slug/reviews/:proposal_id` are
 member-only (authenticated, §7.2) and are never public. `/auth`, `/sync`,
@@ -773,9 +773,9 @@ member-only (authenticated, §7.2) and are never public. `/auth`, `/sync`,
 Every response from the `:browser` pipeline carries a static
 Content-Security-Policy (`default-src 'self'` with same-origin scripts and
 LiveView connections; `style-src` permits inline style attributes for the DAG
-and `img-src` permits `https:` for README badges and the sign-in banner);
-unmatched-path 404 error pages are rendered outside the pipeline and are the
-only exception.
+and `img-src` permits `https:` for README badges plus `data:` for the TOTP
+enrollment QR); unmatched-path 404 error pages are rendered outside the
+pipeline and are the only exception.
 
 ### 7.2 Owner/trusted views (authenticated)
 
@@ -945,59 +945,96 @@ the default-node pulse. Large DAGs animate the lineage only, never every edge.
 
 ### 7.4 Auth
 
-Humans sign in through `AshAuthentication` OAuth strategies (GitHub and
-Google); roles per project are defined in §4.5. Daemons authenticate with a
-personal access token modelled as an `AshAuthentication` **API key** (§10.1).
+Humans sign in with an operator-created **email/password account plus TOTP**
+(spec §7.4). GitHub and Google OAuth remain available as secondary sign-in
+methods, and passkeys/security keys are an additive passwordless method. Roles
+per project are defined in §4.5. Daemons authenticate with a personal access
+token modelled as an `AshAuthentication` **API key** (§10.1).
+
+**Local accounts are never self-registered.** An operator creates one with
+`mix cadence.user` (or `Cadence.Server.Release.create_user/2` from a release
+shell), which sets an Argon2id password hash. The password floor is
+`CAD_AUTH_PASSWORD_MIN_LENGTH` (default 12) and the maximum is 72 bytes;
+`CAD_AUTH_PASSWORD_MIN_LENGTH` is the only policy knob. Unknown emails and wrong
+passwords run the same dummy Argon2 verification and return the same generic
+copy, so the response does not enumerate accounts.
+
+**TOTP is mandatory for local password accounts.** A correct password does not
+create a session; it starts a five-minute pending hand-off in the signed
+session. If the account has TOTP enrolled, `/sign-in/totp` asks for a current
+code or an unused recovery code. If it has a password but no TOTP,
+`/sign-in/totp/setup` forces enrollment: a QR code (SVG data URI) and manual
+secret, a confirmation code, then ten one-use recovery codes shown exactly once.
+`CAD_AUTH_TOTP_REQUIRED` (default `true`) controls the local-account gate.
+OAuth-only and passkey-only accounts may opt into TOTP from `/account`.
+
+**Browser sessions are database-backed.** `user_sessions` rows store only a
+SHA-256 hash of a random 32-byte token; the token lives in the signed Phoenix
+session and, when requested, in the signed `_cadence_remember_me` cookie
+(`CAD_SESSION_TTL_DAYS`, default 14; `CAD_SESSION_REISSUE_DAYS`, default 7).
+Login rotates the session identifier. The current session is revoked on logout
+and disconnected LiveViews follow via a PubSub message. Password change revokes
+every other session; "sign out of every session" revokes the current one too.
+Credential changes (password, TOTP enable/disable/regenerate, and passkey
+add/rename/remove) require **sudo mode**: `authenticated_at` within
+`CAD_AUTH_SUDO_MINUTES` (default 20), otherwise the user is sent through
+`/sign-in?sudo=1&return_to=…`.
+
+**Rate limits** (Hammer, ETS fix-window, read at call time): login per client IP
+(`CAD_AUTH_LOGIN_IP_RATE_LIMIT`, default 20/min), login per IP+email
+(`CAD_AUTH_LOGIN_ACCOUNT_RATE_LIMIT`, default 5/min), and TOTP/recovery per user
+(`CAD_AUTH_TOTP_RATE_LIMIT`, default 10 per 5 min). A non-positive value
+disables that bound.
 
 A signed-in human visits `/auth/tokens/new` and creates a daemon key with
 `POST /auth/tokens`. The plaintext key is shown exactly once; only its hash is
 stored. OAuth credentials are supplied through `CAD_OAUTH_*` env vars, so the
-server can boot without OAuth configured (that provider's sign-in then fails).
+server can boot without OAuth configured (unconfigured providers are hidden from
+`/sign-in`).
 
 Public visitors are unauthenticated and see the full read-only DAG and public
 repository snapshots (subject to §7.6 filtering). Optionally, the deployment can
 require a lightweight signed URL or API key to reduce scraping (deferred
 decision).
 
-For the local demo stack (§12.4) a **compile-gated password strategy** may be
-built in: `CAD_DEMO_AUTH=true` is read at build time
-(`Application.compile_env`) and adds `password :demo` with
-`registration_enabled?(false)` and `sign_in_enabled?(true)`, so seeded demo
-accounts can sign in without OAuth credentials. A production build is made
-without the flag and therefore contains no password strategy; additionally
-`config/runtime.exs` raises when a prod boot sees `CAD_DEMO_AUTH=true`. The
-demo password is public by design and never reused outside a local demo.
+For the local demo stack (§12.4), the seeded accounts use the same local login
+path. There is no compile-gated demo password strategy and no
+`CAD_DEMO_AUTH`; the demo password is public by design and never reused outside
+a local demo. Demo accounts carry a fixed deterministic TOTP secret, and
+`mix cadence.totp --email …` prints the current code (see `docs/demo.md`).
 
 **Passkeys / security keys (WebAuthn/FIDO2)** are an additional browser sign-in
 method for existing accounts, behind `CAD_WEBAUTHN_ENABLED` (default `false`).
-Registration requires an authenticated session; OAuth remains the recovery
-path. A YubiKey 5-series works over USB/NFC with user verification (PIN or
-biometric), discoverable credentials, and several named keys per account. The
-browser draws the cross-device QR for phone passkeys; Cadence does not render
-or scan a QR. `CAD_WEBAUTHN_RP_ID` is a hostname and is permanent — changing it
-invalidates every credential.
+Registration requires an authenticated session in sudo mode; the account's
+password/TOTP or OAuth remains the recovery path. A YubiKey 5-series works over
+USB/NFC with user verification (PIN or biometric), discoverable credentials, and
+several named keys per account. The browser draws the cross-device QR for phone
+passkeys; Cadence does not render or scan a QR. `CAD_WEBAUTHN_RP_ID` is a
+hostname and is permanent — changing it invalidates every credential.
 
 The shipped surface (G1–G3) is:
 
 - `/account/security` — authenticated list of the user's credentials (label,
   transport hint, added, last used), rename, and remove-after-confirmation.
   Several keys are allowed up to `CAD_WEBAUTHN_MAX_CREDENTIALS`; the lost-key
-  copy points to OAuth recovery, and the last key may be removed because OAuth
-  can still sign the user in.
+  copy points to password/TOTP or OAuth recovery, and the last key may be
+  removed because those methods can still sign the user in.
 - `GET /account/security/keys/new` — mints a registration challenge, stores it
   in the signed session, and renders the browser options; `passkeys.js` runs
-  `navigator.credentials.create`.
+  `navigator.credentials.create`. Requires sudo mode.
 - `POST /account/security/keys` — consumes the session challenge before
   verification, stores the verified credential with the user's label and the
-  client transports, and redirects to `/account/security`.
-- `/sign-in` — a Cadence-owned page that keeps the AAP OAuth/demo components
-  and adds a first-class security-key/passkey CTA only while the feature is
-  enabled.
+  client transports, and redirects to `/account/security`. Requires sudo mode.
+- `/sign-in` — a Cadence-owned page with the email/password form, the
+  security-key/passkey CTA while enabled, and one button per configured OAuth
+  provider. It does not render the AAP sign-in components.
 - `GET /auth/passkeys/sign-in` — mints a discoverable-credential challenge and
   renders the ceremony page; `POST /auth/passkeys/sign-in` verifies the
-  assertion, advances the sign counter, renews the session, and stores the
-  AshAuthentication session. Both ceremony POSTs are rate-limited per IP from
-  `CAD_WEBAUTHN_RATE_LIMIT` / `CAD_WEBAUTHN_RATE_SCALE`.
+  assertion, advances the sign counter, creates a Cadence database session, and
+  redirects. Passkey sign-in does not ask for a TOTP code: the passkey already
+  provides possession plus user verification. Both ceremony POSTs are
+  rate-limited per IP from `CAD_WEBAUTHN_RATE_LIMIT` /
+  `CAD_WEBAUTHN_RATE_SCALE`.
 
 Both ceremony posts carry `log: false`, delete the one-shot challenge before
 verification, and map every verification failure to the same generic sign-in
@@ -1005,12 +1042,12 @@ copy (no account/key enumeration). The endpoint is hidden when the feature is
 disabled.
 
 Credential management is complete: list, rename, remove-after-confirmation,
-per-user cap, and last-key removal guarded by a warning (OAuth remains the
-recovery path). The signed session cookie is `secure` in a `MIX_ENV=prod`
-build (dev/test and the localhost demo stay non-`secure` so WebAuthn works over
-`http://localhost`, §12.9). Operator and end-user procedures live in
-`docs/passkeys.md`; the remaining G5 item is the physical browser/YubiKey
-matrix in `docs/webauthn-plan.md` §10.3.
+per-user cap, sudo-gated changes, and last-key removal guarded by a warning
+(password/TOTP or OAuth remains the recovery path). The signed session cookie is
+`secure` in a `MIX_ENV=prod` build (dev/test and the localhost demo stay
+non-`secure` so WebAuthn works over `http://localhost`, §12.9). Operator and
+end-user procedures live in `docs/passkeys.md`; the remaining G5 item is the
+physical browser/YubiKey matrix in `docs/webauthn-plan.md` §10.3.
 
 ### 7.5 Repository browser
 
@@ -1733,9 +1770,11 @@ inserts); the daemon can mark only that node failed and retry the rest.
 | File watching | `file_system` |
 | LLM client | `axiom_ai` (DeepSeek via OpenAI-compatible base URL) |
 | Markdown rendering | `MDEx` |
-| Auth | `AshAuthentication` + `Ash` (daemon PATs use the API-key strategy; browser passkeys use the Cadence-owned WebAuthn layer, §7.4) |
+| Auth | `AshAuthentication` + `Ash` (OAuth is secondary; daemon PATs use the API-key strategy; browser sessions and passkeys are Cadence-owned, §7.4) |
+| Local password hashing | `argon2_elixir` `~> 4.0` (Argon2id; no bcrypt dependency) |
+| TOTP | `nimble_totp` `~> 1.0` (enrollment, verification, replay prevention) |
+| TOTP QR rendering | `qr_code` `~> 3.2` (SVG data URI; pure Elixir, transitive `xml_builder`/`pngex`/`matrix_reloaded`/`ex_maybe`/`result`) |
 | Passkey / WebAuthn (FIDO2) | `wax_` `~> 0.7` (declared in `cadence_server`; server-side challenge generation, attestation/assertion verification, and COSE keys. Transitive `cbor`, `x509`, `asn1_compiler`. The browser performs the ceremony and draws the cross-device QR; the app renders none) |
-| Demo password hashing (compile-gated, demo builds only) | `bcrypt_elixir` |
 | Ash data layer | `ash_postgres` |
 | Phoenix auth routes | `ash_authentication_phoenix` |
 | Ash DSL formatting / codegen | `sourceror` (dev/test only) |
@@ -1743,7 +1782,7 @@ inserts); the daemon can mark only that node failed and retry the rest.
 | CVE scanning (Mix dependencies) | `mix_audit` (dev/test only, `~> 2.1`; declared in `cadence_server`) |
 | LiveView test DOM | `lazy_html` (test only; required by `Phoenix.LiveViewTest`) |
 | Docker API | `ex_docker_api` `~> 1.55` (Tesla + the built-in httpc adapter; requires Elixir 1.20) |
-| Rate limiting | `Hammer` (declared in `cadence_shared`; used by the daemon's `LLMRateLimit` and the server's `LLMRateLimit` / `MeldWorker` / `SyncRateLimit`) |
+| Rate limiting | `Hammer` (declared in `cadence_shared`; used by the daemon's `LLMRateLimit` and the server's `LLMRateLimit` / `MeldWorker` / `SyncRateLimit` / `AuthRateLimit` / `PasskeyRateLimit`) |
 | Graph model | `libgraph` `~> 0.17.1` (declared in `cadence_shared`; used only by `Cadence.Shared.DAG` for `new/1`, `topsort/1`, `in_neighbors/2`, `add_vertex/2`, and `add_edge/3`) |
 | TUI (optional, daemon-side) | `ExRatatui` |
 | Neovim plugin | Lua + plenary.nvim |
@@ -1968,23 +2007,20 @@ bind-mounted. See `docs/deploy.md`.
 The repository also ships a **local demo stack** (`docker-compose.yml` +
 `docker/Dockerfile.demo`): `postgres:16-alpine` plus a `MIX_ENV=dev` server that
 runs migrations, seeds demo data (`mix cadence.demo_seed`), and boots only
-`cadence_server` (no daemon). CSS is bind-mounted for style iteration and the
-demo password strategy is compiled in via `CAD_DEMO_AUTH` (§7.4). The demo data
-includes one finished action run (written by the seed, not executed) so the run
-history and detail pages are part of the tour. This is an
-exploration aid, not a production artifact; `docker/Dockerfile` (8a) is the
-production image. See `docs/demo.md`.
+`cadence_server` (no daemon). CSS is bind-mounted for style iteration. Seeded
+accounts use the same local password + TOTP login as production; their TOTP
+secret is fixed and `mix cadence.totp --email …` prints the current code (§7.4,
+`docs/demo.md`). The demo data includes one finished action run (written by the
+seed, not executed) so the run history and detail pages are part of the tour.
+This is an exploration aid, not a production artifact; `docker/Dockerfile` (8a)
+is the production image. See `docs/demo.md`.
 
 ### 12.5 Configuration strategy
 
 **Rule: everything configurable is an environment variable, read at runtime
-via `config/runtime.exs`.** No build-time config for anything that might
-change between deployments.
-
-The single deliberate exception is `CAD_DEMO_AUTH` (§7.4): it must be fixed at
-compile time so a production build physically cannot contain the demo password
-strategy. `runtime.exs` still validates the runtime value and refuses to boot a
-prod release with it set.
+via `config/runtime.exs`.** There is no build-time auth switch: local password
+login is always compiled, and operator-created accounts are the production path.
+`config/runtime.exs` still validates prod-only secrets (§12.6).
 
 ```elixir
 # config/runtime.exs
@@ -2103,7 +2139,19 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_OAUTH_GITHUB_CLIENT_SECRET` | no | — | GitHub OAuth |
 | `CAD_OAUTH_GOOGLE_CLIENT_ID` | no | — | Google OAuth |
 | `CAD_OAUTH_GOOGLE_CLIENT_SECRET` | no | — | Google OAuth |
-| `CAD_DEMO_AUTH` | no | `false` | **Build-time** switch for the demo password strategy (§7.4); must be absent in prod |
+| `CAD_DEMO_HINTS` | no | `false` | Demo-only hint on `/sign-in` and `/sign-in/totp` showing the seeded credentials and `mix cadence.totp` command; never enable in production |
+| `CAD_AUTH_PASSWORD_MIN_LENGTH` | no | `12` | Minimum local password length (maximum is 72 bytes) |
+| `CAD_AUTH_TOTP_REQUIRED` | no | `true` | Force TOTP enrollment for local password accounts (`false` makes it opt-in) |
+| `CAD_AUTH_TOTP_ISSUER` | no | `Cadence` | Issuer label in the enrollment QR code |
+| `CAD_TOTP_KEY` | no | — | TOTP secret-encryption key (32 raw bytes, base64, or a passphrase); absent ⇒ derived from `CAD_SECRET_KEY_BASE`. Rotating it invalidates stored TOTP secrets (`mix cadence.user --reset-totp`) |
+| `CAD_AUTH_SUDO_MINUTES` | no | `20` | Recent-authentication window for credential and passkey changes |
+| `CAD_AUTH_LOGIN_IP_RATE_LIMIT` | no | `20` | Password attempts per client IP per window (`<= 0` disables) |
+| `CAD_AUTH_LOGIN_ACCOUNT_RATE_LIMIT` | no | `5` | Password attempts per IP + email per window (`<= 0` disables) |
+| `CAD_AUTH_LOGIN_RATE_SCALE` | no | `60000` | Login rate window in milliseconds |
+| `CAD_AUTH_TOTP_RATE_LIMIT` | no | `10` | TOTP/recovery attempts per user per window (`<= 0` disables) |
+| `CAD_AUTH_TOTP_RATE_SCALE` | no | `300000` | TOTP rate window in milliseconds |
+| `CAD_SESSION_TTL_DAYS` | no | `14` | Browser session and remember-me lifetime |
+| `CAD_SESSION_REISSUE_DAYS` | no | `7` | Rotate a session token after this age (preserves `authenticated_at`) |
 | `CAD_LLM_PROVIDER` | no | `deepseek` | `deepseek` \| `openai` \| `anthropic` \| … |
 | `CAD_LLM_API_KEY` | no | — | Provider key; absent ⇒ AI features are skipped |
 | `CAD_LLM_MODEL` | no | `deepseek-chat` | Model ID |
@@ -2190,11 +2238,10 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 ### 12.8 Build & release
 
 - **Server image (Phase 8a, shipped):** `docker/Dockerfile` is a multi-stage
-  build. The build stage uses `elixir:1.20-otp-29`, refuses a `CAD_DEMO_AUTH`
-  build arg, compiles the umbrella with `MIX_ENV=prod`, and runs
-  `mix release cadence` (release name configured in the root `mix.exs`, so the
-  entrypoint is `bin/cadence`; §12.7). The runtime stage is
-  `debian:trixie-slim` (matching the build image's glibc) with ERTS, OpenSSL,
+  build. The build stage uses `elixir:1.20-otp-29`, compiles the umbrella with
+  `MIX_ENV=prod`, and runs `mix release cadence` (release name configured in the
+  root `mix.exs`, so the entrypoint is `bin/cadence`; §12.7). The runtime stage
+  is `debian:trixie-slim` (matching the build image's glibc) with ERTS, OpenSSL,
   libstdc++/ncurses for the NIFs,
   and curl for the `/health` healthcheck; it runs as the non-root `cadence`
   user and starts `bin/cadence start`. `Cadence.Server.Release.migrate/0` is
@@ -2237,13 +2284,23 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - The Docker socket proxy is root-equivalent (§8.4); keep action containers off
   its network and treat project `Dockerfile` `FROM` references as able to reach
   any registry the daemon can reach.
-- The signed session cookie (`_cadence_key`) is `http_only`, `same_site: "Lax"`,
-  and `secure` in a `MIX_ENV=prod` build. The flag is fixed when the endpoint is
-  compiled; dev/test and the localhost demo stay non-`secure` so
-  `http://localhost` (a browser secure context) keeps working for WebAuthn. A
-  production release must be served over HTTPS: a prod build served over plain
-  HTTP will drop its session cookies. Rotating `CAD_SECRET_KEY_BASE` invalidates
-  sessions and in-flight WebAuthn challenges.
+- Browser sessions are database rows (`user_sessions`) holding only a SHA-256
+  hash of a random token. The signed session cookie (`_cadence_key`) and the
+  optional signed remember-me cookie (`_cadence_remember_me`,
+  `CAD_SESSION_TTL_DAYS`) carry the token. Both cookies are `http_only`,
+  `same_site: "Lax"`, and `secure` in a `MIX_ENV=prod` build. The flag is fixed
+  when the endpoint is compiled; dev/test and the localhost demo stay
+  non-`secure` so `http://localhost` (a browser secure context) keeps working
+  for WebAuthn. A production release must be served over HTTPS: a prod build
+  served over plain HTTP will drop its session cookies. Logout deletes the row
+  and disconnects its LiveViews; password change and "sign out everywhere"
+  revoke the relevant rows. Rotating `CAD_SECRET_KEY_BASE` invalidates sessions,
+  remember-me cookies, and in-flight WebAuthn challenges.
+- TOTP shared secrets are AES-256-GCM encrypted at rest with `CAD_TOTP_KEY`
+  (or a key derived from `CAD_SECRET_KEY_BASE`). Rotating either makes stored
+  secrets undecryptable; recover with `mix cadence.user --reset-totp`. There is
+  no password-reset email: an operator resets a password or TOTP from the
+  server shell (`mix cadence.user` or `Cadence.Server.Release`).
 - WebAuthn RP ID and origin: `CAD_WEBAUTHN_RP_ID` is a permanent hostname and
   `CAD_WEBAUTHN_ORIGIN` must be the exact public origin behind TLS termination
   (§7.4). Changing the RP ID invalidates every registered credential.
@@ -2555,10 +2612,10 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - G2 (shipped): `/account/security` list, `/account/security/keys/new`,
   `POST /account/security/keys`, labels, per-user cap, duplicate handling, and
   `passkeys.js`.
-- G3 (shipped): Cadence-owned `/sign-in` with the AAP OAuth/demo components
-  plus the passkey CTA, `GET`/`POST /auth/passkeys/sign-in`, discoverable
-  credentials, session renewal, generic failure copy, and the IP ceremony
-  limiter.
+- G3 (shipped): Cadence-owned `/sign-in` with the email/password form, the
+  configured OAuth buttons, and the passkey CTA; `GET`/`POST
+  /auth/passkeys/sign-in`, discoverable credentials, session renewal, generic
+  failure copy, and the IP ceremony limiter.
 - G4 (shipped): list/rename/remove, per-user cap, last-key warning, and
   recovery copy on `/account/security`.
 - G5 (shipped, hardware matrix pending): strict sign-count/CAS review, IP rate
@@ -2566,6 +2623,24 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   demo-stack enablement, the `docs/passkeys.md` runbook, and the spec/docs
   updates. The physical browser/key matrix remains a release-checklist item.
   See `docs/webauthn-plan.md`.
+
+**Post-1.0 — Auth rebuild (1.1.0 unreleased)**
+- Local accounts: operator-created email/password with Argon2id, a 12-character
+  floor, uniform failure timing, and no public registration.
+- TOTP: mandatory for local password accounts, opt-in for OAuth/passkey
+  accounts; encrypted secret, QR enrollment, replay prevention, ten one-use
+  recovery codes, regenerate/disable under sudo.
+- Sessions: `user_sessions` rows with hashed tokens, rotation on login, 14-day
+  remember-me, 7-day reissue, logout revocation + LiveView disconnect, and a
+  20-minute sudo window for credential changes.
+- Sign-in surface: Cadence-owned `/sign-in`, `/sign-in/totp`, and
+  `/sign-in/totp/setup`; `mix cadence.user` and `mix cadence.totp`; OAuth and
+  passkeys remain secondary.
+- Visual polish: the DAG-fork mark, a real favicon, one centered auth card, and
+  `/account` settings. `CAD_DEMO_AUTH` and the compile-gated demo strategy are
+  retired.
+- Gates: targeted auth/LiveView tests, the full suite and coverage floor, a
+  demo-stack smoke (password + TOTP + recovery + sudo), and 1440/390 light/dark.
 
 ---
 
@@ -2603,7 +2678,7 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 
 ## 16. Open Decisions
 
-Status as of 2026-11-11. Open items are the current backlog; resolved items are
+Status as of 2026-11-12. Open items are the current backlog; resolved items are
 kept for traceability. Section numbers are stable and are not renumbered.
 
 ### Open
@@ -2729,7 +2804,36 @@ kept for traceability. Section numbers are stable and are not renumbered.
 
 ---
 
+- [ ] **Auth session list:** the account page offers "sign out of every
+      session" and password-change revokes other sessions, but there is no
+      per-session list/label/revoke. The `user_sessions` table supports it;
+      deferred until a device list is actually wanted.
+- [ ] **Password reset email:** there is no email delivery, so a locked-out
+      local account is an operator action (`mix cadence.user --reset-password` /
+      `Release.reset_password/2`) and TOTP recovery is
+      `mix cadence.user --reset-totp`. Revisit only if Cadence gains a mailer.
+- [ ] **OAuth live verification:** the OAuth callback's DB-session conversion is
+      covered by controller tests, but a real GitHub/Google round-trip remains
+      an operator check (no credentials in CI).
+- [ ] **Session invalidation on upgrade:** switching from Ash `jti:sub` cookies
+      to `user_sessions` signs every existing browser session out once. Recorded
+      in the release notes; no migration is possible because the old cookie is
+      not a DB session.
+
 ### Resolved
+
+- [x] **Auth model (2026-11-12):** resolved — Cadence stays multi-user. Local
+      accounts are operator-created (no public registration), password + TOTP is
+      primary, OAuth and passkeys remain secondary, and browser sessions are
+      Cadence-owned DB rows. `CAD_DEMO_AUTH` and the compile-gated demo password
+      strategy are retired (§7.4, §11, §12.6).
+- [x] **Passkey/TOTP interaction (2026-11-12):** resolved — passkey sign-in does
+      not require a TOTP code (possession + user verification is already a
+      second factor); OAuth sign-in does require TOTP when the account has it
+      enrolled. Passkey changes require sudo (§7.4).
+- [x] **Auth visual scope (2026-11-12):** resolved — a DAG-fork mark, SVG
+      favicon, centered auth card, and `/account` settings. No webfont or
+      site-wide redesign.
 
 - [x] **Local store:** resolved in Phase 1 — SQLite via `ecto_sqlite3` is the
       daemon's metadata store, and PostgreSQL is the server store. See §12.1.

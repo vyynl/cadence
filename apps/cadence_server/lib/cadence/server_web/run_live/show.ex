@@ -116,14 +116,14 @@ defmodule Cadence.ServerWeb.RunLive.Show do
         <p class="eyebrow">404</p>
         <h1>Project not found</h1>
         <p class="note">There is no project at this address.</p>
-        <p><a href="/">Back to Cadence</a></p>
+        <p><a class="button-link" href="/">Back to Cadence</a></p>
       <% else %>
         <header class="project-header">
           <p class="eyebrow">Action run</p>
           <h1>{@project.name}</h1>
           <p class="slug">
-            <a href={~p"/p/#{@project.slug}"}>Back to project</a>
-            <a href={~p"/p/#{@project.slug}/runs"}>All runs</a>
+            <a class="button-link" href={~p"/p/#{@project.slug}"}>Back to project</a>
+            <a class="button-link" href={~p"/p/#{@project.slug}/runs"}>All runs</a>
           </p>
         </header>
 
@@ -134,7 +134,7 @@ defmodule Cadence.ServerWeb.RunLive.Show do
 
           <:failed>
             <p class="note">This run was not found in this project.</p>
-            <p><a href={~p"/p/#{@project.slug}/runs"}>Back to runs</a></p>
+            <p><a class="button-link" href={~p"/p/#{@project.slug}/runs"}>Back to runs</a></p>
           </:failed>
 
           <section class="run-detail">

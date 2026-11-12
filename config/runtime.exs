@@ -180,6 +180,30 @@ if config_env() != :test and server_artifact? do
   config :cadence_server,
     public_url: public_url,
     token_signing_secret: System.get_env("CAD_TOKEN_SIGNING_SECRET") || secret_key_base,
+    # Demo-only UI hint for the seeded, pre-enrolled accounts. The compose demo
+    # sets this to true; production must leave it false.
+    demo_hints: System.get_env("CAD_DEMO_HINTS", "false") == "true",
+    # TOTP secrets are AES-256-GCM encrypted at rest (spec §7.4). The optional
+    # key is 32 raw bytes, base64, or a passphrase; otherwise the key is derived
+    # from the endpoint secret above. Rotating it makes stored secrets
+    # undecryptable — the operator recovery path is `mix cadence.user --reset-totp`.
+    totp_key: System.get_env("CAD_TOTP_KEY"),
+    auth_totp_issuer: System.get_env("CAD_AUTH_TOTP_ISSUER", "Cadence"),
+    auth_totp_required: System.get_env("CAD_AUTH_TOTP_REQUIRED", "true") == "true",
+    auth_password_min_length:
+      String.to_integer(System.get_env("CAD_AUTH_PASSWORD_MIN_LENGTH", "12")),
+    auth_sudo_minutes: String.to_integer(System.get_env("CAD_AUTH_SUDO_MINUTES", "20")),
+    auth_login_ip_rate_limit:
+      String.to_integer(System.get_env("CAD_AUTH_LOGIN_IP_RATE_LIMIT", "20")),
+    auth_login_account_rate_limit:
+      String.to_integer(System.get_env("CAD_AUTH_LOGIN_ACCOUNT_RATE_LIMIT", "5")),
+    auth_login_rate_scale:
+      String.to_integer(System.get_env("CAD_AUTH_LOGIN_RATE_SCALE", "60000")),
+    auth_totp_rate_limit: String.to_integer(System.get_env("CAD_AUTH_TOTP_RATE_LIMIT", "10")),
+    auth_totp_rate_scale: String.to_integer(System.get_env("CAD_AUTH_TOTP_RATE_SCALE", "300000")),
+    session_ttl_days: String.to_integer(System.get_env("CAD_SESSION_TTL_DAYS", "14")),
+    session_reissue_days: String.to_integer(System.get_env("CAD_SESSION_REISSUE_DAYS", "7")),
+    session_secure: config_env() == :prod,
     git_store_path: git_store_path,
     sync_pull_limit: String.to_integer(System.get_env("CAD_SYNC_PULL_LIMIT", "100")),
     sync_exists_limit: String.to_integer(System.get_env("CAD_SYNC_EXISTS_LIMIT", "5000")),
@@ -267,18 +291,6 @@ if config_env() != :test and server_artifact? do
   # runtime (plan §7.4).
   if webauthn_enabled do
     Cadence.Server.Passkeys.Config.validate!(webauthn_config, config_env())
-  end
-
-  # Demo auth is a build-time flag (see config/config.exs and
-  # Cadence.Server.Accounts.User). A prod release must never carry it.
-  if config_env() == :prod and System.get_env("CAD_DEMO_AUTH") == "true" do
-    raise """
-    CAD_DEMO_AUTH must never be set for a production boot.
-
-    The demo password strategy is compiled in only when CAD_DEMO_AUTH=true at
-    build time. Rebuild the prod artifact without the flag and unset it in the
-    production environment.
-    """
   end
 end
 

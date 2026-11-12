@@ -22,18 +22,18 @@ defmodule Cadence.ServerWeb.Router do
     #
     # `style-src 'unsafe-inline'` is required for the DAG layout and stagger
     # style attributes (nonces cannot cover style attributes). `img-src https:`
-    # is load-bearing for MDEx README badges and for the AshAuth sign-in page's
-    # banner image; images are not a script vector.
+    # is load-bearing for MDEx README badges; `data:` is the TOTP enrollment QR
+    # (SVG data URI). Images are not a script vector.
     #
     # Only the `:browser` pipeline emits this header: unmatched-path 404 error
     # pages are rendered from the pre-pipeline conn, and `/health` and `/sync/*`
     # are not browser pages.
     plug(:put_secure_browser_headers, %{
       "content-security-policy" =>
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
     })
 
-    plug(:load_from_session)
+    plug(Cadence.ServerWeb.Plugs.FetchCurrentUser)
   end
 
   pipeline :passkey do
@@ -52,6 +52,7 @@ defmodule Cadence.ServerWeb.Router do
     pipe_through(:public)
 
     get("/health", HealthController, :index)
+    get("/favicon.ico", FaviconController, :index)
   end
 
   # These two POSTs must be matched before `auth_routes/3` installs the
@@ -73,7 +74,8 @@ defmodule Cadence.ServerWeb.Router do
     get("/p/:slug/runs/:run_id/artifacts/*path", RunArtifactController, :show)
     get("/p/:slug/runs/:run_id/log", RunLogController, :show)
 
-    ash_authentication_live_session :project do
+    live_session :current_user,
+      on_mount: {Cadence.ServerWeb.UserAuth, :mount_current_user} do
       live("/p/:slug", ProjectLive, :home)
       live("/p/:slug/history", HistoryLive.Index, :index)
       live("/p/:slug/n/:node_id", ProjectLive, :node)
@@ -84,6 +86,11 @@ defmodule Cadence.ServerWeb.Router do
       live("/p/:slug/reviews/:proposal_id", ReviewLive.Show, :show)
       live("/p/:slug/runs", RunLive.Index, :index)
       live("/p/:slug/runs/:run_id", RunLive.Show, :show)
+    end
+
+    live_session :account,
+      on_mount: [{Cadence.ServerWeb.UserAuth, :require_sudo_mode}] do
+      live("/account", AccountLive.Settings, :index)
     end
 
     get("/auth/tokens/new", TokenController, :new)
@@ -98,13 +105,17 @@ defmodule Cadence.ServerWeb.Router do
     # Public passkey sign-in ceremony (the POST sets the session).
     get("/auth/passkeys/sign-in", PasskeySessionController, :new)
 
-    sign_in_route(
-      auth_routes_prefix: "/auth",
-      live_view: Cadence.ServerWeb.SignInLive,
-      layout: {Cadence.ServerWeb.Layouts, :app}
-    )
+    # Cadence-owned sign-in and second-factor pages (spec §7.4).
+    get("/sign-in", SignInController, :new)
+    post("/sign-in", SignInController, :create, log: false)
+    get("/sign-in/totp", TotpController, :new)
+    post("/sign-in/totp", TotpController, :create, log: false)
+    get("/sign-in/totp/setup", TotpSetupController, :new)
+    post("/sign-in/totp/setup", TotpSetupController, :create, log: false)
 
-    sign_out_route(AuthController, "/sign-out", layout: {Cadence.ServerWeb.Layouts, :app})
+    # Sign-out is a CSRF-protected POST from the header form (a GET logout
+    # route would be a logout-CSRF vector).
+    post("/sign-out", AuthController, :sign_out)
 
     auth_routes(AuthController, Cadence.Server.Accounts.User, path: "/auth")
   end

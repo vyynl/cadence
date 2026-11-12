@@ -4,7 +4,7 @@ defmodule Cadence.Server.DemoSeedTest do
   import Ecto.Query
 
   alias Cadence.Server.{ActionRun, DemoSeed, Portfolio, ProjectGit, Proposals, Repo}
-  alias Cadence.Server.Accounts.{Token, User}
+  alias Cadence.Server.Accounts.{Token, User, UserSession}
   alias Cadence.Server.Proposal
   alias Cadence.Shared.{GitStore, Membership, Node, Project}
 
@@ -204,13 +204,11 @@ defmodule Cadence.Server.DemoSeedTest do
   test "seeded accounts sign in with the demo password" do
     DemoSeed.run()
 
-    assert {:ok, user} =
-             User
-             |> Ash.Query.for_read(:sign_in_with_demo, %{
-               email: "owner@demo.local",
-               password: "cadence-demo"
-             })
-             |> Ash.read_one(domain: Cadence.Server.Accounts)
+    user =
+      Cadence.Server.Accounts.LocalAuth.get_user_by_email_and_password(
+        "owner@demo.local",
+        "cadence-demo"
+      )
 
     assert to_string(user.email) == "owner@demo.local"
   end
@@ -249,17 +247,17 @@ defmodule Cadence.Server.DemoSeedTest do
     assert [_incident] = open_incidents!(project: imported.id, node: true)
   end
 
-  test "reset revokes auth tokens issued to the deleted demo users" do
+  test "reset revokes browser sessions issued to the deleted demo users" do
     DemoSeed.run()
     owner = user!("owner@demo.local")
-    subject = AshAuthentication.user_to_subject(owner)
 
-    sign_in!("owner@demo.local", "cadence-demo")
-    assert Repo.exists?(from(t in Token, where: t.subject == ^subject))
+    conn = Plug.Test.init_test_session(Plug.Test.conn(:get, "/"), %{})
+    {_conn, session} = Cadence.ServerWeb.UserAuth.log_in(conn, owner)
+    assert Repo.exists?(from(s in UserSession, where: s.id == ^session.id))
 
     DemoSeed.run(reset: true)
 
-    refute Repo.exists?(from(t in Token, where: t.subject == ^subject))
+    refute Repo.exists?(from(s in UserSession, where: s.user_id == ^owner.id))
     assert Repo.aggregate(from(u in User, where: u.email == "owner@demo.local"), :count) == 1
   end
 
@@ -269,7 +267,7 @@ defmodule Cadence.Server.DemoSeedTest do
       |> Ash.Changeset.for_create(:create, %{
         email: "owner@demo.local",
         name: "Partial",
-        hashed_password: Bcrypt.hash_pwd_salt("partial")
+        hashed_password: Cadence.Server.Accounts.LocalAuth.hash_password("partial password")
       })
       |> Ash.create(domain: Cadence.Server.Accounts)
 
@@ -297,15 +295,6 @@ defmodule Cadence.Server.DemoSeedTest do
   end
 
   defp user!(email), do: Repo.one!(from(u in User, where: u.email == ^email))
-
-  defp sign_in!(email, password) do
-    {:ok, user} =
-      User
-      |> Ash.Query.for_read(:sign_in_with_demo, %{email: email, password: password})
-      |> Ash.read_one(domain: Cadence.Server.Accounts)
-
-    user
-  end
 
   defp project!(slug), do: Repo.one!(from(p in Project, where: p.slug == ^slug))
 

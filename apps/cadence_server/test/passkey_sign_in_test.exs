@@ -69,8 +69,8 @@ defmodule Cadence.ServerWeb.PasskeySignInTest do
       assert json_response(result, 200) == %{"redirect_to" => "/"}
       assert get_session(result, Passkeys.session_key()) == nil
 
-      subject_name = AshAuthentication.Info.authentication_subject_name!(User)
-      assert is_binary(get_session(result, to_string(subject_name)))
+      assert is_binary(get_session(result, :user_session_token))
+      assert Cadence.Server.Repo.get_by(Cadence.Server.Accounts.UserSession, user_id: user.id)
 
       {:ok, used} = Ash.get(WebAuthnCredential, credential.id, domain: Accounts)
       assert used.sign_count == 1

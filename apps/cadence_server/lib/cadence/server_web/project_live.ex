@@ -88,7 +88,7 @@ defmodule Cadence.ServerWeb.ProjectLive do
         <p class="eyebrow">404</p>
         <h1>Project not found</h1>
         <p class="note">There is no project at this address.</p>
-        <p><a href="/">Back to Cadence</a></p>
+        <p><a class="button-link" href="/">Back to Cadence</a></p>
       </article>
     <% else %>
       <article>
@@ -98,8 +98,14 @@ defmodule Cadence.ServerWeb.ProjectLive do
           <p class="slug">/{@project.slug}</p>
 
           <p :if={@membership} class="project-nav">
-            <.link navigate={~p"/p/#{@project.slug}/reviews"}>Reviews</.link>
-            <.link :if={@actions_enabled?} navigate={~p"/p/#{@project.slug}/runs"}>Runs</.link>
+            <.link class="button-link" navigate={~p"/p/#{@project.slug}/reviews"}>Reviews</.link>
+            <.link
+              :if={@actions_enabled?}
+              class="button-link"
+              navigate={~p"/p/#{@project.slug}/runs"}
+            >
+              Runs
+            </.link>
           </p>
 
           <details :if={@members} class="members-panel">
@@ -118,7 +124,9 @@ defmodule Cadence.ServerWeb.ProjectLive do
           <div class="dag-rail">
             <p :if={@node_total > @dag_layout.count} class="note">
               Showing the newest {@dag_layout.count} of {@node_total} commits.
-              <.link navigate={~p"/p/#{@project.slug}/history"}>Browse the full history</.link>
+              <.link class="button-link" navigate={~p"/p/#{@project.slug}/history"}>
+                Browse the full history
+              </.link>
             </p>
 
             <DAG.dag

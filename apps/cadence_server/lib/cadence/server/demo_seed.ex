@@ -41,11 +41,17 @@ defmodule Cadence.Server.DemoSeed do
     Repo
   }
 
-  alias Cadence.Server.Accounts.{ApiKey, Token, User, UserIdentity}
+  alias Cadence.Server.Accounts.{ApiKey, LocalAuth, Token, User, UserIdentity}
   alias Cadence.Server.Proposal
+  alias Cadence.Server.Security.SecretBox
   alias Cadence.Shared.{GitStore, Membership, Node, Project}
 
   @password "cadence-demo"
+
+  # Fixed 20-byte TOTP secret for every demo account (base32). It is public by
+  # design: the demo is a local walkthrough, and `mix cadence.totp` prints the
+  # current code. Production accounts always get a random secret.
+  @demo_totp_secret Base.decode32!("JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
 
   @accounts [
     %{email: "owner@demo.local", name: "Demo Owner"},
@@ -837,13 +843,35 @@ defmodule Cadence.Server.DemoSeed do
           |> Ash.Changeset.for_create(:create, %{
             email: email,
             name: name,
-            hashed_password: Bcrypt.hash_pwd_salt(@password)
+            hashed_password: LocalAuth.hash_password(@password),
+            totp_secret: SecretBox.encrypt(@demo_totp_secret),
+            totp_confirmed_at: DateTime.utc_now() |> DateTime.truncate(:second),
+            totp_last_used_at: nil
           })
           |> Ash.create(domain: Accounts)
 
         user
 
       user ->
+        # A rerun after the auth rebuild must leave the demo walkable: refresh
+        # the Argon2 hash and the deterministic TOTP secret, but never touch a
+        # real (non-demo) account.
+        {:ok, user} =
+          user
+          |> Ash.Changeset.for_update(:set_password, %{
+            hashed_password: LocalAuth.hash_password(@password)
+          })
+          |> Ash.update(domain: Accounts)
+
+        {:ok, user} =
+          user
+          |> Ash.Changeset.for_update(:confirm_totp, %{
+            totp_secret: SecretBox.encrypt(@demo_totp_secret),
+            totp_confirmed_at: DateTime.utc_now() |> DateTime.truncate(:second),
+            totp_last_used_at: nil
+          })
+          |> Ash.update(domain: Accounts)
+
         user
     end
   end

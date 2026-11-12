@@ -15,6 +15,11 @@ contract is [spec §7.4](spec.md#74-auth) and
 > **Scope:** `apps/cadence_server` only. No daemon, shared-schema, or sync changes.
 > **Approval:** `wax_ ~> 0.7` and the defaults below are approved. The §11/§12.6/§16
 > rows in §12 are applied with the G1 meld (spec §11 and CONTRIBUTING.md).
+>
+> **Post-rebuild note (2026-11-12):** the auth rebuild replaced the Ash session
+> layer and the compile-gated demo password with local password + TOTP and
+> database-backed sessions. The passkey design below is unchanged, but current
+> sign-in/session behavior is in [`auth.md`](auth.md) and spec §7.4.
 
 ## Approval record (2026-11-11)
 
@@ -168,10 +173,10 @@ Sign-in page hint, under the passkey button:
 |---|---|
 | Framework | Phoenix 1.8, LiveView 1.2.13, Bandit, Plug 1.20 |
 | Auth | `ash_authentication` 4.15.1, `ash_authentication_phoenix` 2.17.4, Ash 3.36, `ash_postgres` 2.15.2 |
-| Human sign-in | GitHub/Google OAuth; `password :demo` compiled only when `CAD_DEMO_AUTH=true` (registration disabled) |
+| Human sign-in | Operator-created local password + TOTP (primary); GitHub/Google OAuth and passkeys are secondary (post-rebuild) |
 | Daemon auth | `AshAuthentication` API keys (`/sync/*`, bearer PAT) — untouched by this plan |
-| Sessions | Signed cookie session (`_cadence_key`, `same_site: "Lax"`, `http_only: true`); **`secure` is not set** |
-| Browser pipeline | `:browser` already has `fetch_session`, `fetch_flash`, `protect_from_forgery`, CSP, `load_from_session` |
+| Sessions | Database-backed `user_sessions` (hashed token, rotation, remember-me, sudo); `_cadence_key` is `secure` in prod (post-rebuild) |
+| Browser pipeline | `:browser` has `fetch_session`, `fetch_flash`, `protect_from_forgery`, CSP, and `FetchCurrentUser` |
 | Assets | No Node/npm/esbuild. Prebuilt Phoenix/LiveView bundles + hand-written `app.js`, classic `<script>` tags |
 | UI | Hand-written HEEx + CSS tokens; `app.html.heex` layout; `Presentation` helpers |
 | Data | Server-only Ash domain `Cadence.Server.Accounts` (User/Token/UserIdentity/ApiKey); other server schemas are plain Ecto |

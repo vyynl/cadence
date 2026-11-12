@@ -1,0 +1,57 @@
+<main class="auth-shell">
+  <section class="auth-card" aria-labelledby="totp-setup-title">
+    <div class="auth-brand">
+      <Cadence.ServerWeb.Components.Brand.logo size={24} class="brand-logo" />
+      <span>Cadence</span>
+    </div>
+
+    <header class="auth-header">
+      <h1 id="totp-setup-title">Set up two-factor authentication</h1>
+      <p class="auth-lede">{@email}</p>
+    </header>
+
+    <p :if={@error} class="auth-error" role="alert">{@error}</p>
+
+    <div class="totp-step">
+      <h2>1. Scan this QR code</h2>
+      <p class="auth-note">
+        Use an authenticator app such as Aegis, 1Password, or Google Authenticator.
+      </p>
+      <img
+        :if={@qr_data_uri}
+        src={@qr_data_uri}
+        alt="TOTP enrollment QR code"
+        class="totp-qr"
+      />
+      <p class="auth-note">Or enter this secret manually:</p>
+      <code class="totp-secret">{@secret}</code>
+    </div>
+
+    <div class="totp-step">
+      <h2>2. Confirm the code</h2>
+      <form action="/sign-in/totp/setup" method="post" class="auth-form" id="totp-confirm-form">
+        <input type="hidden" name="_csrf_token" value={Plug.CSRFProtection.get_csrf_token()} />
+
+        <label class="auth-field">
+          <span>Authentication code</span>
+          <input
+            type="text"
+            name="code"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            spellcheck="false"
+            placeholder="000000"
+            class="totp-code"
+            required
+          />
+        </label>
+
+        <button type="submit" class="admin-button button-primary auth-submit">
+          Enable two-factor authentication
+        </button>
+      </form>
+    </div>
+
+    <p class="auth-note">You will receive recovery codes after confirming.</p>
+  </section>
+</main>

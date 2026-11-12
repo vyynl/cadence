@@ -10,6 +10,16 @@
       content={assigns[:page_description] || "Cadence — local-first project history, readable in the browser."}
     />
     <link :if={assigns[:canonical_url]} rel="canonical" href={assigns[:canonical_url]} />
+    <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
+    <meta name="theme-color" content="#0969da" />
+    <%!-- Paint the correct canvas before the stylesheet arrives; without this a
+    full-page navigation flashes the browser's white default. --%>
+    <style>
+      html { background-color: #fbfaf7; }
+      @media (prefers-color-scheme: dark) {
+        html { background-color: #0d1117; }
+      }
+    </style>
     <meta property="og:title" content={assigns[:page_title] || "Cadence"} />
     <meta
       property="og:description"
@@ -23,15 +33,25 @@
     <a class="skip-link" href="#main">Skip to content</a>
     <header class="site-header">
       <nav>
-        <a class="brand" href="/">Cadence</a>
-        <a href="/">Portfolio</a>
+        <a class="brand" href="/">
+          <Cadence.ServerWeb.Components.Brand.logo size={20} class="brand-logo" />
+          <span>Cadence</span>
+        </a>
         <span class="nav-account">
           <%= if assigns[:current_user] do %>
             <span class="nav-user" title={to_string(assigns[:current_user].email)}>{to_string(assigns[:current_user].email)}</span>
-            <a :if={Cadence.Server.Passkeys.Config.enabled?()} href="/account/security">Account</a>
-            <a href="/sign-out">Sign out</a>
+            <a class="button-link" href="/account">Account</a>
+            <a :if={Cadence.Server.Passkeys.Config.enabled?()} class="button-link" href="/account/security">Security keys</a>
+            <form action="/sign-out" method="post" class="nav-form">
+              <input
+                type="hidden"
+                name="_csrf_token"
+                value={Plug.CSRFProtection.get_csrf_token()}
+              />
+              <button type="submit" class="nav-button">Sign out</button>
+            </form>
           <% else %>
-            <a href="/sign-in">Sign in</a>
+            <a class="button-link" href="/sign-in">Sign in</a>
           <% end %>
         </span>
       </nav>

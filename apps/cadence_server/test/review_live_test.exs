@@ -1155,11 +1155,8 @@ defmodule Cadence.ServerWeb.ReviewLiveTest do
   defp seed_user(email, name), do: Ash.Seed.seed!(User, %{email: email, name: name})
 
   defp signed_conn(conn, user) do
-    {:ok, _token, claims} = AshAuthentication.Jwt.token_for_user(user)
-    subject_name = AshAuthentication.Info.authentication_subject_name!(User)
-
+    conn = init_test_session(conn, %{})
+    {conn, _session} = Cadence.ServerWeb.UserAuth.log_in(conn, user)
     conn
-    |> init_test_session(%{})
-    |> put_session(to_string(subject_name), claims["jti"] <> ":" <> claims["sub"])
   end
 end

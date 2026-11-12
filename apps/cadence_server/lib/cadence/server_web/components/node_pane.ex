@@ -125,7 +125,9 @@ defmodule Cadence.ServerWeb.Components.NodePane do
                     </li>
                   </ul>
                   <p :if={@membership} class="action-history">
-                    <.link navigate={~p"/p/#{@project.slug}/runs"}>Run history</.link>
+                    <.link class="button-link" navigate={~p"/p/#{@project.slug}/runs"}>
+                      Run history
+                    </.link>
                   </p>
                 </section>
               <% :invalid -> %>

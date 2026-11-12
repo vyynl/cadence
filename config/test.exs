@@ -1,5 +1,10 @@
 import Config
 
+# Password hashing is deliberately cheap in tests: the suite hashes and
+# verifies passwords in many cases, and the production cost is a runtime
+# concern (the Argon2 defaults apply in dev/prod).
+config :argon2_elixir, t_cost: 1, m_cost: 12, parallelism: 1
+
 config :logger, level: :warning
 
 config :cadence_daemon, Cadence.Daemon.Repo,
@@ -33,8 +38,22 @@ config :cadence_server, Cadence.ServerWeb.Endpoint,
   live_view: [signing_salt: "test-live-view-salt"]
 
 config :cadence_server,
-  demo_auth: true,
   token_signing_secret: String.duplicate("test-token-signing-secret-", 4),
+  demo_hints: false,
+  auth_totp_issuer: "Cadence Test",
+  auth_totp_required: true,
+  auth_password_min_length: 12,
+  auth_sudo_minutes: 20,
+  # Rate limits are opt-in per test: the Hammer ETS table is process-global, so
+  # a shared IP bucket would make unrelated auth tests order-dependent.
+  auth_login_ip_rate_limit: 0,
+  auth_login_account_rate_limit: 0,
+  auth_login_rate_scale: 60_000,
+  auth_totp_rate_limit: 0,
+  auth_totp_rate_scale: 300_000,
+  session_ttl_days: 14,
+  session_reissue_days: 7,
+  session_secure: false,
   public_url: "http://localhost:4000",
   webauthn: [
     enabled: true,

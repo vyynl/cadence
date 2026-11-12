@@ -240,11 +240,11 @@ defmodule Cadence.ServerWeb.AccountSecurityControllerTest do
       response = FakeAuthenticator.attest(fake, challenge)
       payload = H.registration_payload(response, "CSRF ok")
 
+      conn = H.signed_conn(conn, user)
       {conn, token} = H.csrf_session(conn)
 
       conn =
         conn
-        |> H.signed_conn(user)
         |> put_session(Passkeys.session_key(), challenge)
         |> H.enable_csrf()
         |> H.json_post("/account/security/keys", payload, csrf: token)

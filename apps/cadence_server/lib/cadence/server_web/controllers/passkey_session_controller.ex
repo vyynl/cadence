@@ -5,8 +5,8 @@ defmodule Cadence.ServerWeb.PasskeySessionController do
   `new/2` mints a discoverable-credential authentication challenge, stores it in
   the signed session, and renders the browser options. `create/2` consumes the
   challenge exactly once, verifies the assertion through
-  `Cadence.Server.Passkeys`, advances the sign counter, and then establishes the
-  AshAuthentication session.
+  `Cadence.Server.Passkeys`, advances the sign counter, and then establishes a
+  Cadence database session (`Cadence.ServerWeb.UserAuth`).
 
   Failure copy is deliberately generic for every verification failure (wrong
   key, tampered assertion, unknown credential, replay, expired challenge) so the
@@ -15,12 +15,12 @@ defmodule Cadence.ServerWeb.PasskeySessionController do
 
   use Cadence.ServerWeb, :controller
 
-  import AshAuthentication.Plug.Helpers, only: [store_in_session: 2]
-
   alias Cadence.Server.Accounts
   alias Cadence.Server.Accounts.User
   alias Cadence.Server.Passkeys
   alias Cadence.ServerWeb.PasskeyHelpers
+  alias Cadence.ServerWeb.ReturnTo
+  alias Cadence.ServerWeb.UserAuth
 
   @generic_failure "That key could not sign you in. Try again or use another sign-in method."
 
@@ -34,7 +34,7 @@ defmodule Cadence.ServerWeb.PasskeySessionController do
             page_title: "Sign in with a security key",
             page_description: "Sign in to Cadence with a security key or passkey.",
             options_json: Jason.encode!(options),
-            return_to: safe_return_to(Map.get(params, "return_to"))
+            return_to: ReturnTo.safe(Map.get(params, "return_to"))
           )
 
         {:error, _reason} ->
@@ -63,12 +63,12 @@ defmodule Cadence.ServerWeb.PasskeySessionController do
                result.sign_count
              ),
            {:ok, user} <- fetch_user(result.user_id),
-           {:ok, conn} <- sign_in(conn, user) do
+           {:ok, conn} <- sign_in(conn, user, params) do
         PasskeyHelpers.respond(
           conn,
           :ok,
           "Signed in with a security key.",
-          safe_return_to(Map.get(params, "return_to"))
+          ReturnTo.safe(Map.get(params, "return_to"))
         )
       else
         _failure ->
@@ -116,37 +116,12 @@ defmodule Cadence.ServerWeb.PasskeySessionController do
     end
   end
 
-  # `store_in_session/2` reads a JWT from `__metadata__.token` for the
-  # `:jti` session identifier. A user loaded from the database has no token
-  # metadata, so mint the same kind of token the OAuth/password strategies do
-  # before handing the record to the helper. `configure_session(renew: true)`
-  # runs first so the pre-authentication session cannot be reused.
-  defp sign_in(conn, user) do
-    case AshAuthentication.Jwt.token_for_user(user) do
-      {:ok, token, _claims} ->
-        user = %{user | __metadata__: Map.put(user.__metadata__, :token, token)}
-
-        {:ok, conn |> configure_session(renew: true) |> store_in_session(user)}
-
-      _error ->
-        {:error, :session_error}
-    end
+  defp sign_in(conn, user, params) do
+    {conn, _session} = UserAuth.log_in(conn, user, remember_me: remember_me?(params))
+    {:ok, conn}
   end
 
-  # -- return path -----------------------------------------------------------
-
-  @doc false
-  # Only a local absolute path is accepted; `//host` and backslashes would turn
-  # into an open redirect when handed to the browser.
-  def safe_return_to(value) when is_binary(value) do
-    cond do
-      value == "" -> "/"
-      not String.starts_with?(value, "/") -> "/"
-      String.starts_with?(value, "//") -> "/"
-      String.contains?(value, ["\\", "\n", "\r", <<0>>]) -> "/"
-      true -> value
-    end
+  defp remember_me?(params) do
+    Map.get(params, "remember_me") in [true, "true", "on", "1"]
   end
-
-  def safe_return_to(_value), do: "/"
 end

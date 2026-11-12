@@ -45,6 +45,95 @@ defmodule Cadence.Server.Release do
     Ecto.Migrator.migrations_path(repo)
   end
 
+  @doc """
+  Creates a local account from a release shell.
+
+      bin/cadence eval 'Cadence.Server.Release.create_user("you@example.com", "You", "a long password")'
+
+  Raises with a readable message when the account already exists or the
+  password fails the policy. There is no public registration route.
+  """
+  @spec create_user(String.t(), String.t() | nil, String.t()) :: :ok
+  def create_user(email, name, password) do
+    do_create_user(email, name, password)
+  end
+
+  @doc """
+  Creates a local account without a display name from a release shell.
+  """
+  @spec create_user(String.t(), String.t()) :: :ok
+  def create_user(email, password) do
+    do_create_user(email, nil, password)
+  end
+
+  defp do_create_user(email, name, password) do
+    with_repo(fn ->
+      case Cadence.Server.Accounts.LocalAuth.create_user(%{
+             email: email,
+             name: name,
+             password: password
+           }) do
+        {:ok, user} -> IO.puts("Created Cadence account #{user.email}.")
+        {:error, error} -> raise "Could not create account: #{inspect(error)}"
+      end
+    end)
+
+    :ok
+  end
+
+  @doc """
+  Resets a local account password from a release shell.
+
+      bin/cadence eval 'Cadence.Server.Release.reset_password("you@example.com", "a long password")'
+  """
+  @spec reset_password(String.t(), String.t()) :: :ok
+  def reset_password(email, password) do
+    with_repo(fn ->
+      with {:ok, user} when not is_nil(user) <-
+             Cadence.Server.Accounts.LocalAuth.get_by_email(email),
+           {:ok, _user} <- Cadence.Server.Accounts.LocalAuth.set_password(user, password) do
+        Cadence.ServerWeb.UserAuth.revoke_all(user.id)
+        IO.puts("Password updated for #{user.email}; all browser sessions were revoked.")
+      else
+        {:ok, nil} -> raise "No account exists for #{email}."
+        {:error, error} -> raise "Could not update password: #{inspect(error)}"
+      end
+    end)
+
+    :ok
+  end
+
+  @doc """
+  Clears an account's TOTP secret and recovery codes from a release shell.
+
+      bin/cadence eval 'Cadence.Server.Release.reset_totp("you@example.com")'
+  """
+  @spec reset_totp(String.t()) :: :ok
+  def reset_totp(email) do
+    with_repo(fn ->
+      with {:ok, user} when not is_nil(user) <-
+             Cadence.Server.Accounts.LocalAuth.get_by_email(email),
+           {:ok, _user} <- Cadence.Server.Accounts.TOTP.disable(user) do
+        Cadence.ServerWeb.UserAuth.revoke_all(user.id)
+        IO.puts("TOTP reset for #{user.email}; all browser sessions were revoked.")
+      else
+        {:ok, nil} -> raise "No account exists for #{email}."
+        {:error, error} -> raise "Could not reset TOTP: #{inspect(error)}"
+      end
+    end)
+
+    :ok
+  end
+
+  defp with_repo(fun) do
+    load_app()
+
+    case Ecto.Migrator.with_repo(Cadence.Server.Repo, fun) do
+      {:ok, _repo, result} -> result
+      {:error, error} -> raise "Could not start the server repo: #{inspect(error)}"
+    end
+  end
+
   defp load_app do
     # Returns {:error, {:already_loaded, _}} when the release boot script has
     # already loaded it, which is fine.

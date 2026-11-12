@@ -1,0 +1,75 @@
+<main class="auth-shell">
+  <section class="auth-card" aria-labelledby="signin-title">
+    <div class="auth-brand">
+      <Cadence.ServerWeb.Components.Brand.logo size={24} class="brand-logo" />
+      <span>Cadence</span>
+    </div>
+
+    <header class="auth-header">
+      <h1 id="signin-title">Sign in to Cadence</h1>
+      <p class="auth-lede">Your projects, session graph, and reviews.</p>
+    </header>
+
+    <%= if @passkeys_enabled? do %>
+      <a class="admin-button button-primary auth-submit" href="/auth/passkeys/sign-in">
+        Sign in with a security key or passkey
+      </a>
+      <p class="auth-note">
+        Use a security key, a passkey saved in this browser, or your phone.
+      </p>
+      <div class="auth-divider"><span>or use your password</span></div>
+    <% end %>
+
+    <form action="/sign-in" method="post" class="auth-form" id="signin-form">
+      <input type="hidden" name="_csrf_token" value={Plug.CSRFProtection.get_csrf_token()} />
+
+      <label class="auth-field">
+        <span>Email</span>
+        <input
+          type="email"
+          name="email"
+          value={@email || ""}
+          autocomplete="username"
+          spellcheck="false"
+          required
+          autofocus
+        />
+      </label>
+
+      <label class="auth-field">
+        <span>Password</span>
+        <input type="password" name="password" autocomplete="current-password" required />
+      </label>
+
+      <label class="auth-remember">
+        <input type="checkbox" name="remember_me" value="true" />
+        <span>Keep me signed in for 14 days</span>
+      </label>
+
+      <button type="submit" class="admin-button button-primary auth-submit">
+        Sign in
+      </button>
+    </form>
+
+    <%= if @oauth_providers != [] do %>
+      <div class="auth-divider"><span>or continue with</span></div>
+      <div class="auth-oauth">
+        <%= for provider <- @oauth_providers do %>
+          <a class="admin-button auth-oauth-button" href={Cadence.ServerWeb.AuthProviders.path(provider)}>
+            Continue with {Cadence.ServerWeb.AuthProviders.label(provider)}
+          </a>
+        <% end %>
+      </div>
+    <% end %>
+
+    <p class="auth-note">
+      Accounts are created by the operator. Password sign-in requires two-factor authentication.
+    </p>
+
+    <div :if={@demo_hints?} class="auth-demo-hint">
+      <p><strong>Demo stack.</strong> Sign in as <code>owner@demo.local</code> with password <code>cadence-demo</code>.</p>
+      <p>The seeded accounts are already enrolled in TOTP. Print the current code with:</p>
+      <code>docker compose exec server mix cadence.totp --email owner@demo.local</code>
+    </div>
+  </section>
+</main>

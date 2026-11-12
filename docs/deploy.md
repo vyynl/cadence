@@ -7,9 +7,8 @@ reference stack: the app, PostgreSQL, a Docker socket proxy, and a one-shot
 migration service.
 
 This is **not** the demo stack. The demo (`docker-compose.yml`,
-`docker/Dockerfile.demo`) builds with `MIX_ENV=dev`, compiles in a password
-strategy, seeds fake data, and exists for browsing the UI. See
-[`demo.md`](demo.md).
+`docker/Dockerfile.demo`) builds with `MIX_ENV=dev`, seeds demo accounts, and
+exists for browsing the UI. See [`demo.md`](demo.md).
 
 ## At a glance
 
@@ -54,12 +53,34 @@ Set at least:
 | `CAD_DATABASE_URL` | `ecto://USER:PASS@postgres:5432/DB` for the compose stack. |
 | `CAD_DB_USER` / `CAD_DB_PASS` / `CAD_DB_NAME` | Read by the compose PostgreSQL service; keep them consistent with `CAD_DATABASE_URL`. |
 | `CAD_OAUTH_GITHUB_*` / `CAD_OAUTH_GOOGLE_*` | Client id and secret for human sign-in. Redirect URI: `https://<CAD_PHX_HOST>/auth/user/<provider>/callback`. |
+| `CAD_AUTH_*` / `CAD_TOTP_KEY` / `CAD_SESSION_*` | Local password/TOTP policy, TOTP secret encryption, and session lifetimes. Defaults are production-sane; see [spec §12.6](spec.md#126-environment-variable-contract). |
 | `CAD_WEBAUTHN_*` | Optional passkey/security-key sign-in (default off). See [Passkeys](#passkeys). |
 | `CAD_LLM_API_KEY` | Optional. Required only for melds or docs that need the model; conflict-free melds skip it. |
 
 `CAD_LIVE_VIEW_SALT` and `CAD_TOKEN_SIGNING_SECRET` fall back to
-`CAD_SECRET_KEY_BASE`. The production image has no password strategy: humans
-sign in through OAuth, a passkey, or both.
+`CAD_SECRET_KEY_BASE`. Local password login is always part of the build;
+accounts are created by the operator (there is no public registration), and TOTP
+is mandatory for local accounts by default. OAuth and passkeys are secondary.
+
+## First account
+
+Before the first sign-in, create the operator account from the running
+container (or run the same `eval` against a one-shot container):
+
+```bash
+docker compose -f docker-compose.prod.yml exec cadence \
+  /app/bin/cadence eval 'Cadence.Server.Release.create_user("you@example.com", "Your Name", "a long password")'
+```
+
+Sign in at `/sign-in` with that password; the first login forces TOTP
+enrollment. The recovery codes are shown once. To reset a password or TOTP
+later, use `Release.reset_password/2` or `Release.reset_totp/1` the same way
+(`mix cadence.user --reset-password|--reset-totp` is the source-checkout
+equivalent). There is no password-reset email.
+
+`CAD_TOTP_KEY` is optional (32 raw bytes, base64, or a passphrase); when absent,
+the encryption key is derived from `CAD_SECRET_KEY_BASE`. Rotating either makes
+stored TOTP secrets undecryptable — reset them per account.
 
 ## Quick start
 
@@ -84,8 +105,10 @@ docker compose -f docker-compose.prod.yml logs migrate
 curl -fsS https://cadence.example.com/health   # {"status":"ok"}
 ```
 
-Then sign in at `/sign-in`, open `/account/security` if passkeys are enabled,
-and register a project from the daemon ([`daemon-setup.md`](daemon-setup.md)).
+Then sign in at `/sign-in` with the operator password and the current TOTP code,
+open `/account` to manage credentials, `/account/security` if passkeys are
+enabled, and register a project from the daemon
+([`daemon-setup.md`](daemon-setup.md)).
 The daemon's `CAD_SERVER_URL` must be reachable **by the daemon**; public
 proposal links come from the server's `CAD_PUBLIC_URL`, so an internal daemon
 URL is fine.
@@ -98,9 +121,10 @@ image outside compose is supported: set `CAD_HTTP_PORT` and expose the same port
 ## Passkeys
 
 Passkeys are an additional browser sign-in method for existing accounts and are
-off by default. They do not create accounts; OAuth remains the recovery path.
-The operator and end-user runbook is [`passkeys.md`](passkeys.md); the design
-record is [`webauthn-plan.md`](webauthn-plan.md).
+off by default. They do not create accounts; the account password + TOTP (or
+OAuth) remains the recovery path. The operator and end-user runbook is
+[`passkeys.md`](passkeys.md); the design record is
+[`webauthn-plan.md`](webauthn-plan.md).
 
 The complete contract is
 [spec §12.6](spec.md#126-environment-variable-contract); the nine
@@ -217,12 +241,13 @@ pinning are operator-managed; the workflow's first remote run is operator-side.
 | Symptom | Cause / fix |
 |---|---|
 | Boot raises on a missing env var | `runtime.exs` requires `CAD_SECRET_KEY_BASE`, `CAD_DATABASE_URL`, `CAD_PUBLIC_URL` in `MIX_ENV=prod`. Set them in `.env`. |
-| `CAD_DEMO_AUTH must never be set…` | The demo flag is compile-time only. Unset it in the environment and rebuild without `--build-arg CAD_DEMO_AUTH=…` (the Dockerfile rejects it). |
+| `CAD_DEMO_AUTH must never be set…` | This flag no longer exists. Remove it from `.env`; password login is part of every build now. |
 | `migrate` exits non-zero | Check `docker compose … logs migrate`; usually the database URL, user, password, or a missing extension. The app will not start until it passes. |
 | Container is `unhealthy` | `docker compose … logs cadence`; the healthcheck calls `/health` on port 4000. A config raise happens before the endpoint binds. |
 | Permission denied under `/data` | The volume or bind mount is not writable by the `cadence` uid. See [Volumes and ownership](#volumes-and-ownership). |
 | Action run fails `docker_unavailable` | Proxy not reachable or Docker older than 26. Check `CAD_DOCKER_SOCKET` and the proxy logs. |
-| Sign-in shows no form | No OAuth client is configured and passkeys are disabled. Configure an OAuth client, or enable `CAD_WEBAUTHN_ENABLED` with a valid RP ID and origin. |
+| Cannot sign in | Use the operator-created password, then the current TOTP code. A local account that has not enrolled is sent to `/sign-in/totp/setup`; an expired pending hand-off returns to `/sign-in`. |
+| Lost authenticator or TOTP key rotated | `bin/cadence eval 'Cadence.Server.Release.reset_totp("you@example.com")'`, then sign in and re-enroll. |
 | Passkey prompt never appears | Origin is not a secure context, or `CAD_WEBAUTHN_ORIGIN`/`RP_ID` does not match. See [`passkeys.md`](passkeys.md#troubleshooting). |
 
 ## Security checklist
@@ -236,8 +261,10 @@ pinning are operator-managed; the workflow's first remote run is operator-side.
 - Back up `postgres_data` and `cadence_data` together (metadata and object
   store). There is no built-in backup task yet
   ([spec §16](spec.md#16-open-decisions)).
-- If passkeys are enabled, keep OAuth configured for every human account and
-  treat `CAD_WEBAUTHN_RP_ID` as permanent.
+- If passkeys are enabled, keep a working password+TOTP or OAuth method for
+  every human account and treat `CAD_WEBAUTHN_RP_ID` as permanent.
+- TOTP is mandatory for local accounts by default; keep `CAD_TOTP_KEY` stable
+  (or accept a per-account reset after rotating it).
 
 ## Related docs
 

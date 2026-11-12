@@ -1,14 +1,11 @@
 # syntax=docker/dockerfile:1
 # check=skip=SecretsUsedInArgOrEnv
 
-# The CAD_DEMO_AUTH build arg is a boolean compile-time gate, not a secret; the
-# lint heuristic flags the name. It is intentionally checked and rejected below.
-
 # Production server image (spec §12.3, §12.8).
 #
 # The dev demo stack lives in docker/Dockerfile.demo and is a different image
-# on purpose: it compiles with MIX_ENV=dev and bakes in the demo password
-# strategy. This file never does either.
+# on purpose: it compiles with MIX_ENV=dev and seeds demo data. This file never
+# does either.
 
 ARG ELIXIR_VERSION=1.20
 ARG OTP_VERSION=29
@@ -20,14 +17,6 @@ ARG DEBIAN_VERSION=trixie
 # -- Build stage -------------------------------------------------------------
 
 FROM elixir:${ELIXIR_VERSION}-otp-${OTP_VERSION} AS build
-
-# The demo password strategy is a compile-time gate (§7.4). Refuse a production
-# build that carries it, before any source is copied.
-ARG CAD_DEMO_AUTH=
-RUN if [ -n "${CAD_DEMO_AUTH}" ]; then \
-      echo "CAD_DEMO_AUTH must not be set for a production build (spec §7.4/§12.8)" >&2; \
-      exit 1; \
-    fi
 
 ENV MIX_ENV=prod \
     LANG=C.UTF-8

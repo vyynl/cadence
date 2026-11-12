@@ -141,10 +141,10 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
         <p class="eyebrow">404</p>
         <h1>Project not found</h1>
         <p class="note">There is no project at this address.</p>
-        <p><a href="/">Back to Cadence</a></p>
+        <p><a class="button-link" href="/">Back to Cadence</a></p>
       <% else %>
         <p class="eyebrow">
-          <a href={~p"/p/#{@project.slug}/reviews"}>Reviews</a>
+          <a class="button-link" href={~p"/p/#{@project.slug}/reviews"}>Reviews</a>
           <span class="note">/ {@project.name}</span>
         </p>
 
@@ -164,7 +164,7 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
               The proposal could not be loaded.
             </p>
 
-            <p><a href={~p"/p/#{@project.slug}/reviews"}>Back to reviews</a></p>
+            <p><a class="button-link" href={~p"/p/#{@project.slug}/reviews"}>Back to reviews</a></p>
           </:failed>
 
           <header class="project-header">
@@ -195,7 +195,7 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
             </p>
 
             <p class="note">
-              <a href={~p"/proposals/#{review.proposal.token}"}>Public read-only link</a>
+              <a class="button-link" href={~p"/proposals/#{review.proposal.token}"}>Public read-only link</a>
             </p>
           </header>
 
@@ -265,7 +265,7 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
               This proposal was {review.proposal.status}. Only pending proposals can be decided.
             </p>
             <p :if={review.result_node}>
-              <a href={~p"/p/#{@project.slug}/n/#{review.result_node.id}"}>
+              <a class="button-link" href={~p"/p/#{@project.slug}/n/#{review.result_node.id}"}>
                 View the {if review.proposal.kind == :meld, do: "meld", else: "promoted"} node
               </a>
             </p>

@@ -80,7 +80,7 @@ defmodule Cadence.ServerWeb.Components.ProposalResult do
       <% :none -> %>
         <p class="note">Promotion proposals have no meld result.</p>
         <p :if={@target_node}>
-          <a href={~p"/p/#{@project_slug}/n/#{@target_node.id}"}>View the target node</a>
+          <a class="button-link" href={~p"/p/#{@project_slug}/n/#{@target_node.id}"}>View the target node</a>
         </p>
         <p :if={is_nil(@target_node)} class="note">The target node is not available.</p>
       <% {:ok, result} -> %>

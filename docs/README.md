@@ -14,6 +14,8 @@ before implementing.
   register a project, and keep it running.
 - [Security keys and passkeys](passkeys.md) — enable WebAuthn, enroll a YubiKey
   or phone passkey, and recover access.
+- [Accounts, TOTP, and sessions](auth.md) — operator-created accounts, first
+  login, recovery codes, remember-me, sudo mode, and resets.
 
 ## Operate
 
@@ -45,9 +47,10 @@ before implementing.
 ## Project status
 
 Cadence 1.0.0 is released (2026-11-11), completing the planned build order
-(Phases 1–8). Phase 9 (Git import) and WebAuthn/passkeys are on `master` and
-recorded as unreleased in the [release notes](release-notes.md). Remaining work
-is optional and tracked in [spec §16](spec.md#16-open-decisions).
+(Phases 1–8). Phase 9 (Git import), WebAuthn/passkeys, and the local-account/
+TOTP/session auth rebuild are on `master` and recorded as unreleased in the
+[release notes](release-notes.md). Remaining work is optional and tracked in
+[spec §16](spec.md#16-open-decisions).
 
 ## Documentation conventions
 

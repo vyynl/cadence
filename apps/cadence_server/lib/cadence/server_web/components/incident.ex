@@ -81,10 +81,10 @@ defmodule Cadence.ServerWeb.Components.Incident do
 
             <p class="node-meta">
               <span :if={incident.proposal_id}>
-                <a href={~p"/p/#{@project_slug}/reviews/#{incident.proposal_id}"}>Proposal</a>
+                <a class="button-link" href={~p"/p/#{@project_slug}/reviews/#{incident.proposal_id}"}>Proposal</a>
               </span>
               <span :if={incident.node_id}>
-                <a href={~p"/p/#{@project_slug}/n/#{incident.node_id}"}>Node</a>
+                <a class="button-link" href={~p"/p/#{@project_slug}/n/#{incident.node_id}"}>Node</a>
               </span>
               <span :if={is_nil(incident.proposal_id) and is_nil(incident.node_id)}>
                 Project-wide

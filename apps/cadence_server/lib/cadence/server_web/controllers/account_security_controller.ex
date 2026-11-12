@@ -32,22 +32,24 @@ defmodule Cadence.ServerWeb.AccountSecurityController do
 
   def rename(conn, %{"id" => row_id, "label" => label}) do
     PasskeyHelpers.with_user(conn, fn conn, user ->
-      case Passkeys.rename_by_id(user, row_id, normalize_label(label)) do
-        {:ok, credential} ->
-          conn
-          |> put_flash(:info, "Renamed this key to “#{credential.label}”.")
-          |> redirect(to: "/account/security")
+      PasskeyHelpers.with_sudo(conn, fn conn ->
+        case Passkeys.rename_by_id(user, row_id, normalize_label(label)) do
+          {:ok, credential} ->
+            conn
+            |> put_flash(:info, "Renamed this key to “#{credential.label}”.")
+            |> redirect(to: "/account/security")
 
-        {:error, :not_found} ->
-          conn
-          |> put_flash(:error, "That security key could not be found.")
-          |> redirect(to: "/account/security")
+          {:error, :not_found} ->
+            conn
+            |> put_flash(:error, "That security key could not be found.")
+            |> redirect(to: "/account/security")
 
-        {:error, reason} ->
-          conn
-          |> put_flash(:error, rename_error(reason))
-          |> redirect(to: "/account/security")
-      end
+          {:error, reason} ->
+            conn
+            |> put_flash(:error, rename_error(reason))
+            |> redirect(to: "/account/security")
+        end
+      end)
     end)
   end
 
@@ -55,22 +57,24 @@ defmodule Cadence.ServerWeb.AccountSecurityController do
 
   def delete(conn, %{"id" => row_id}) do
     PasskeyHelpers.with_user(conn, fn conn, user ->
-      case Passkeys.delete_by_id(user, row_id) do
-        :ok ->
-          conn
-          |> put_flash(:info, "Security key removed.")
-          |> redirect(to: "/account/security")
+      PasskeyHelpers.with_sudo(conn, fn conn ->
+        case Passkeys.delete_by_id(user, row_id) do
+          :ok ->
+            conn
+            |> put_flash(:info, "Security key removed.")
+            |> redirect(to: "/account/security")
 
-        {:error, :not_found} ->
-          conn
-          |> put_flash(:error, "That security key could not be found.")
-          |> redirect(to: "/account/security")
+          {:error, :not_found} ->
+            conn
+            |> put_flash(:error, "That security key could not be found.")
+            |> redirect(to: "/account/security")
 
-        {:error, _reason} ->
-          conn
-          |> put_flash(:error, "That security key could not be removed. Try again.")
-          |> redirect(to: "/account/security")
-      end
+          {:error, _reason} ->
+            conn
+            |> put_flash(:error, "That security key could not be removed. Try again.")
+            |> redirect(to: "/account/security")
+        end
+      end)
     end)
   end
 

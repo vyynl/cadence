@@ -64,9 +64,10 @@ Set `CAD_STATE_DIR` to move it, for example to a backup-friendly disk.
 
 ### 2. Mint a daemon token (server only)
 
-1. Sign in to the server. In production this is the configured OAuth provider;
-   in the demo stack use the password accounts at `/sign-in` ([`demo.md`](demo.md)).
-2. Open `/auth/tokens/new`.
+1. Sign in to the server with your operator-created password and TOTP code (or
+   a configured OAuth provider) at `/sign-in`.
+2. Open `/account` and choose **Create a daemon token**, or go directly to
+   `/auth/tokens/new`.
 3. Name the key after the machine (for example `laptop`) and create it.
 4. Copy the plaintext key now. The server stores only a SHA-256 hash and shows
    the value **once**.
@@ -373,7 +374,7 @@ socket, and the sync ledger survive an upgrade untouched.
 
 ## Related docs
 
-- [Demo stack](demo.md) — a local server without OAuth.
+- [Demo stack](demo.md) — a local server with seeded accounts and deterministic TOTP.
 - [Import a Git repository](import.md) — adopt existing history.
 - [Production deployment](deploy.md) — the server side.
 - [Neovim plugin](../cadence.nvim/README.md) — commands, picker, and setup.

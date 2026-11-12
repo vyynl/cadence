@@ -1,0 +1,48 @@
+<main class="auth-shell">
+  <section class="auth-card" aria-labelledby="totp-title">
+    <div class="auth-brand">
+      <Cadence.ServerWeb.Components.Brand.logo size={24} class="brand-logo" />
+      <span>Cadence</span>
+    </div>
+
+    <header class="auth-header">
+      <h1 id="totp-title">Two-factor authentication</h1>
+      <p class="auth-lede">{@email}</p>
+    </header>
+
+    <p :if={@error} class="auth-error" role="alert">{@error}</p>
+
+    <form action="/sign-in/totp" method="post" class="auth-form" id="totp-form">
+      <input type="hidden" name="_csrf_token" value={Plug.CSRFProtection.get_csrf_token()} />
+
+      <label class="auth-field">
+        <span>Authentication code</span>
+        <input
+          type="text"
+          name="code"
+          inputmode="numeric"
+          autocomplete="one-time-code"
+          spellcheck="false"
+          placeholder="000000"
+          class="totp-code"
+          required
+          autofocus
+        />
+      </label>
+
+      <button type="submit" class="admin-button button-primary auth-submit">
+        Verify
+      </button>
+    </form>
+
+    <p class="auth-note">You can also enter one of your recovery codes.</p>
+    <p class="auth-note"><a class="button-link" href="/sign-in">Back to sign in</a></p>
+
+    <div :if={@demo_hints?} class="auth-demo-hint">
+      <p>
+        <strong>Demo stack.</strong> <code>{@email}</code> is already enrolled. Print the current code with:
+      </p>
+      <code>docker compose exec server mix cadence.totp --email {@email}</code>
+    </div>
+  </section>
+</main>

@@ -39,8 +39,9 @@ directed acyclic graph (DAG) of snapshots instead of Git branches.
   in sandboxed containers with captured logs and artifacts.
 - **Automate documentation.** Generate documentation changes from a project
   schema, with a reviewable diff before commit.
-- **Sign in with a passkey.** Use a YubiKey or platform passkey alongside OAuth;
-  passkeys are optional and off by default.
+- **Sign in securely.** Operator-created email/password accounts with mandatory
+  TOTP and recovery codes; database-backed sessions with remember-me and sudo
+  mode. OAuth and passkeys are optional secondary methods.
 
 ## Quick start
 
@@ -104,9 +105,10 @@ there is no shared runtime and no distributed Erlang.
 ## Status
 
 Cadence **1.0.0** is released. The planned build order (Phases 1–8) is complete.
-Phase 9 (Git import) and WebAuthn/passkeys are on `master` and recorded as
-unreleased; see [`docs/release-notes.md`](docs/release-notes.md) for the release
-summary, upgrade notes, and known limitations.
+Phase 9 (Git import), WebAuthn/passkeys, and the local-account/TOTP/session
+auth rebuild are on `master` and recorded as unreleased; see
+[`docs/release-notes.md`](docs/release-notes.md) for the release summary,
+upgrade notes, and known limitations.
 
 ## Development
 

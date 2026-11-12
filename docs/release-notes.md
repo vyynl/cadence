@@ -29,17 +29,67 @@ projects stay at `1.0.0` until then. This section is the candidate text for
   user-scoped credential storage.
 - `/account/security`: list keys with label/transport/added/last-used, rename,
   remove-after-confirmation, per-user cap (`CAD_WEBAUTHN_MAX_CREDENTIALS`), and
-  last-key warning. OAuth remains the recovery path.
-- Cadence-owned `/sign-in` with the existing OAuth/demo components and a
-  first-class passkey CTA; `GET`/`POST /auth/passkeys/sign-in` renews the
-  session and uses one generic failure message.
+  last-key warning. Password + TOTP or OAuth remains the recovery path, and
+  credential changes require sudo mode.
+- Cadence-owned `/sign-in` with the email/password form, configured OAuth
+  buttons, and a first-class passkey CTA; `GET`/`POST /auth/passkeys/sign-in`
+  creates a Cadence database session and uses one generic failure message.
 - Hardening: both ceremony POSTs are per-IP rate-limited (`429` +
   `Retry-After`), `log: false`, CSRF-protected, and the production session
   cookie is now `secure` (dev/test/localhost stay usable).
 - The demo stack enables WebAuthn on `localhost`; operator/end-user procedures
   are in `docs/passkeys.md`.
 
+**Auth rebuild — local accounts, mandatory TOTP, database sessions**
+- Email/password accounts created by the operator (`mix cadence.user` or
+  `Cadence.Server.Release.create_user/2`); Argon2id hashing, a 12-character
+  floor, uniform failure timing, and no public registration.
+- TOTP is mandatory for local password accounts: QR enrollment on first login,
+  encrypted secret at rest, replay prevention, ten one-use recovery codes, and
+  sudo-gated regenerate/disable. OAuth and passkey accounts may opt in.
+- Browser sessions are database rows (`user_sessions`) with hashed tokens,
+  rotation on login, a 14-day remember-me cookie, 7-day reissue, logout
+  revocation, LiveView disconnect, and a 20-minute sudo window.
+- New `/sign-in`, `/sign-in/totp`, `/sign-in/totp/setup`, and `/account`
+  surfaces; per-IP/per-email and per-user rate limits; `mix cadence.totp` for
+  the demo/operator code.
+- Visual pass: the DAG-fork mark, a real SVG favicon (`/favicon.ico` answers
+  too), one centered auth card, and consistent account sections. No new font or
+  site-wide redesign.
+
 ### Upgrade notes
+
+- **New server dependencies:** `argon2_elixir ~> 4.0`, `nimble_totp ~> 1.0`, and
+  `qr_code ~> 3.2` (with transitive `matrix_reloaded`, `pngex`,
+  `xml_builder`, `ex_maybe`, `result`). `bcrypt_elixir` is no longer a direct
+  dependency (AshAuthentication still pulls it transitively); run
+  `mix deps.get`.
+- **Server migrations:** `add_totp_fields` (users), `create_user_recovery_codes`,
+  and `create_user_sessions`. All additive; run the normal one-shot `migrate`
+  service. The daemon database is unchanged.
+- **`CAD_DEMO_AUTH` is retired.** Password login is part of every build;
+  operator-created accounts are the production path. Remove the variable and any
+  `--build-arg` from deployment tooling. The demo image no longer takes it.
+- **Existing browser sessions are invalidated once.** Ash `jti:sub` cookies are
+  not database sessions, so every user signs in again after the upgrade.
+- **First account:** create it from the server shell before the first sign-in
+  (`Release.create_user/3` or `mix cadence.user`); the first password login
+  forces TOTP enrollment. Password/TOTP resets are operator-only.
+- **New env:** `CAD_AUTH_PASSWORD_MIN_LENGTH`, `CAD_AUTH_TOTP_REQUIRED`,
+  `CAD_AUTH_TOTP_ISSUER`, `CAD_TOTP_KEY`, `CAD_AUTH_SUDO_MINUTES`,
+  `CAD_AUTH_LOGIN_*`, `CAD_AUTH_TOTP_RATE_*`, `CAD_SESSION_TTL_DAYS`, and
+  `CAD_SESSION_REISSUE_DAYS` (plus the demo-only `CAD_DEMO_HINTS`). Defaults are
+  production-sane; see spec §12.6.
+- **OAuth redirect:** a successful OAuth callback now returns to the stored
+  local `return_to` or `/` (not always `/auth/tokens/new`). The account page
+  links to token creation; update bookmarks/runbooks if they relied on the old
+  redirect.
+- **Passkeys:** sign-in creates a database session instead of an
+  AshAuthentication session, and registration/rename/remove require sudo mode.
+- **Demo:** seeded accounts use Argon2 + a fixed TOTP secret. Print the code
+  with `docker compose exec server mix cadence.totp --email owner@demo.local`.
+- **WebAuthn:** the `wax_` note below still applies; the session-cookie and
+  demo-stack notes are superseded by the auth rebuild above.
 
 - **New server dependency:** `wax_ ~> 0.7` (Apache-2.0), with transitive
   `cbor`, `x509`, and `asn1_compiler`. Run `mix deps.get`; no daemon or shared
@@ -69,8 +119,9 @@ projects stay at `1.0.0` until then. This section is the candidate text for
 - Attestation is `none`: any authenticator, including a virtual one, is
   accepted. Possession plus user verification is the assurance model; there is
   no MDS/AAGUID allowlist.
-- No passkey-only accounts, recovery codes, or email magic links. OAuth (or the
-  demo password) is required for recovery; U2F-only keys are unsupported.
+- No passkey-only accounts, passkey recovery codes, or email magic links.
+  Password + TOTP (or OAuth) is required for recovery; U2F-only keys are
+  unsupported.
 - The ceremony rate limiter is in-memory and per node/IP; the challenge GETs
   are not limited and there is no separate per-credential bucket.
 - The 1.0.0 notes' accepted `hackney` and `assent` advisories still apply; they
@@ -147,7 +198,7 @@ limitations**.
   unused-lock checks, Sobelow, dependency CVE scanning, and a fail-closed
   advisory-database check.
 
-### Upgrade notes
+### Upgrade notes — Phase 9 / WebAuthn / CI
 
 - **Back up `CAD_STATE_DIR` before upgrading the daemon.** This release's
   SQLite schema is not purely additive: `Project.actions_manifest` is dropped.

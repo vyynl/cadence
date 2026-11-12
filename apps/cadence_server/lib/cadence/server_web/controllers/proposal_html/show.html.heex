@@ -3,7 +3,7 @@
     <p class="eyebrow">Proposal</p>
     <h1>{Presentation.kind_title(@proposal.kind)}</h1>
     <p class="slug">
-      <a href={"/p/#{@project.slug}"}>{@project.name}</a>
+      <a class="button-link" href={"/p/#{@project.slug}"}>{@project.name}</a>
       <span class="note">#{short_token(@proposal.token)}</span>
     </p>
     <p class="node-meta">

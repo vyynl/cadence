@@ -1,0 +1,21 @@
+<main class="auth-shell">
+  <section class="auth-card" aria-labelledby="recovery-title">
+    <div class="auth-brand">
+      <Cadence.ServerWeb.Components.Brand.logo size={24} class="brand-logo" />
+      <span>Cadence</span>
+    </div>
+
+    <header class="auth-header">
+      <h1 id="recovery-title">Save your recovery codes</h1>
+      <p class="auth-lede">
+        Each code works once. Store them somewhere safe and offline. They will not be shown again.
+      </p>
+    </header>
+
+    <ul class="recovery-grid" aria-label="Recovery codes">
+      <li :for={code <- @codes}><code>{code}</code></li>
+    </ul>
+
+    <a class="admin-button button-primary auth-submit" href="/">I have saved these codes</a>
+  </section>
+</main>

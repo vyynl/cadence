@@ -56,6 +56,10 @@ defmodule Mix.Tasks.Cadence.DemoSeed do
     shell.info("")
     shell.info("Password for every demo account: #{summary.password}")
     shell.info("")
+    shell.info("TOTP is mandatory for these local accounts. The demo seeds a fixed")
+    shell.info("secret; print the current code for an account with:")
+    shell.info("  mix cadence.totp --email owner@demo.local")
+    shell.info("")
     shell.info("Accounts:")
 
     Enum.each(summary.users, fn user ->

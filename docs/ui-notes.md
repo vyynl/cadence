@@ -15,11 +15,6 @@ belongs in [`spec.md`](spec.md), and shipped changes belong in
 
 ## Open
 
-- **`/favicon.ico` returns 404.** Every first page load logs one `404 Not Found`
-  in the console (the browser's automatic favicon request); the server log shows
-  `no route found for GET /favicon.ico`. Expected: either a real favicon route
-  or a `<link rel="icon">` pointing at an inline SVG, so public pages are
-  console-clean. No visual impact today.
 - **Right-edge project metadata rail (future idea).** Consider a narrow column
   on the right of the repository pane on `/p/:slug`, with GitHub-About-style
   blocks mapped to Cadence concepts rather than copied from GitHub:
@@ -44,6 +39,24 @@ belongs in [`spec.md`](spec.md), and shipped changes belong in
     data sources, and the §7.3 update before building.
 
 ## Recently fixed
+
+- **UI links are buttons.** Standalone UI links (header account links, project
+  Reviews/Runs, Run history, Browse the full history, “Back to…”, incident and
+  result actions, account actions) are compact outline buttons with an
+  accent-tinted hover/focus fill. Inline README/proposal prose links and list
+  rows keep their normal link treatment so reading flow is not broken.
+- **White navigation flash.** The `html` canvas was left at the browser's white
+  default (only `body` had a background). The root layout now paints the
+  light/dark canvas inline before the stylesheet, and `app.css` also sets
+  `html` + `body` backgrounds, so full-page links no longer flash white.
+- **Redundant header link.** The bare `Portfolio` link is gone; the Cadence
+  brand already links to `/`, leaving the header as brand + account cluster.
+- **Favicon and brand mark.** The header and auth pages use the simple DAG-fork
+  mark (`Components.Brand`), the root layout links `/assets/favicon.svg`, and
+  `/favicon.ico` answers with the SVG, so the console is clean.
+- **Auth/account surfaces.** Sign-in, the TOTP challenge, first-time enrollment,
+  recovery codes, and `/account` share one centered-card layout and the existing
+  AA color tokens (light and dark); verified at 1440×1000 and 390×844.
 
 - **DAG hover-card layering.** The SVG now paints edges and non-interactive node
   graphics first, then an interaction layer with one focusable link per node, so

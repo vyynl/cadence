@@ -63,6 +63,24 @@ defmodule Cadence.ServerWeb.PasskeyHelpers do
   end
 
   @doc """
+  Runs `fun` only when the current session is inside the sudo window.
+
+  Required for credential changes (add, rename, remove a security key), so a
+  long-lived session alone cannot alter the account's second factors.
+  """
+  @spec with_sudo(Plug.Conn.t(), (Plug.Conn.t() -> Plug.Conn.t())) :: Plug.Conn.t()
+  def with_sudo(conn, fun) do
+    if Cadence.ServerWeb.UserAuth.sudo_mode?(conn.assigns[:current_session]) do
+      fun.(conn)
+    else
+      conn
+      |> put_flash(:error, "Re-authenticate to manage security keys.")
+      |> redirect(to: "/sign-in?sudo=1&return_to=/account/security")
+      |> halt()
+    end
+  end
+
+  @doc """
   Answers `404`: JSON callers get a small error object, page requests get the
   shared page through the app layout.
   """

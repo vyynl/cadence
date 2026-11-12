@@ -10,14 +10,11 @@ defmodule Cadence.ServerWeb.PasskeyTestHelpers do
 
   @endpoint Cadence.ServerWeb.Endpoint
 
-  @doc "Signs a conn in with the same JWT-jti session shape the app stores."
+  @doc "Signs a conn in with a Cadence database session."
   def signed_conn(conn, %User{} = user) do
-    {:ok, _token, claims} = AshAuthentication.Jwt.token_for_user(user)
-    subject_name = AshAuthentication.Info.authentication_subject_name!(User)
-
+    conn = init_test_session(conn, %{})
+    {conn, _session} = Cadence.ServerWeb.UserAuth.log_in(conn, user)
     conn
-    |> init_test_session(%{})
-    |> put_session(to_string(subject_name), claims["jti"] <> ":" <> claims["sub"])
   end
 
   @doc "Masks the CSRF token rendered into the app layout's meta tag."

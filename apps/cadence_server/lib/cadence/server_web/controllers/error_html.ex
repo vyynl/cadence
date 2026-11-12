@@ -13,7 +13,7 @@ defmodule Cadence.ServerWeb.ErrorHTML do
       <p class="eyebrow">404</p>
       <h1>Page not found</h1>
       <p class="note">There is nothing at this address.</p>
-      <p><a href="/">Back to Cadence</a></p>
+      <p><a class="button-link" href="/">Back to Cadence</a></p>
     </article>
     """
   end
@@ -26,7 +26,7 @@ defmodule Cadence.ServerWeb.ErrorHTML do
       <p class="eyebrow">500</p>
       <h1>Something went wrong</h1>
       <p class="note">The server could not complete this request.</p>
-      <p><a href="/">Back to Cadence</a></p>
+      <p><a class="button-link" href="/">Back to Cadence</a></p>
     </article>
     """
   end

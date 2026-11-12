@@ -3,8 +3,8 @@
 Cadence supports WebAuthn (Web Authentication) / FIDO2 (Fast Identity Online 2)
 **security keys** — a YubiKey 5-series or another FIDO2 key — and
 platform or synced **passkeys** as a browser sign-in method for existing
-accounts. It is off by default. OAuth remains the account-recovery path;
-passkeys do not replace it and cannot create accounts.
+accounts. It is off by default. Password + TOTP (or OAuth) remains the
+account-recovery path; passkeys do not replace it and cannot create accounts.
 
 This page is the operator and end-user runbook. For the design rationale, see
 [`webauthn-plan.md`](webauthn-plan.md); for the configuration contract, see
@@ -15,19 +15,20 @@ This page is the operator and end-user runbook. For the design rationale, see
 
 - **What you get:** a second browser sign-in method using a hardware key or a
   platform/synced passkey, with user verification on every ceremony.
-- **What you need:** an existing OAuth (or demo) account, a permanent public
-  hostname, and HTTPS outside `localhost`.
+- **What you need:** an existing local (password + TOTP) or OAuth account, a
+  permanent public hostname, and HTTPS outside `localhost`.
 - **Default:** disabled. Enable it with `CAD_WEBAUTHN_ENABLED=true` and a valid
   RP ID and origin.
-- **Recovery:** OAuth. There are no recovery codes and no passkey-only accounts.
+- **Recovery:** your password + TOTP, or OAuth. TOTP recovery codes are for
+  TOTP, not for passkeys; there are no passkey-only accounts.
 - **Permanence:** the RP ID (relying party ID) is bound to every credential.
   Changing it invalidates every registered key.
 
 ## Prerequisites
 
 - A Cadence server reachable over HTTPS, or `http://localhost` for development.
-- An OAuth provider configured for human sign-in. Every account that may
-  register a passkey needs a recovery path.
+- An account with a working recovery method: a local password + TOTP, or a
+  configured OAuth provider.
 - A permanent public hostname chosen **before** the first key is registered.
 - A FIDO2/CTAP2 authenticator for hardware testing: YubiKey 5-series over USB
   or NFC, a platform passkey (Touch ID, Windows Hello, Android), or a synced
@@ -41,9 +42,9 @@ This page is the operator and end-user runbook. For the design rationale, see
 | Platform passkeys (Touch ID, Windows Hello, Android) and synced passkeys (iCloud Keychain, Google Password Manager, 1Password) | Passkey **account creation** or self-signup |
 | Phone passkey through the browser's native **Use a phone** QR (hybrid/caBLE) | A Cadence-rendered QR, kiosk/TV login, or a phone-pairing flow |
 | Several named credentials per account (default cap 10) | Attestation trust, FIDO MDS (Metadata Service), AAGUID allowlists, or enterprise attestation |
-| Discoverable (resident) credentials, so sign-in needs no email | Recovery codes, email magic links, or passkey-only accounts |
+| Discoverable (resident) credentials, so sign-in needs no email | Passkey-only accounts with no password/TOTP or OAuth recovery |
 | User verification with PIN or biometric, required on every ceremony | YubiKey PIV, OATH, OTP, OpenPGP, or U2F applets |
-| Removing the last key while signed in (OAuth remains) | CLI or daemon login with a passkey; daemons keep API keys |
+| Removing the last key while signed in (password/TOTP or OAuth remains) | CLI or daemon login with a passkey; daemons keep API keys |
 
 The browser performs the ceremony and draws the cross-device QR. Cadence only
 mints the challenge and verifies the response server-side. AAGUID is the
@@ -130,7 +131,8 @@ prod build served over plain HTTP will not retain sessions. Rotating
 With `CAD_WEBAUTHN_ENABLED=false` (the default):
 
 - `/account/security*` and `/auth/passkeys/sign-in` return 404.
-- The `/sign-in` page shows only OAuth (and the compile-gated demo password).
+- The `/sign-in` page shows the password form and any configured OAuth
+  providers; the passkey CTA is hidden.
 - Existing credential rows are kept but unusable until the feature is enabled
   again with the same RP ID.
 
@@ -139,9 +141,10 @@ disabling does not destroy keys.
 
 ## Register a YubiKey (USB or NFC)
 
-1. Sign in with OAuth (or the demo password) at `/sign-in`.
+1. Sign in with your password + TOTP (or OAuth) at `/sign-in`.
 2. Open **Account** in the header, or go to `/account/security`.
-3. Choose **Add a security key or passkey**.
+3. Choose **Add a security key or passkey**. Credential changes require sudo
+   mode; if the session is old, sign in again first.
 4. Give the key a name you will recognise later, for example
    `YubiKey 5C — desk`. Names are 1–60 characters and are only labels.
 5. Choose **Add key**. The browser prompt appears:
@@ -179,9 +182,9 @@ without losing access.
 - **Rename** changes only the label.
 - **Remove** is a two-step confirmation (open **Remove**, then **Remove key**).
   It is scoped to your account; a guessed row ID cannot touch another user.
-- Removing the **last** key is allowed because OAuth (or the demo password) can
-  still sign you in. The page warns you first. If you have no OAuth identity and
-  no demo password, do not remove the last key.
+- Removing the **last** key is allowed because password + TOTP (or OAuth) can
+  still sign you in. The page warns you first. If you have no other recovery
+  method, do not remove the last key.
 
 Duplicate registration of the same key on the same account is refused
 (`excludeCredentials` plus a unique index); the browser typically reports
@@ -229,25 +232,27 @@ Keep both values stable, and avoid using a hostname you may lose.
 
 ## Recovery: lost key, lost phone, last key gone
 
-OAuth is the recovery path in v1. There are no recovery codes and no email magic
-links.
+Your password + TOTP (or OAuth) is the recovery path. There is no email magic
+link and no password-reset email.
 
-1. Sign in with GitHub or Google (or the demo password in the demo stack).
+1. Sign in with your password and TOTP code (or GitHub/Google).
 2. Open `/account/security`.
 3. Remove the lost credential.
 4. Add a replacement key or passkey.
 
-If the **last** key is lost and OAuth is configured, the account is recoverable
-through OAuth. If the account has no OAuth identity, there is no supported
-self-service recovery: a deployment without OAuth is not a supported passkey
-deployment (the demo password is the demo-only exception). An operator with
-database access can delete the `webauthn_credentials` row, but that is a manual
-break-glass action, not a supported workflow; treat it as incident response.
+If the **last** key is lost, the account is recoverable through password + TOTP
+or OAuth. If both the authenticator and every recovery code are gone, an
+operator resets TOTP from the server shell
+(`Cadence.Server.Release.reset_totp/1` or `mix cadence.user --reset-totp`); that
+is a break-glass action, not self-service. If the account also has no OAuth
+identity, the operator may need to reset the password. Treat either as incident
+response.
 
 Lost-key hygiene:
 
-- Remove the old credential as soon as you have OAuth access; it cannot be used
-  without the physical key, but leaving it only confuses the device list.
+- Remove the old credential as soon as you have another working sign-in method;
+  it cannot be used without the physical key, but leaving it only confuses the
+  device list.
 - Register the replacement before travelling.
 - If a key is stolen, removing it does not revoke a copied credential; no
   server-side secret exists to revoke. The sign counter and user verification
@@ -282,15 +287,14 @@ Lost-key hygiene:
   bucket in v1.
 - **CSRF:** both ceremony POSTs are same-origin forms or JSON with the CSRF
   token; the normal `protect_from_forgery` pipeline applies.
-- **Session renewal:** a successful passkey sign-in renews the session before
-  storing the AshAuthentication session, so a pre-authentication session cannot
-  be reused.
+- **Session renewal:** a successful passkey sign-in creates a new Cadence
+  database session, so a pre-authentication session cannot be reused.
 - **Secrets:** the credential ID, COSE public key, AAGUID, sign count, and
   attestation type are never serialized to HTML or JSON and are never written to
   logs.
-- **Step-up:** a passkey is not required before minting a daemon API key in v1;
-  API keys keep their existing authorization. Conditional UI and autofill are
-  deferred.
+- **Step-up:** passkey registration, rename, and removal require sudo mode; a
+  passkey is not required before minting a daemon API key in v1; API keys keep
+  their existing authorization. Conditional UI and autofill are deferred.
 
 The usual web front door still applies: passkeys do not protect a compromised
 session, XSS, or CSRF, so keep the CSP, CSRF protection, and HTTPS in place.
@@ -310,7 +314,7 @@ session, XSS, or CSRF, so keep the CSP, CSRF protection, and HTTPS in place.
 ## Verify
 
 - `/sign-in` shows **Sign in with a security key or passkey** only while the
-  feature is enabled.
+  feature is enabled, alongside the password form.
 - `/account/security` loads for a signed-in user and lists registered keys.
 - A test registration completes the browser prompt and appears in the list with
   a transport and added date.

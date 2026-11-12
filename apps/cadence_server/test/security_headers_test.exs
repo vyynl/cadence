@@ -1,7 +1,7 @@
 defmodule Cadence.ServerWeb.SecurityHeadersTest do
   use Cadence.ServerWeb.ConnCase, async: true
 
-  @expected_csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
+  @expected_csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
 
   test "the portfolio sends the exact Content-Security-Policy", %{conn: conn} do
     conn = get(conn, "/")

@@ -5,14 +5,16 @@ server on <http://localhost:4000>. Use it to try the UI, the DAG, reviews,
 imports, and passkeys without setting up OAuth, a daemon, or real history.
 
 **This is not a production deployment.** The image builds with `MIX_ENV=dev`
-and compiles in a demo-only password strategy (`CAD_DEMO_AUTH`). The production
-stack is `docker-compose.prod.yml` / `docker/Dockerfile`; see
+and seeds demo data. Sign-in uses the same local password + TOTP path as
+production, with a fixed demo TOTP secret. The production stack is
+`docker-compose.prod.yml` / `docker/Dockerfile`; see
 [`deploy.md`](deploy.md) and [spec §12.8](spec.md#128-build-release).
 
 ## At a glance
 
 - **Stack:** PostgreSQL, a seeded `cadence_server`, and a Docker socket proxy.
-- **Accounts:** four seeded users, password `cadence-demo`.
+- **Accounts:** four seeded users, password `cadence-demo`, and a deterministic
+  TOTP secret.
 - **Projects:** three, covering flags, proposals, incidents, action runs, Git
   import, and passkeys.
 - **Daemon:** not included. The demo is a server-only stack.
@@ -42,7 +44,18 @@ docker compose down -v          # stop and wipe PostgreSQL and the Git store
 ## Accounts
 
 Every account uses the password **`cadence-demo`**. Sign in at
-<http://localhost:4000/sign-in>.
+<http://localhost:4000/sign-in>. The demo accounts have TOTP enabled with a
+fixed secret; print the current code for an account with:
+
+```bash
+docker compose exec server mix cadence.totp --email owner@demo.local
+```
+
+If the code was just used, wait for the next 30-second step (the demo task
+warns when that is the case). The seeded accounts have no recovery codes;
+`/account` can generate a set with a current code if you want to try that flow.
+The sign-in and TOTP pages show this command when `CAD_DEMO_HINTS=true` (the
+demo stack sets it); production leaves it off.
 
 | Account | `cadence-demo` | `meld-review` | `imported-demo` |
 |---|---|---|---|
@@ -53,8 +66,8 @@ Every account uses the password **`cadence-demo`**. Sign in at
 
 Only `owner` and `approver` may approve or reject; `viewer` can read the review
 hub; `outsider` can only see public pages. The imported project has no
-proposals, so its owner-only membership is enough. Registration is disabled in
-every environment; these accounts are seeded.
+proposals, so its owner-only membership is enough. There is no public
+registration; these accounts are seeded.
 
 Passkeys are enabled in this stack for the same accounts:
 `CAD_WEBAUTHN_ENABLED=true`, `CAD_WEBAUTHN_RP_ID=localhost`, and
@@ -77,7 +90,8 @@ This click order covers every surface:
    is rendered as Markdown; file content is escaped plain code.
 4. **Quarantine** — select the newest node, *Wire up deployment config*. Its
    public view is hidden by an open critical incident. Sign in as
-   `owner@demo.local` and use **Show raw content** to inspect it; the incident
+   `owner@demo.local` (password `cadence-demo`, then the TOTP code from
+   `mix cadence.totp`) and use **Show raw content** to inspect it; the incident
    stays open (resolution is acknowledgment, not a fix —
    [spec §6.7](spec.md#67-critical-findings-incidents)).
 5. **Review hub** — while signed in, the project header shows **Reviews**. Open
@@ -116,12 +130,12 @@ This click order covers every surface:
     and added date. Now **Sign out**, open `/sign-in`, and choose **Sign in with
     a security key or passkey**; you land back on the portfolio signed in. The
     **Remove** action on `/account/security` is a two-step, CSRF-safe flow. If a
-    key is lost, sign in with the demo password and remove it there — OAuth or
-    the demo password is the recovery path. A virtual authenticator in Chromium
-    DevTools works for a no-hardware tour.
-14. **Navigation** — the header shows the signed-in email plus **Sign out**, or
-    **Sign in** when anonymous. Signing out is a two-step, CSRF-safe flow (a
-    confirmation page that submits DELETE).
+    key is lost, sign in with the demo password and TOTP code and remove it
+    there — password + TOTP or OAuth is the recovery path. A virtual
+    authenticator in Chromium DevTools works for a no-hardware tour.
+14. **Navigation** — the header shows the signed-in email plus **Account**,
+    **Security keys**, and **Sign out**, or **Sign in** when anonymous. Signing
+    out revokes the session row and disconnects open LiveViews.
 
 ## Seed data
 
@@ -165,8 +179,10 @@ reachable over HTTP.
 - <http://localhost:4000/> lists the three projects.
 - `docker compose exec server mix cadence.demo_seed` reports that the seed is
   already complete (a second run is a no-op).
-- `/sign-in` shows the password form and, because the demo stack enables
-  WebAuthn, the security-key/passkey option.
+- `/sign-in` shows the password form, the security-key/passkey option (the demo
+  enables WebAuthn), and asks for the TOTP code after the password.
+- `/account` shows the password/TOTP/session sections, and `/account/security`
+  manages passkeys.
 
 ## Troubleshooting
 
@@ -175,8 +191,8 @@ reachable over HTTP.
 | Port 4000 is already in use | Stop the other process, or change the published port in `docker-compose.yml` and `CAD_WEBAUTHN_ORIGIN` together. |
 | Boot waits or the seed never prints `Demo data ready` | `docker compose logs -f server`; the database may still be starting. Confirm `db` is healthy, then restart `server`. |
 | Seed data is stale or incomplete after a schema change | `docker compose down -v` wipes the demo volumes; the next `up --build` re-creates and re-seeds everything. |
-| `CAD_DEMO_AUTH must never be set…` | You used the production image or a prod boot. The demo flag is build-time only; use `docker-compose.yml` and `docker/Dockerfile.demo`. |
-| Sign-in form is missing | The image was rebuilt without `--build-arg CAD_DEMO_AUTH=true`. Rebuild with `docker compose up --build`. |
+| TOTP code is rejected | Print a fresh one with `docker compose exec server mix cadence.totp --email …`; a code used in the current 30-second step is deliberately rejected. |
+| Sign-in form is missing | Rebuild with `docker compose up --build` (the image must include the auth controllers/templates). |
 | Passkey prompt never appears | Use `http://localhost:4000`, not a LAN hostname, and keep `CAD_WEBAUTHN_RP_ID=localhost`. See [`passkeys.md`](passkeys.md#troubleshooting). |
 | CSS edits do not appear | Only `priv/static/css` is bind-mounted. Rebuild the image after changing anything else. |
 
@@ -195,22 +211,23 @@ Rebuild the image after changing `mix.exs`, config, or anything outside
 
 ## Security note
 
-The password strategy is compiled in only when `CAD_DEMO_AUTH=true` **at build
-time** (`Application.compile_env`). A production build without the flag does
-not contain the strategy, and `config/runtime.exs` raises if a prod boot sees
-the flag set. Registration is disabled. The demo password is intentionally
-public; never reuse this image or these accounts outside a local demo.
+Local password login uses Argon2id and is always part of the build; there is no
+compile-time demo flag. Demo accounts have a **fixed, public TOTP secret** so the
+tour is walkable with `mix cadence.totp`. The password and secret are
+intentionally public; never reuse this image or these accounts outside a local
+demo. Production accounts are operator-created and get a random TOTP secret.
 
 ## Running without Docker
 
 ```bash
-export CAD_DEMO_AUTH=true        # compile-time gate: must be set before compiling
 export CAD_DATABASE_URL="ecto://postgres:postgres@localhost:5432/cadence_dev"
 export CAD_GIT_STORE_PATH="$HOME/.local/state/cadence/server-git"
 mix deps.get && mix compile
 mix ecto.migrate -r Cadence.Server.Repo
 mix cadence.demo_seed
 mix run --no-start --no-halt -e 'Application.ensure_all_started(:cadence_server)'
+# In another shell, print the demo TOTP code:
+mix cadence.totp --email owner@demo.local
 ```
 
 The last command starts the server only; omit `--no-start`/`--no-halt` and use

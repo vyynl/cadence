@@ -1,10 +1,11 @@
 defmodule Cadence.Server.Accounts do
   @moduledoc """
-  Server-side accounts: OAuth identities and daemon API keys.
+  Server-side accounts: local passwords, TOTP, OAuth identities, DB sessions,
+  and daemon API keys.
 
-  Human users authenticate with GitHub or Google; daemons authenticate with
-  personal access tokens modelled as AshAuthentication API keys (spec §7.4,
-  §10.1).
+  Humans sign in with an operator-created local password + TOTP; GitHub/Google
+  OAuth and passkeys are secondary. Daemons authenticate with personal access
+  tokens modelled as AshAuthentication API keys (spec §7.4, §10.1).
   """
 
   use Ash.Domain

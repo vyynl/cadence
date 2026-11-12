@@ -20,52 +20,56 @@ defmodule Cadence.ServerWeb.PasskeyRegistrationController do
 
   def new(conn, _params) do
     PasskeyHelpers.with_user(conn, fn conn, user ->
-      case Passkeys.registration_challenge(user) do
-        {:ok, %{public_key: options, challenge: challenge}} ->
-          conn
-          |> put_session(Passkeys.session_key(), challenge)
-          |> render(:new,
-            page_title: "Add a security key",
-            page_description: "Register a security key or passkey with your Cadence account.",
-            options_json: Jason.encode!(options)
-          )
+      PasskeyHelpers.with_sudo(conn, fn conn ->
+        case Passkeys.registration_challenge(user) do
+          {:ok, %{public_key: options, challenge: challenge}} ->
+            conn
+            |> put_session(Passkeys.session_key(), challenge)
+            |> render(:new,
+              page_title: "Add a security key",
+              page_description: "Register a security key or passkey with your Cadence account.",
+              options_json: Jason.encode!(options)
+            )
 
-        {:error, reason} ->
-          conn
-          |> put_flash(:error, error_copy(reason))
-          |> redirect(to: "/account/security")
-      end
+          {:error, reason} ->
+            conn
+            |> put_flash(:error, error_copy(reason))
+            |> redirect(to: "/account/security")
+        end
+      end)
     end)
   end
 
   def create(conn, params) do
     PasskeyHelpers.with_user(conn, fn conn, user ->
-      # One ceremony per challenge: remove it before any verification work.
-      challenge = get_session(conn, Passkeys.session_key())
-      conn = delete_session(conn, Passkeys.session_key())
+      PasskeyHelpers.with_sudo(conn, fn conn ->
+        # One ceremony per challenge: remove it before any verification work.
+        challenge = get_session(conn, Passkeys.session_key())
+        conn = delete_session(conn, Passkeys.session_key())
 
-      with {:ok, response} <- decode_registration(params),
-           {:ok, registration} <- Passkeys.verify_registration(user, challenge, response),
-           {:ok, credential} <-
-             Passkeys.create_credential(user, registration, credential_attrs(params)) do
-        PasskeyHelpers.respond(
-          conn,
-          :ok,
-          "Security key added: #{credential.label}.",
-          "/account/security"
-        )
-      else
-        {:error, :disabled} ->
-          PasskeyHelpers.not_found(conn)
-
-        {:error, reason} ->
+        with {:ok, response} <- decode_registration(params),
+             {:ok, registration} <- Passkeys.verify_registration(user, challenge, response),
+             {:ok, credential} <-
+               Passkeys.create_credential(user, registration, credential_attrs(params)) do
           PasskeyHelpers.respond(
             conn,
-            :error,
-            error_copy(reason),
-            "/account/security/keys/new"
+            :ok,
+            "Security key added: #{credential.label}.",
+            "/account/security"
           )
-      end
+        else
+          {:error, :disabled} ->
+            PasskeyHelpers.not_found(conn)
+
+          {:error, reason} ->
+            PasskeyHelpers.respond(
+              conn,
+              :error,
+              error_copy(reason),
+              "/account/security/keys/new"
+            )
+        end
+      end)
     end)
   end
 
