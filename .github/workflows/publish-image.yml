@@ -42,7 +42,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "${{ secrets.GITHUB_TOKEN }}" \
+          # GITHUB_TOKEN is preferred. A classic PAT with write:packages in the
+          # GHCR_TOKEN repository secret is the fallback for an existing package
+          # that is not linked to this repository (GHCR's first-push catch-22).
+          echo "${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}" \
             | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
           tags=("${IMAGE}:sha-${GITHUB_SHA::12}")

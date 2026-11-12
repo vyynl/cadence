@@ -197,6 +197,15 @@ on `master`, `v*` tags, and manual dispatch.
    Portainer: **Registries → Add registry → Custom**, URL
    `https://ghcr.io`, username = your GitHub user, password = a PAT with
    `read:packages`.
+
+   If the first publish fails with `error from registry: denied`, GHCR created
+   a package entry that is not linked to the repository (the first-push
+   catch-22). Open
+   `https://github.com/users/<owner>/packages/container/cadence/settings` and
+   either add this repository under **Manage Actions access** with the
+   **Write** role, or delete the package and rerun the workflow. Alternatively,
+   add a classic PAT with `write:packages` as the `GHCR_TOKEN` repository
+   secret; the workflow falls back to it.
 2. **Paste the stack.** In Portainer: **Stacks → Add stack → Web editor**, then
    paste `docker-compose.portainer.yml` (or upload it).
 3. **Add the environment variables** listed below. Generate the secrets with:
