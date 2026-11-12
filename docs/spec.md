@@ -388,6 +388,105 @@ Diff:
 - Secrets live in `~/.config/cadence/env` (chmod 600), never in source or
   `config/`.
 
+### 5.7 Importing an existing repository
+
+An import adopts a normal local Git repository as a Cadence project: one node
+per commit, original SHAs, messages, author timestamps, and parent topology.
+The source is read-only and history is never rewritten. The shipped
+walkthrough is `docs/import.md`; this section is the contract.
+
+**Entry points.** `POST /import` and `GET /import/:id` on the daemon's Unix
+socket, `mix cad.import PATH [--name] [--slug] [--ref]…
+[--all-refs] [--allow-shallow] [--limit N] [--project ID] [--json]`, and
+`Cadence.Daemon.Release.import/2,3`. There is no web-side import UI: the daemon
+owns the source path.
+
+**Source validation.** The path is expanded, must be a directory, and is
+classified as a worktree (`.git` directory), a worktree redirect (`.git` file
+containing `gitdir:`), or a bare repository (`HEAD` + `objects/`). Anything else
+is a typed error. Validation is synchronous and precedes any write, so a bad
+source creates no project.
+
+**Ref resolution.** The default is `HEAD`. `--ref` is repeatable and accepts a
+branch, a tag, `HEAD`, a full `refs/...` name, or a 40-hex SHA; `--all-refs`
+adds every local branch and tag. Annotated tags are peeled to their commit. A
+symref `HEAD` is reported under its branch name (a detached `HEAD` stays
+`HEAD`), and a `HEAD` already covered by another selected ref is dropped. The
+selected refs are recorded on tip nodes only. Tag objects themselves are not
+copied.
+
+**Commit walk.** Parents-first reverse topological order (deterministic by
+author timestamp, then SHA) over a visited set, bounded by
+`CAD_IMPORT_MAX_COMMITS` and by `--limit` (the effective cap is the smaller).
+A history over the cap is a typed `too_many_commits` error, never a silent
+truncation. Shallow boundaries are roots; a shallow clone is refused unless
+`CAD_IMPORT_ALLOW_SHALLOW` or `allow_shallow` is set. A missing object is a
+typed error (`missing_object`), not a partial import.
+
+**Object copy.** Each commit and its tree/blob closure is copied into the
+project store with a per-call shared-tree visited set; objects already present
+are skipped by SHA. Every written object is re-hashed and verified. Blobs larger
+than `CAD_IMPORT_MAX_BLOB_BYTES` are refused in the preflight (which reads each
+reachable blob at most once and names the first offending path) before anything
+is written; `0` disables the check. Submodule gitlinks (mode `160000`) are not
+copied: they stay tree entries that scans, pushes, and the browser skip.
+`objects/info/alternates` is not followed. LFS pointer files are ordinary blobs;
+the pointed-to content is never fetched.
+
+**Node insert.** Commits are inserted in `CAD_IMPORT_PUSH_BATCH`-sized
+transactions, parents before children, with a `SyncPending` row in the same
+transaction. Each node keeps `git_commit_sha`, the full message, the author
+timestamp (`created_at`), the ordered parent node ids, and
+`created_by` = the importing local user. `flags` is `[]` (flagless; never
+`functioning`), `docs_state` is `:skipped`, and
+`session_metadata["import"]` carries `source: "git"`, the source author
+name/email, and `imported_at`; `refs` is added on tip nodes only. A non-UTF-8
+message is sanitized. A failed batch rolls back; committed batches are durable,
+so re-submitting the same source resumes.
+
+**Pin and pointer.** `pinned` is set on the selected ref's tip and the user's
+session pointer moves to it when the project has no newer local work. The
+watcher is suspended for the insert/pointer phase (token-scoped) and resumed
+afterwards, so no ordinary commit interleaves.
+
+**Dirty tree.** For a worktree source whose files differ from the imported tip,
+the working tree is committed once against that tip (message
+`import: local changes`, `skip_unchanged: true`) and becomes the pointer. A bare
+source registers data-only (no watcher/queue) and never gets a dirty commit.
+
+**Publication.** Imported nodes publish through the ordinary sync ledger, in
+parents-first batches; a merge publishes only under the §10.2 owner exception.
+The server accepts the imported tip's `pinned` only from an owner. Publication
+is best-effort and offline-tolerant: without a server (or on failure) the
+import still succeeds locally and drains on the next successful pass. The import
+never bypasses the §7.6 push scan; a historical secret quarantines that node and
+opens a critical incident.
+
+**Idempotency.** A job is keyed by `(project_id, git_commit_sha)`: re-running
+adds only missing commits, duplicates no node/object/sync row, does not rewind a
+pointer past newer local work, and does not create a second dirty-tree node.
+A project that has nodes but none import-marked is refused
+(`project_not_importable`); an import-created project may keep growing with
+ordinary commits. A re-run with an advanced ref is the incremental path.
+
+**Jobs.** One import runs at a time (queued work waits; at most 20
+queued/running; a second submit for the same source is refused). A job is
+bounded by `CAD_IMPORT_MAX_SECONDS` (`0` disables) and retained in memory for
+the newest 50 terminal jobs; nothing is persisted, and a daemon restart forgets
+job state (the inserted batches remain). Validation errors are answered before
+the 202; failures are reported as `{"code", "message"}` on the job.
+
+**Caps.** `CAD_IMPORT_MAX_COMMITS`, `CAD_IMPORT_MAX_BLOB_BYTES`,
+`CAD_IMPORT_MAX_SECONDS`, `CAD_IMPORT_ALLOW_SHALLOW`, and
+`CAD_IMPORT_PUSH_BATCH` on the daemon (§12.6); `CAD_SYNC_MAX_PUSH_PARENTS` and
+`CAD_SYNC_MAX_BODY_BYTES` on the server. The web render cap
+(`CAD_DAG_MAX_NODES`, `CAD_DAG_INTRO_MAX_NODES`) is §7.3.
+
+**Browsing.** The project page renders the newest `CAD_DAG_MAX_NODES`; the
+public History list (`/p/:slug/history`) is the full paged view; a deep node URL
+(`/p/:slug/n/:node_id`) opens any imported commit, including one outside the
+window (§7.3).
+
 ---
 
 ## 6. Phase 2 — DAG, Spawn, Switch, Union
@@ -773,11 +872,18 @@ page 1, and an out-of-range page clamps to the last page; the pager reads
 "Page M of N" and offers newer/older links. The project home's truncation note
 links here.
 
+History is **not** capped by `CAD_DAG_MAX_NODES`: it lists every node in the
+project, and its rows stay visible for a quarantined node (the message is
+redacted, the node link opens the pane with the generic hidden notice). This
+makes it the complete public provenance view for an imported history.
+
 **Import provenance:** the selected-node pane shows
 `Imported from git · <author>` when a node's
 `session_metadata["import"]["source"] == "git"`.
 The author email is shown only to the `can_manage?` (owner/trusted) audience,
-never to anonymous visitors or viewer members (§7.2). When the selected node is
+never to anonymous visitors or viewer members (§7.2). Imported nodes have no
+flags, so they render the muted unknown-flag dot, and their pane reports
+"docs skipped" (§5.7). When the selected node is
 older than the rendered window, the pane shows a note that the commit is older
 than the graph, with a direct link to its History page and row
 (`/p/:slug/history?page=N#node-<id>`); the rendered count and truncation note
@@ -1380,11 +1486,14 @@ per-project bound. Browser, public, and `/health` routes are not limited.
 - A pushed node normally has at most one parent. The exception is an imported
   Git merge: the project **owner** may push a node with up to
   `CAD_SYNC_MAX_PUSH_PARENTS` (default 8) parents when it carries
-  `session_metadata["import"]["source"] == "git"` (§13 Phase 9). Every parent
-  must exist in the same project and the list must be unique; trusted members,
-  ordinary nodes, and unmarked multi-parent payloads are refused with a 422 and
-  `failed_local_id`. Imported merges are not reviewed like melds — the
-  governance trade is recorded in §16.
+  `session_metadata["import"]["source"] == "git"` (§5.7, §13 Phase 9). Every
+  parent must exist in the same project and the list must be unique; trusted
+  members, ordinary nodes, and unmarked multi-parent payloads are refused with a
+  422 and `failed_local_id`. The policy is evaluated for new rows only, so
+  re-pushing an already-stored node stays idempotent even if the cap is lowered
+  later. An imported tip's `pinned: true` is stored only when the pushing user is
+  the owner; a trusted member's import publishes unpinned. Imported merges are
+  not reviewed like melds — the governance trade is recorded in §16.
 - Sync routes parse request bodies with a sync-scoped `Plug.Parsers` limit
   (`CAD_SYNC_MAX_BODY_BYTES`, default 64 MiB); browser and public routes keep
   Plug's 8 MiB default. An over-limit request is a 413 generated before
@@ -2322,8 +2431,19 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   from git · author"; emails only to `can_manage?` audiences), and the
   out-of-window affordance linking a selected old node to its History page and
   row (§7.3). A node outside the window still opens in the pane.
-- 9e remains: docs/spec closeout and the live smoke (§5.7, §7.3, §16). 9e adds
-  the normative pipeline text as §5.7.
+- 9e — docs, spec, live smoke (shipped): `docs/import.md` is the operator
+  walkthrough (prerequisites, CLI/socket API, caps, shallow/LFS/submodule/
+  alternates limitations, the historical-secrets warning, offline publication,
+  the idempotent re-run, upgrades, troubleshooting). §5.7 records the
+  normative pipeline; §7.3 the History/provenance view; §10.2 the owner-only
+  multi-parent exception; §12.6 the caps; §16 the settled import decisions. A
+  live smoke imported a 51-commit fixture (one merge, one annotated tag, one
+  secret-bearing commit) through the daemon into the demo stack, verified the
+  original SHAs/parents/timestamps on both sides, the capped DAG + full paged
+  History + deep node URLs, the author provenance (email hidden anonymously),
+  the quarantined secret node with its incident, and an idempotent re-run;
+  headless Chromium checked 1440px and 390px without horizontal overflow.
+  Phase 9 is complete.
 
 ---
 
@@ -2606,6 +2726,43 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       melds. Mitigations: owner-only, import marker, parent cap, project-scoped
       parents, and the per-node secret scan. A dedicated import proposal type
       remains the stricter future option.
+- [x] **Import merge topology (Phase 9e):** resolved — preserve every parent in
+      source order; a root is `[]` and a merge has N. First-parent-only was
+      rejected because it silently drops merged branches from the DAG. The
+      publish path is the §10.2 owner exception; a trusted member's import
+      cannot publish the merge (it stays queued with `multiple_parents`). The
+      annotated tag object is peeled for ref resolution but not copied.
+- [x] **Large objects in an import (Phase 9e):** resolved — a per-blob preflight
+      (`CAD_IMPORT_MAX_BLOB_BYTES`, default 8 MiB) rejects the import before
+      anything is written, naming the first offending path; `0` disables it.
+      The push body is bounded by the sync-scoped parser
+      (`CAD_SYNC_MAX_BODY_BYTES`, default 64 MiB). History is never rewritten
+      to shrink it: the documented answer is LFS/filter-repo in the source.
+      LFS pointers import as their pointer file and their content is not
+      fetched; submodule gitlinks are preserved as non-copied tree entries;
+      `objects/info/alternates` is not followed (a missing object is a typed
+      error).
+- [x] **Import history browsing and provenance (Phase 9e):** resolved — the
+      public project page renders the newest `CAD_DAG_MAX_NODES`, the
+      `/p/:slug/history` list is the full newest-first paged view (50 rows,
+      not capped), and `/p/:slug/n/:node_id` opens any imported commit. The
+      pane shows `Imported from git · <author>` from
+      `session_metadata["import"]`; the author email is owner/trusted-only.
+      Flagless imported nodes render the unknown dot and "docs skipped".
+      Imported snapshots are still subject to the §7.6 scan: a historical
+      secret quarantines that node and opens an incident, which is never
+      bypassed by an import.
+- [ ] **Import sources beyond a local path:** only a local worktree or bare
+      repository is supported today (§5.7). Importing from a remote URL,
+      incremental background mirroring of an upstream, and a web-side import
+      UI are deferred; the re-run of an advanced ref is the incremental path.
+- [ ] **`mix cad.import` summary path (known defect):** without `--json`, the
+      task calls its reporter with `nil` instead of `false` and raises a
+      `FunctionClauseError` **after** the job has completed, so the shell exit
+      is non-zero despite a successful import. The `POST /import` /
+      `GET /import/:id` API and `--json` are unaffected; `docs/import.md` §12
+      records the workaround. A one-clause fix (default `opts[:json]` to
+      `false`) is left as a follow-up outside the 9e docs/spec slice.
 - [ ] **Image publishing / CI:** `docker-compose.prod.yml` builds
       `cadence-server:prod` (or `CAD_SERVER_IMAGE`) locally and the image is
       otherwise operator-managed. Registry publishing, version pinning, and a
