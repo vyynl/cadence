@@ -62,6 +62,9 @@ defmodule Cadence.Daemon.TestDocsLLM do
     end
   end
 
+  @doc "The valid DOCS_BEGIN/CREATE response used by tests."
+  def valid_response, do: @valid
+
   def model, do: "test-docs-model"
   def provider, do: "test"
 end

@@ -1,7 +1,7 @@
 defmodule Cadence.Daemon.CommitQueueTest do
   use ExUnit.Case, async: false
 
-  import Cadence.Daemon.TestHelpers, only: [eventually: 1]
+  import Cadence.Daemon.TestHelpers, only: [eventually: 1, eventually: 2]
 
   alias Cadence.Daemon.{CommitQueue, ProjectLocation, Repo, Session, SyncLedger, SyncPending}
   alias Cadence.Shared.{GitStore, Node, Project}
@@ -225,8 +225,15 @@ defmodule Cadence.Daemon.CommitQueueTest do
 
   test "a matching trigger queues a doc job and holds sync until it resolves",
        %{work_dir: work_dir, git_dir: git_dir, project: project} do
+    ref = make_ref()
+
     Application.put_env(:cadence_daemon, :docs_llm, Cadence.Daemon.TestDocsLLM)
-    Application.put_env(:cadence_daemon, :test_docs_llm_result, {:sleep, 150})
+
+    Application.put_env(
+      :cadence_daemon,
+      :test_docs_llm_result,
+      {:block, self(), ref, Cadence.Daemon.TestDocsLLM.valid_response()}
+    )
 
     on_exit(fn ->
       Application.delete_env(:cadence_daemon, :docs_llm)
@@ -250,13 +257,22 @@ defmodule Cadence.Daemon.CommitQueueTest do
     assert node.session_metadata["docs"]["code_commit_sha"] == node.git_commit_sha
     assert SyncLedger.pushable(project.id, nil, 10) == []
 
+    # Hold the agent call until the assertions above have observed the pending
+    # state. This is a barrier, not a sleep: it removes the CI-load race that
+    # previously let the job finish before or long after the poll deadline.
+    assert_receive {:docs_llm_started, ^ref, worker}, 5_000
+    send(worker, {:docs_llm_continue, ref})
+
     # The job finishes, pushes the node to its docs commit, then hands it to
     # the sync ledger (D5).
-    assert eventually(fn -> Repo.get!(Node, node.id).docs_state == :current end)
+    assert eventually(fn -> Repo.get!(Node, node.id).docs_state == :current end, 10_000)
 
-    assert eventually(fn ->
-             SyncLedger.pushable(project.id, nil, 10) |> Enum.any?(&(&1.id == node.id))
-           end)
+    assert eventually(
+             fn ->
+               SyncLedger.pushable(project.id, nil, 10) |> Enum.any?(&(&1.id == node.id))
+             end,
+             10_000
+           )
   end
 
   test "a schema present without a trigger skips docs",
