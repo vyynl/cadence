@@ -1,5 +1,12 @@
 # Path from 87 to 100 — audit gap-closing plan
 
+> **Shipped 2026-11-11.** All twelve items below are complete (T1, T2,
+> S1–S3, P1–P3, A1, A2, D1, D2, T4). The final five-track re-score is
+> **100/A** with the method exemptions recorded in
+> `docs/audit-2026-11-11.md` (A3, P4, T3, plus the accepted hackney
+> advisories). Nothing in this plan remains open; the only residual items are
+> the accepted risks listed in that report.
+
 **Baseline:** `docs/audit-2026-11-11.md` (87/B at the moment the findings were
 written). Two P1s were fixed in the same session, so the effective re-score is
 **89/B**: Tests 86 → 96 (the flake is fixed) and Dependencies 90 → 95 (the

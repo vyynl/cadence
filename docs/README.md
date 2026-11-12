@@ -41,8 +41,8 @@ is complete; remaining work is optional and recorded in spec §16 and
 | `spec.md` | Canonical product/technical contract |
 | `progress.md` | Current handoff and session summary |
 | `release-notes.md` | Release history, upgrade notes, and known limitations |
-| `audit-2026-11-11.md` | Final five-track health audit (scores, findings, smoke result) |
-| `audit-100-plan.md` | Gap-closing plan from the 87/89 baseline to a 100 rubric score |
+| `audit-2026-11-11.md` | Post-cleanup five-track health audit: 100/A, per-track evidence, recorded exemptions, residual risks |
+| `audit-100-plan.md` | The 87→100 gap-closing plan; shipped 2026-11-11 (item → commit table in the audit report) |
 | `daemon-setup.md` | Local daemon setup: release or source install, token, env file, migration, boot, registration, upgrades |
 | `deploy.md` | Production server: release image, compose stack, migrations, volumes, actions |
 | `demo.md` | Local demo stack: compose, seed accounts, guided tour |

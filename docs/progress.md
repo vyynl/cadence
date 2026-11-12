@@ -9,12 +9,14 @@ automatic pushing, union submission over the socket API, server approval, and
 daemon convergence. The completed phase briefs are archived and
 `docs/release-notes.md` records 1.0.0, upgrade notes, and known limitations.
 A post-release DAG fix corrected the hover-card layering and removed the native
-SVG "Project session graph" tooltip; the rubric-specific path from 87 to 100 is
-`docs/audit-100-plan.md`. Phase 9 (import a local Git repository) is approved;
-slices **9a** (shared read-only Git primitives), **9b** (daemon importer, job
-API, CLI), and **9c** (server owner-only multi-parent push + sync body limit)
-shipped. 9d (web DAG cap + paged History + provenance) is next. Remaining work
-is optional and recorded in spec §16.
+SVG "Project session graph" tooltip; the rubric-specific path from 87 to 100,
+`docs/audit-100-plan.md`, **shipped on 2026-11-11** and the final five-track
+re-score is **100/A** (`docs/audit-2026-11-11.md`), with A3/P4/T3 exemptions
+and the accepted hackney advisories recorded. Phase 9 (import a local Git
+repository) is approved; slices **9a** (shared read-only Git primitives), **9b**
+(daemon importer, job API, CLI), and **9c** (server owner-only multi-parent
+push + sync body limit) shipped. 9d (web DAG cap + paged History + provenance)
+is next. Remaining work is optional and recorded in spec §16.
 
 ## Done (summary)
 
@@ -970,6 +972,24 @@ is optional and recorded in spec §16.
   edges), so the total internal edge count is roughly unchanged; the rubric's
   hotspot module is fixed, and a further `ProjectPane.Repo`/`.Actions` split is
   recorded as optional.
+- **Audit 100 slice, wave 6 + final audit (2026-11-11)** — **T4 shipped and
+  the audit is closed at 100/A.** `.github/workflows/ci.yml` is the merge gate:
+  format, dev+prod compile with warnings-as-errors, `mix test`,
+  `mix test --cover`, `mix hex.audit`, `mix deps.unlock --check-unused`,
+  Sobelow from `apps/cadence_server`, and `mix deps.audit` from the umbrella
+  root with the exact-ID ignore plus a fail-closed advisory-DB check
+  (populated + git HEAD). Postgres 16 runs as a service on 55432 (matching
+  `config/test.exs`); actions are pinned to commit SHAs with weekly Dependabot
+  updates; the token is read-only and not persisted into `.git`. The README
+  documents the gate and a cold-start local reproduction. `AGENTS.md` §8 now
+  states the real test-failure exit code (`2`, per `mix help test`).
+  `docs/audit-2026-11-11.md` is rewritten as the post-cleanup five-track
+  report: Architecture/Performance/Security/Tests/Dependencies all 100,
+  overall **100/A**, with the A3/P4/T3 method exemptions and the accepted
+  hackney advisories recorded; `docs/audit-100-plan.md` is marked shipped with
+  the item → commit table. Final gate: 1241 tests (332 + 666 + 243), coverage
+  87.98/82.18/82.09, format and dev/prod compile clean, Sobelow exit 0,
+  `deps.audit` exit 0, `hex.audit` clean.
 - **Audit 100 slice, wave 5 (2026-11-11)** — **D1 + D2 shipped.**
   **D1:** `mix_audit` 2.1.5 is a dev/test-only `cadence_server` dependency
   (spec §11; run from the umbrella root as
@@ -1077,22 +1097,13 @@ Shipped: T1 (fixed sleeps), T2 (80% coverage floor + AGENTS docs), S1 (Sobelow
 exits 0), P1 (`users_by_ids/1` batching), P2 (one-query preview node), P3
 (content-keyed proposal-result cache), A2 (shared `Components.ProposalResult`),
 A1 (`ProjectLive` split, 19 → 7 xref edges), D1 (`mix_audit` CVE scanner with
-a time-boxed exact-ID hackney ignore), D2 (`libgraph` 0.17.1). **Architecture,
-performance, and dependencies are now clean**; CI and the exemption notes
-remain.
+a time-boxed exact-ID hackney ignore), D2 (`libgraph` 0.17.1), and T4 (CI).
+**All five tracks are clean.** The final re-score is **100/A**
+(`docs/audit-2026-11-11.md`), with the A3/P4/T3 method exemptions and the
+accepted hackney advisories recorded there.
 
-**Remaining audit items** (resume with `/audit-100 <IDs>`):
-
-1. **T4** — CI workflow last, so it can call `sobelow` (from
-   `apps/cadence_server`) and
-   `mix deps.audit --ignore-file .mix_audit.ignore` (umbrella root), and assert
-   the advisory DB is populated. `mix test.coverage` needs
-   `mix test --cover --export-coverage default` first. A3/P4/T3 are
-   documentation-only exemptions; fold their one-line rationales into the final
-   audit doc, then re-run the five tracks and refresh `docs/audit-*.md`.
-
-**Immediate product step (after the audit slice):** **Phase 9d — web scale and provenance.** 9a–9c are shipped,
-so an imported merge history can publish. The full plan is
+**Immediate product step:** **Phase 9d — web scale and provenance.** 9a–9c are
+shipped, so an imported merge history can publish. The full plan is
 `docs/phase-9-prep.md` (D1–D10 approved). 9d must:
 
 1. `Portfolio.list_nodes/2` with `:limit`/`:offset`; the project page renders
@@ -1111,23 +1122,18 @@ repo imported and published end to end).
 
 After that, optional follow-ups, roughly in priority order:
 
-0. **Audit 100 plan** — `docs/audit-100-plan.md` lists every remaining rubric
-   deduction with a fix and acceptance criteria. The sensible subset is CI +
-   the sleep cleanup, then security (Sobelow, `/sync` rate limit, CSP), then
-   the performance fixes, then the `ProjectLive` split; the Mox/streams/compile-
-   cycle lines stay documented exemptions.
-1. **Audit P3 cleanups** — batch `Accounts.users_by_ids/1` into one query; fold
-   `Portfolio.preview_node/1` into one `ORDER BY`; add a Hammer plug for
-   `/sync/*` and a CSP if the server is exposed beyond a trusted network.
-2. **Phase 5 P5 docs live smoke** — with a real `CAD_LLM_API_KEY`; this and
+0. **Audit 100 follow-ups** — `docs/audit-2026-11-11.md` records the accepted
+   risks: the four hackney advisories (revisit 2027-02-11), the `lazy_html`
+   test-only patch, the `phash2` vertex-id hardening, and CI/image publishing.
+1. **Phase 5 P5 docs live smoke** — with a real `CAD_LLM_API_KEY`; this and
    conflict-bearing melds are the only server paths not yet exercised live.
-3. **Spec §16 backlog** — action log streaming, pack consolidation /
+2. **Spec §16 backlog** — action log streaming, pack consolidation /
    multi-pack index, web docs review, burrito packaging, CI/image publishing,
    `Project.docker_image` writer, public-preview auth, multi-node fan-out, and
    the cloud backup strategy.
-4. **CI** — add `mix_audit` and a workflow running format, dev+prod compile,
-   and the full suite against a Postgres service; run the suite twice before a
-   release to catch timing flakes.
+3. **CI first run** — push the repository with Actions enabled and confirm the
+   workflow's first real run (the file is syntax- and parity-validated locally,
+   but this checkout has no remote).
 
 Before every release: bump the four `mix.exs` versions, add a
 `docs/release-notes.md` entry, run `mix hex.audit`, and run the full gate twice.
@@ -1184,15 +1190,29 @@ expected for the closeout follow-ups.
   closeout slice 3 (final audit, P1 fixes, 1.0.0 release), and Phase 9a/9b/9c
   (shared import primitives + daemon importer/API/CLI + server multi-parent
   push/body limit) are complete, and
-  every review's must-fix item is applied and verified. The audit's remaining
-  P3 items are optional improvements, not blockers (see `Next` and
-  `docs/audit-2026-11-11.md`). Pre-existing
+  every review's must-fix item is applied and verified. The audit-100 slice
+  (T1/T2, S1–S3, P1–P3, A1/A2, D1/D2, T4) is complete at 100/A, with the
+  accepted risks recorded in `docs/audit-2026-11-11.md` — none are blockers.
+  Pre-existing
   follow-ups (unreadable-object isolation, re-push of an existing row whose
   objects were later lost, the 8 MB retry ceiling, pack consolidation) remain
   recorded below and in spec §16.
 
 ## Spec Deltas / Open Items
 
+- **Audit 100 closeout notes (2026-11-11)** — (a) "100" is rubric
+  satisfaction: every deduction is paid or recorded as a method exemption (A3
+  endpoint/router compile cycle, P4 streams, T3 Mox) plus one accepted risk
+  (four hackney advisories, spec §16) in `docs/audit-2026-11-11.md`; it is not
+  a zero-risk claim. (b) `AGENTS.md` §8's exit-code claim was corrected to
+  `2 = test failure` (verified with `mix help test`; the older "1" was wrong).
+  (c) CI actions are SHA-pinned with a weekly Dependabot config; the advisory
+  guard proves the clone is populated and has a git HEAD, not that it is fresh
+  against the remote (self-hosted-runner caveat). (d) The daemon's
+  `mark_docs_pushed/1` per-row read/update and the boot rehydrate loop were
+  reviewed as bounded background write/boot paths, not request-path N+1s.
+  (e) The workflow has not executed on GitHub yet: this checkout has no
+  remote, so the first real run is an operator step.
 - **Audit D1/D2 notes (2026-11-11)** — (a) The hackney accept-risk decision,
   exact-ID ignore, and 2027-02-11 revisit trigger live in spec §16; the run and
   silent-pass contract is the §11 row plus `.mix_audit.ignore`. (b) `~> 0.17.1`
@@ -1838,6 +1858,17 @@ expected for the closeout follow-ups.
   the review UI (optional 4d/UI-pass work).
 
 ## Last Updated
+2026-11-11 (audit 100 complete) — **T4 shipped; final audit 100/A**
+(`83f3cce`). CI is one SHA-pinned workflow (format, dev+prod compile, test +
+coverage, hex.audit, lockfile check, Sobelow, deps.audit with the advisory-DB
+guard; Postgres 16 on 55432). `docs/audit-2026-11-11.md` is the post-cleanup
+five-track report (all tracks 100, exemptions recorded, residual risks listed);
+`docs/audit-100-plan.md` is marked shipped. Final gate: 1241 tests (332 + 666 +
+243), coverage 87.98/82.18/82.09, format and dev/prod compile clean, Sobelow
+exit 0, `deps.audit` exit 0. **Next:** Phase 9d (web DAG cap + paged History +
+provenance), plan in `docs/phase-9-prep.md`; then 9e. The CI workflow's first
+real run is an operator step (no git remote here). Ledger:
+`.claude/plans/audit-100/progress.md`.
 2026-11-11 (audit 100, wave 5) — **D1 + D2 shipped** (`ee86db2`, `df1f9ca`).
 The CVE scanner is installed (`mix_audit 2.1.5`, umbrella-root run, exact-ID
 ignore) with four hackney advisories accepted and time-boxed in spec §16;
