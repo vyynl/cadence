@@ -35,23 +35,24 @@ docker compose down -v          # stop and wipe Postgres + Git store
 Every account uses the password **`cadence-demo`**. Sign in at
 <http://localhost:4000/sign-in>.
 
-| Account | `cadence-demo` | `meld-review` |
-|---|---|---|
-| `owner@demo.local` | owner | owner |
-| `approver@demo.local` | viewer | trusted + approver |
-| `viewer@demo.local` | viewer | viewer |
-| `outsider@demo.local` | — (no membership) | — (no membership) |
+| Account | `cadence-demo` | `meld-review` | `imported-demo` |
+|---|---|---|---|
+| `owner@demo.local` | owner | owner | owner |
+| `approver@demo.local` | viewer | trusted + approver | — (no membership) |
+| `viewer@demo.local` | viewer | viewer | — (no membership) |
+| `outsider@demo.local` | — (no membership) | — (no membership) | — (no membership) |
 
 Only `owner` and `approver` may approve/reject; `viewer` can read the review
-hub; `outsider` can only see public pages. Registration is disabled in every
-environment — these accounts are seeded.
+hub; `outsider` can only see public pages. The imported project has no
+proposals, so its owner-only membership is enough. Registration is disabled in
+every environment — these accounts are seeded.
 
 ## Guided tour
 
 Click order that covers every surface:
 
-1. **Portfolio** — <http://localhost:4000/> lists `Cadence Demo` and
-   `Meld Review`.
+1. **Portfolio** — <http://localhost:4000/> lists `Cadence Demo`,
+   `Meld Review`, and `Imported Demo`.
 2. **DAG** — open `/p/cadence-demo`. The preview is the pinned functioning
    node; the DAG shows functioning, broken, sandbox and in-progress branches.
 3. **Repository browser** — click a node, then a folder and a file. The README
@@ -74,9 +75,23 @@ Click order that covers every surface:
 9. **Run history** — `/p/cadence-demo/runs` lists one seeded finished run;
    open it for the status, exit code, escaped log output, and the
    **Download raw log** link. It was written by the seed, not executed.
-10. **Navigation** — the header shows the signed-in email plus **Sign out**, or
+10. **DAG cap** — open `/p/imported-demo`. It has 160 imported commits, so the
+    project page renders the newest 150 and says so; the node pane shows
+    provenance (`Imported from git · <author>`; the email appears only to the
+    owner, per spec §7.2). The intro animation is skipped above 60 nodes.
+11. **History** — from the imported project, open
+    `/p/imported-demo/history`. It pages 50 commits at a time (four pages
+    here), newest first, with the imported author display name, date, and
+    short SHA. Click an old commit to open its snapshot in the node pane.
+12. **Imported quarantined commit** — on the last History page, open *Add
+    deployment config for CI*. The old snapshot contains a fake `ghp_`-style
+    token, so the same push scan used for real nodes opened a critical
+    `secret_detected` incident and the public view is quarantined. Sign in as
+    owner and **Show raw content** to inspect it; the import did not bypass
+    the scan.
+13. **Navigation** — the header shows the signed-in email plus **Sign out**, or
     **Sign in** when anonymous. Signing out is a two-step, CSRF-safe flow (a
-   confirmation page that submits DELETE).
+    confirmation page that submits DELETE).
 
 ## Seed data
 
@@ -90,9 +105,21 @@ Click order that covers every surface:
   pending promotion, approved meld (its node was attached by
   `Proposals.approve/3`), rejected meld, and an isolated meld carrying a
   critical `secret_detected` incident.
+- `imported-demo` — 160 nodes shaped exactly like a Git import (original
+  40-hex SHAs, preserved parents including one merge, flagless, docs skipped,
+  per-commit author/timestamp provenance, tip pinned). The DAG shows the newest
+  150 of 160, History pages the rest 50 at a time, and one historical commit
+  carries a fake `ghp_`-style token that the real push scan quarantines with an
+  open critical `secret_detected` node incident.
 
-Re-running is a no-op, so a database seeded by an older image does not pick up
-new seed changes (for example the demo action run). To rebuild from scratch:
+Expected totals: 3 projects, 4 accounts, 169 nodes (5 + 4 + 160), 5 proposals,
+1 action run.
+
+Re-running is a no-op once all three projects exist, so later changes inside an
+already-seeded project (for example the demo action run) need a reset. A
+database seeded before the imported project existed is rebuilt automatically
+because its project set is incomplete. To rebuild all three projects and their
+Git stores from scratch:
 
 ```bash
 docker compose exec server mix cadence.demo_seed --reset

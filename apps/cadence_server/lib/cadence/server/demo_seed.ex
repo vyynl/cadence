@@ -2,7 +2,7 @@ defmodule Cadence.Server.DemoSeed do
   @moduledoc """
   Builds the browsable demo dataset (spec §12.4).
 
-  Two projects cover every surface the web UI has today:
+  Three projects cover every surface the web UI has today:
 
   - `cadence-demo` — a DAG with functioning/broken/sandbox/in-progress nodes,
     a pinned node, a README, source files, and a secret-tainted snapshot that
@@ -11,6 +11,12 @@ defmodule Cadence.Server.DemoSeed do
     approved meld (created through `Proposals.approve/3` so its node comes from
     the real path), a rejected meld, and an isolated result carrying a critical
     `secret_detected` incident.
+  - `imported-demo` — 160 nodes shaped exactly like a Git import (original
+    40-hex SHAs, preserved parents including one merge, flagless nodes,
+    `docs_state: :skipped`, per-commit author/timestamp provenance). It
+    deliberately exceeds the DAG render cap so the project page truncates and
+    `History` pages, and one historical commit carries a high-confidence token,
+    so the real push scan quarantines an imported snapshot.
 
   Four accounts share the demo password (spec §7.4 demo strategy): an owner, a
   trusted approver, a viewer, and an outsider with no membership.
@@ -24,7 +30,17 @@ defmodule Cadence.Server.DemoSeed do
 
   import Ecto.Query
 
-  alias Cadence.Server.{Accounts, ActionRun, Actions, Incidents, ProjectGit, Proposals, Repo}
+  alias Cadence.Server.{
+    Accounts,
+    ActionRun,
+    Actions,
+    Incidents,
+    NodeScans,
+    ProjectGit,
+    Proposals,
+    Repo
+  }
+
   alias Cadence.Server.Accounts.{ApiKey, Token, User, UserIdentity}
   alias Cadence.Server.Proposal
   alias Cadence.Shared.{GitStore, Membership, Node, Project}
@@ -40,7 +56,42 @@ defmodule Cadence.Server.DemoSeed do
 
   @demo_slug "cadence-demo"
   @review_slug "meld-review"
-  @slugs [@demo_slug, @review_slug]
+  @imported_slug "imported-demo"
+  @slugs [@demo_slug, @review_slug, @imported_slug]
+
+  # The imported project is deliberately larger than `CAD_DAG_MAX_NODES` (150)
+  # and not an exact multiple of the History page size (50), so the demo shows
+  # a truncation note and four pages where the last page is short.
+  @imported_node_count 160
+  @import_commit_interval 6 * 60 * 60
+  # The secret-bearing commit sits among the ten oldest nodes, outside the
+  # rendered DAG window, so the tour must use History to find it.
+  @import_secret_commit 4
+  @import_branch_point 98
+  @import_merge_commit @import_branch_point + 3
+
+  @import_authors [
+    %{name: "Ada Lovelace", email: "ada.lovelace@example.com"},
+    %{name: "Grace Hopper", email: "grace.hopper@example.com"},
+    %{name: "Margaret Hamilton", email: "margaret.hamilton@example.com"},
+    %{name: "Linus Torvalds", email: "linus.torvalds@example.com"}
+  ]
+
+  @import_verbs ~w(Refactor Document Fix Improve Simplify Extract Inline Rename Harden
+                   Trim Split Add Tidy Cache Validate Guard)
+
+  @import_objects [
+    "the session watcher",
+    "the DAG layout",
+    "pack indexing",
+    "the sync ledger",
+    "quarantine checks",
+    "the review queue",
+    "CLI argument parsing",
+    "the action runner",
+    "history paging",
+    "import provenance"
+  ]
 
   @doc """
   Seeds the demo dataset and returns a summary map.
@@ -81,7 +132,7 @@ defmodule Cadence.Server.DemoSeed do
     end
   end
 
-  @doc "Whether both demo projects already exist."
+  @doc "Whether all demo projects already exist."
   @spec seeded?() :: boolean()
   def seeded? do
     count = Repo.aggregate(from(p in Project, where: p.slug in ^@slugs), :count)
@@ -105,6 +156,7 @@ defmodule Cadence.Server.DemoSeed do
 
     demo = create_project!(%{name: "Cadence Demo", slug: @demo_slug, owner_id: owner.id})
     review = create_project!(%{name: "Meld Review", slug: @review_slug, owner_id: owner.id})
+    imported = create_project!(%{name: "Imported Demo", slug: @imported_slug, owner_id: owner.id})
 
     add_membership!(demo, owner, :owner)
     add_membership!(demo, approver, :viewer)
@@ -114,8 +166,11 @@ defmodule Cadence.Server.DemoSeed do
     add_membership!(review, approver, :trusted, approver: true)
     add_membership!(review, viewer, :viewer)
 
+    add_membership!(imported, owner, :owner)
+
     seed_demo_project(demo, owner)
     seed_review_project(review, owner)
+    seed_imported_project(imported, owner)
 
     :ok
   end
@@ -558,6 +613,216 @@ defmodule Cadence.Server.DemoSeed do
       """,
       "shared/tone.txt" => tone <> "\n"
     }
+  end
+
+  # -- imported-demo --------------------------------------------------------
+
+  # This project exists to demonstrate Phase 9 in the browser without a daemon:
+  # the rows have the exact shape `Cadence.Daemon.Importer` produces, the commit
+  # objects are real Git commits (written through GitStore, never by shelling
+  # out), and the one secret-bearing commit is passed through the same
+  # `NodeScans` path a pushed node takes.
+  defp seed_imported_project(project, owner) do
+    repo = ProjectGit.init(project.id)
+    {:ok, shared_tree} = GitStore.put_files(repo, imported_files())
+    {:ok, secret_tree} = GitStore.put_files(repo, imported_secret_files())
+
+    imported_at = DateTime.utc_now() |> DateTime.to_iso8601()
+    base_unix = import_base_unix()
+
+    nodes =
+      Repo.transaction(fn ->
+        0..(@imported_node_count - 1)
+        |> Enum.reduce(%{}, fn index, acc ->
+          parent_indexes = import_parent_indexes(index)
+
+          parents =
+            Enum.map(parent_indexes, fn parent_index ->
+              Map.fetch!(acc, parent_index)
+            end)
+
+          author = Enum.at(@import_authors, rem(index, length(@import_authors)))
+          timestamp = base_unix + index * @import_commit_interval
+          tree = if index == @import_secret_commit, do: secret_tree, else: shared_tree
+          message = import_message(index)
+
+          sha =
+            write_import_commit!(
+              repo,
+              tree,
+              Enum.map(parents, & &1.git_commit_sha),
+              author,
+              timestamp,
+              message
+            )
+
+          node =
+            insert_imported_node!(project, owner, %{
+              index: index,
+              git_commit_sha: sha,
+              parents: parents,
+              author: author,
+              timestamp: timestamp,
+              message: message,
+              imported_at: imported_at
+            })
+
+          Map.put(acc, index, node)
+        end)
+        |> then(fn by_index ->
+          Enum.map(0..(@imported_node_count - 1), &Map.fetch!(by_index, &1))
+        end)
+      end)
+      |> case do
+        {:ok, nodes} -> nodes
+        {:error, reason} -> raise "imported demo seed failed: #{inspect(reason)}"
+      end
+
+    # The real scan, not a hand-written incident: a `config.txt` carrying a
+    # ghp-style token must quarantine exactly like a pushed snapshot would.
+    :ok = NodeScans.scan_node(project.id, Enum.at(nodes, @import_secret_commit))
+
+    :ok
+  end
+
+  # 0..98 linear, 99 and 100 branch from 98, 101 merges them, then linear to
+  # the tip. Parents are preserved in commit order, like a real import.
+  defp import_parent_indexes(0), do: []
+
+  defp import_parent_indexes(index)
+       when index in [@import_branch_point + 1, @import_branch_point + 2],
+       do: [@import_branch_point]
+
+  defp import_parent_indexes(@import_merge_commit),
+    do: [@import_branch_point + 1, @import_branch_point + 2]
+
+  defp import_parent_indexes(index), do: [index - 1]
+
+  defp import_base_unix do
+    DateTime.utc_now()
+    |> DateTime.add(-@imported_node_count * @import_commit_interval, :second)
+    |> DateTime.to_unix()
+  end
+
+  # `GitStore.write_commit/5` stamps "now"; an imported history needs the
+  # original author timestamps, so encode the commit payload exactly like a
+  # source repository would and write it through the shared raw primitive.
+  defp write_import_commit!(repo, tree, parents, author, timestamp, message) do
+    ident = "#{author.name} <#{author.email}> #{timestamp} +0000"
+
+    [
+      "tree #{tree}\n",
+      Enum.map(parents, &"parent #{&1}\n"),
+      "author #{ident}\n",
+      "committer #{ident}\n",
+      "\n",
+      message,
+      "\n"
+    ]
+    |> IO.iodata_to_binary()
+    |> then(&GitStore.write_raw(repo, :commit, &1))
+  end
+
+  defp insert_imported_node!(project, owner, attrs) do
+    tip? = attrs.index == @imported_node_count - 1
+
+    node_attrs = %{
+      project_id: project.id,
+      git_commit_sha: attrs.git_commit_sha,
+      parents: Enum.map(attrs.parents, & &1.id),
+      flags: [],
+      pinned: tip?,
+      message: attrs.message,
+      session_metadata: import_metadata(attrs, tip?),
+      created_by: owner.id,
+      created_at: DateTime.from_unix!(attrs.timestamp, :second),
+      docs_state: :skipped
+    }
+
+    case %Node{} |> Node.changeset(node_attrs) |> Repo.insert() do
+      {:ok, node} -> node
+      {:error, changeset} -> Repo.rollback({:invalid_import_node, changeset})
+    end
+  end
+
+  defp import_metadata(attrs, tip?) do
+    import = %{
+      "source" => "git",
+      "author" => attrs.author.name,
+      "author_email" => attrs.author.email,
+      "imported_at" => attrs.imported_at
+    }
+
+    # Matches the importer: selected refs are recorded on tip nodes only.
+    import = if tip?, do: Map.put(import, "refs", ["refs/heads/main"]), else: import
+    %{"import" => import}
+  end
+
+  defp import_message(index) do
+    cond do
+      index == 0 ->
+        "Initial import of the cadence-cli repository"
+
+      index == @import_secret_commit ->
+        "Add deployment config for CI"
+
+      index == @import_branch_point + 1 ->
+        "Start the import UI branch"
+
+      index == @import_branch_point + 2 ->
+        "Add provenance rendering on the import branch"
+
+      index == @import_merge_commit ->
+        "Merge branch 'feature/import-ui' into main"
+
+      true ->
+        verb = Enum.at(@import_verbs, rem(index, length(@import_verbs)))
+        object = Enum.at(@import_objects, div(index, length(@import_verbs)))
+        "#{verb} #{object}"
+    end
+  end
+
+  defp imported_files do
+    %{
+      "README.md" => """
+      # Imported Demo
+
+      This project is shaped like a local Git repository imported into Cadence:
+      every node keeps its original 40-character commit SHA, parents, message,
+      author and timestamp. The nodes are flagless, docs are skipped (there is
+      no local session to generate them), and only the tip is pinned.
+
+      The project has 160 commits, so the DAG renders the newest 150 and the
+      rest live in **History** (50 per page). One old commit contains a fake
+      token and is quarantined by the same scan a push uses.
+      """,
+      "src/cadence_cli.ex" => """
+      defmodule CadenceCLI do
+        @moduledoc "A tiny stand-in module for the imported history."
+
+        @doc "Prints the project greeting."
+        def greet(name), do: "Hello from the import, \#{name}."
+      end
+      """,
+      "docs/history.md" => """
+      # Imported history
+
+      Commits are copied byte-identically. Cadence never rewrites the source
+      history, so the SHA in this project matches the SHA in the Git repository.
+      """,
+      "config/settings.toml" => """
+      [project]
+      name = "cadence-cli"
+      default_branch = "main"
+      """
+    }
+  end
+
+  defp imported_secret_files do
+    Map.put(imported_files(), "config.txt", """
+    # Deliberately fake demo credentials.
+    GITHUB_TOKEN=ghp_demo000000000000000000000000000000
+    """)
   end
 
   # -- persistence helpers --------------------------------------------------

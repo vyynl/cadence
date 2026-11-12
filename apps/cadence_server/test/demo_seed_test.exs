@@ -3,10 +3,10 @@ defmodule Cadence.Server.DemoSeedTest do
 
   import Ecto.Query
 
-  alias Cadence.Server.{ActionRun, DemoSeed, Proposals, Repo}
+  alias Cadence.Server.{ActionRun, DemoSeed, Portfolio, ProjectGit, Proposals, Repo}
   alias Cadence.Server.Accounts.{Token, User}
   alias Cadence.Server.Proposal
-  alias Cadence.Shared.{Membership, Node, Project}
+  alias Cadence.Shared.{GitStore, Membership, Node, Project}
 
   setup do
     pid = Ecto.Adapters.SQL.Sandbox.start_owner!(Repo, shared: false)
@@ -17,7 +17,7 @@ defmodule Cadence.Server.DemoSeedTest do
     :ok
   end
 
-  test "builds two projects, four accounts and the expected memberships" do
+  test "builds three projects, four accounts and the expected memberships" do
     summary = DemoSeed.run()
 
     assert summary.fresh
@@ -25,13 +25,22 @@ defmodule Cadence.Server.DemoSeedTest do
 
     assert summary.projects |> Enum.map(& &1.slug) |> Enum.sort() == [
              "cadence-demo",
+             "imported-demo",
              "meld-review"
            ]
 
     assert summary.users |> Enum.map(& &1.email) |> Enum.sort() == expected_emails()
 
+    assert Repo.aggregate(Project, :count) == 3
+    assert Repo.aggregate(Node, :count) == 169
+
     demo = project!("cadence-demo")
     review = project!("meld-review")
+    imported = project!("imported-demo")
+
+    assert demo.owner_id == user!("owner@demo.local").id
+    assert review.owner_id == user!("owner@demo.local").id
+    assert imported.owner_id == user!("owner@demo.local").id
 
     assert membership!(demo, "owner@demo.local").role == :owner
     assert membership!(demo, "approver@demo.local").role == :viewer
@@ -43,6 +52,11 @@ defmodule Cadence.Server.DemoSeedTest do
     assert approver.approver
 
     assert membership!(review, "viewer@demo.local").role == :viewer
+
+    # The imported project is owner-only: no viewer/approver membership.
+    assert membership!(imported, "owner@demo.local").role == :owner
+    assert Repo.aggregate(from(m in Membership, where: m.project_id == ^imported.id), :count) == 1
+
     refute Repo.get_by(Membership, user_id: user!("outsider@demo.local").id)
   end
 
@@ -114,6 +128,79 @@ defmodule Cadence.Server.DemoSeedTest do
     assert :ok = Proposals.result_integrity(review.id, approved)
   end
 
+  test "imported-demo preserves import topology, timestamps and provenance" do
+    DemoSeed.run()
+
+    imported = project!("imported-demo")
+    nodes = nodes!(imported)
+
+    assert length(nodes) == 160
+    assert nodes |> Enum.map(& &1.git_commit_sha) |> Enum.uniq() |> length() == 160
+    assert Enum.all?(nodes, &(byte_size(&1.git_commit_sha) == 40))
+    assert Enum.all?(nodes, &(&1.flags == []))
+    assert Enum.all?(nodes, &(&1.docs_state == :skipped))
+
+    # Exactly the tip is pinned, and it is the project preview.
+    assert [tip] = Enum.filter(nodes, & &1.pinned)
+    assert Portfolio.preview_node(imported.id).id == tip.id
+    assert tip.session_metadata["import"]["refs"] == ["refs/heads/main"]
+
+    # Every parent is a node in this project; the root has none.
+    by_id = Map.new(nodes, &{&1.id, &1})
+    by_sha = Map.new(nodes, &{&1.git_commit_sha, &1.id})
+    assert hd(nodes).parents == []
+
+    assert Enum.all?(nodes, fn node ->
+             Enum.all?(node.parents, &Map.has_key?(by_id, &1))
+           end)
+
+    # Exactly one merge, with its two parents preserved in commit order.
+    assert [merge] = Enum.filter(nodes, &(length(&1.parents) == 2))
+    assert merge.message == "Merge branch 'feature/import-ui' into main"
+    assert length(Enum.uniq(merge.parents)) == 2
+
+    commit = GitStore.read_commit(ProjectGit.open(imported.id), merge.git_commit_sha)
+    assert Enum.map(commit.parent, &Map.fetch!(by_sha, &1)) == merge.parents
+    assert commit.author.timestamp == DateTime.to_unix(merge.created_at)
+    assert commit.author.name == merge.session_metadata["import"]["author"]
+    assert commit.author.email == merge.session_metadata["import"]["author_email"]
+
+    # Provenance is complete and varied, with refs only on the tip.
+    imports = Enum.map(nodes, & &1.session_metadata["import"])
+    assert Enum.all?(imports, &(&1["source"] == "git"))
+    assert Enum.all?(imports, &(is_binary(&1["author"]) and is_binary(&1["author_email"])))
+    assert Enum.all?(imports, &is_binary(&1["imported_at"]))
+    assert imports |> Enum.map(& &1["author"]) |> Enum.uniq() |> length() >= 3
+    assert Enum.count(imports, &Map.has_key?(&1, "refs")) == 1
+  end
+
+  test "an imported historical snapshot is quarantined and pages in History" do
+    DemoSeed.run()
+
+    imported = project!("imported-demo")
+    [incident] = open_incidents!(project: imported.id, node: true)
+    assert incident.kind == :secret_detected
+    assert incident.severity == :critical
+    assert "github_token" in Map.fetch!(incident.details, "patterns")
+
+    node = Repo.get!(Node, incident.node_id)
+    assert node.docs_state == :skipped
+    assert node.flags == []
+    assert Portfolio.quarantine_status(imported, node) == :quarantined
+
+    # The secret commit is one of the ten oldest, so the capped DAG omits it
+    # and only History can reach it.
+    cap = Application.fetch_env!(:cadence_server, :dag_max_nodes)
+    visible = Portfolio.list_nodes(imported.id, limit: cap)
+    assert length(visible) == cap
+    refute Enum.any?(visible, &(&1.id == node.id))
+
+    page = Portfolio.node_page(imported.id, 4)
+    assert page.total == 160
+    assert page.total_pages == 4
+    assert Enum.any?(page.nodes, &(&1.id == node.id))
+  end
+
   test "seeded accounts sign in with the demo password" do
     DemoSeed.run()
 
@@ -136,11 +223,13 @@ defmodule Cadence.Server.DemoSeedTest do
 
     refute summary.fresh
     assert counts() == before
+    assert length(nodes!(project!("imported-demo"))) == 160
   end
 
   test "reset rebuilds the same dataset cleanly" do
     DemoSeed.run()
     before = counts()
+    old_imported = project!("imported-demo")
 
     [run] = Repo.all(from(r in ActionRun, where: r.action_name == "run_analysis"))
     log_dir = Path.join(Application.fetch_env!(:cadence_server, :artifact_path), run.id)
@@ -152,6 +241,12 @@ defmodule Cadence.Server.DemoSeedTest do
     assert counts() == before
     refute File.exists?(log_dir)
     assert length(proposals!(project!("meld-review"))) == 5
+
+    imported = project!("imported-demo")
+    assert imported.id != old_imported.id
+    refute File.exists?(ProjectGit.path(old_imported.id))
+    assert length(nodes!(imported)) == 160
+    assert [_incident] = open_incidents!(project: imported.id, node: true)
   end
 
   test "reset revokes auth tokens issued to the deleted demo users" do
