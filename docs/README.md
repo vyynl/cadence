@@ -36,7 +36,7 @@ Project entry points:
 | Phase 6 — Docker actions | Complete (6a manifest foundation, 6b runner, 6c web run experience, post-close run queue, retention and run/artifact paging); action log streaming remains a §16 delta |
 | Phase 7 — Storage engineering | Complete (7a pack layer, 7b repacker, 7c existence handshake, 7d multi-pack/index/delta-depth/repack verification + demo-stack smoke); pack consolidation remains a §16 delta |
 | Phase 8 — Release engineering | Complete (8a production server image, umbrella release, `Cadence.Server.Release.migrate/0`, prod compose, deploy docs; 8b `cadence_daemon` release with `Cadence.Daemon.Release.migrate/0`, release registration, systemd/install/upgrade docs) |
-| Phase 9 — Import a local Git repository | 9a–9d shipped (shared primitives, daemon importer/API/CLI, multi-parent push, capped DAG + paged History + provenance); 9e docs/spec/smoke in progress |
+| Phase 9 — Import a local Git repository | Complete (9a shared primitives, 9b daemon importer/API/CLI, 9c multi-parent push + body limit, 9d capped DAG + paged History + provenance, 9e docs/spec/live smoke) |
 | WebAuthn / passkeys | Design approved; G1 data/config/Wax spike in progress |
 
 Current release: **1.0.0** (2026-11-11) — the planned build order (Phases 1–8)
