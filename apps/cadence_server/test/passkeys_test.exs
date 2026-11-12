@@ -339,6 +339,24 @@ defmodule Cadence.Server.PasskeysTest do
       assert {:error, :invalid_label} =
                Passkeys.rename(user, credential.credential_id, "\u202Eevil")
     end
+
+    test "addresses credentials by row id for the account page", %{
+      user: user,
+      other_user: other_user
+    } do
+      {mine, _challenge, _response} = register(user, FakeAuthenticator.new())
+      {theirs, _challenge, _response} = register(other_user, FakeAuthenticator.new())
+
+      assert {:ok, renamed} = Passkeys.rename_by_id(user, mine.id, "Row id")
+      assert renamed.label == "Row id"
+
+      assert {:error, :not_found} = Passkeys.rename_by_id(user, theirs.id, "Stolen")
+      assert {:error, :not_found} = Passkeys.delete_by_id(user, theirs.id)
+
+      assert {:error, :not_found} = Passkeys.delete_by_id(user, "not-a-uuid")
+      assert :ok = Passkeys.delete_by_id(user, mine.id)
+      assert {:ok, []} = Passkeys.list(user)
+    end
   end
 
   describe "challenge validation helpers" do

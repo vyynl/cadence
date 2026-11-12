@@ -1,0 +1,88 @@
+<article class="account-security">
+  <header class="project-header">
+    <p class="eyebrow">Account</p>
+    <h1>Security keys and passkeys</h1>
+    <p class="note">
+      Sign in without a password with a security key (YubiKey or another FIDO2 key over USB/NFC)
+      or a passkey saved in your browser, phone, or password manager.
+    </p>
+  </header>
+
+  <section class="callout" aria-labelledby="recovery-heading">
+    <h2 id="recovery-heading">Lost a key or phone?</h2>
+    <p>
+      Sign in with GitHub or Google, then remove the lost key here and add a replacement.
+      OAuth is the recovery path.
+    </p>
+    <p :if={length(@credentials) == 1} class="admin-warning">
+      This is your only security key. Removing it means you must sign in with GitHub or Google
+      until you add another key.
+    </p>
+  </section>
+
+  <section aria-labelledby="keys-heading">
+    <div class="section-heading">
+      <h2 id="keys-heading">Your keys</h2>
+      <a
+        :if={length(@credentials) < @max_credentials}
+        class="admin-button button-primary"
+        href="/account/security/keys/new"
+      >
+        Add a security key or passkey
+      </a>
+    </div>
+
+    <p :if={length(@credentials) >= @max_credentials} class="note">
+      You have reached the limit of {@max_credentials} keys. Remove one before adding another.
+    </p>
+
+    <p :if={@credentials == []} class="empty">
+      No security keys or passkeys yet. Add one to sign in without a password.
+    </p>
+
+    <ul :if={@credentials != []} class="credential-list" aria-label="Your security keys and passkeys">
+      <li :for={credential <- @credentials} class="credential-card">
+        <div class="credential-main">
+          <h3>{credential.label}</h3>
+          <p class="note">
+            {key_hint(credential.transports)}
+            <span aria-hidden="true">·</span>
+            added {format_time(credential.inserted_at)}
+            <span aria-hidden="true">·</span>
+            {last_used(credential.last_used_at)}
+          </p>
+        </div>
+
+        <div class="credential-actions">
+          <form method="post" action={"/account/security/keys/#{credential.id}/rename"} class="rename-form">
+            <input type="hidden" name="_csrf_token" value={@csrf} />
+            <label class="sr-only" for={"label-#{credential.id}"}>Name for {credential.label}</label>
+            <input
+              id={"label-#{credential.id}"}
+              name="label"
+              type="text"
+              value={credential.label}
+              maxlength="60"
+              required
+            />
+            <button type="submit" class="admin-button">Rename</button>
+          </form>
+
+          <details class="danger-zone">
+            <summary class="admin-button button-danger">Remove</summary>
+            <form method="post" action={"/account/security/keys/#{credential.id}/delete"}>
+              <input type="hidden" name="_csrf_token" value={@csrf} />
+              <p>
+                Remove <strong>{credential.label}</strong>?
+                You can sign in with GitHub or Google and add it again later.
+              </p>
+              <button type="submit" class="admin-button button-danger">Remove key</button>
+            </form>
+          </details>
+        </div>
+      </li>
+    </ul>
+  </section>
+
+  <p class="note"><a href="/">Back to the portfolio</a></p>
+</article>

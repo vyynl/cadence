@@ -736,9 +736,12 @@ Public routes: `/` is the portfolio index, `/p/:slug` is the project home,
 `/p/:slug/history` is the paged commit history (§7.3),
 `/p/:slug/n/:node_id/tree/*path` is a directory view,
 `/p/:slug/n/:node_id/blob/*path` is a file view, and `/proposals/:token` is the
-public read-only proposal page. `/p/:slug/reviews` and
-`/p/:slug/reviews/:proposal_id` are member-only (authenticated, §7.2) and are
-never public. `/auth`, `/sync`, `/health`, and static paths are reserved.
+public read-only proposal page. `/sign-in` renders the sign-in methods (OAuth,
+the compile-gated demo password, and — when enabled — the passkey CTA) and
+`/auth/passkeys/sign-in` (GET challenge, POST assertion) is the public passkey
+ceremony (§7.4). `/p/:slug/reviews` and `/p/:slug/reviews/:proposal_id` are
+member-only (authenticated, §7.2) and are never public. `/auth`, `/sync`,
+`/health`, and static paths are reserved.
 
 Every response from the `:browser` pipeline carries a static
 Content-Security-Policy (`default-src 'self'` with same-origin scripts and
@@ -945,9 +948,36 @@ path. A YubiKey 5-series works over USB/NFC with user verification (PIN or
 biometric), discoverable credentials, and several named keys per account. The
 browser draws the cross-device QR for phone passkeys; Cadence does not render
 or scan a QR. `CAD_WEBAUTHN_RP_ID` is a hostname and is permanent — changing it
-invalidates every credential. The credential store and verification layer ship
-first; the account-security and sign-in UI follow (G2–G5 of
-`docs/webauthn-plan.md`).
+invalidates every credential.
+
+The shipped surface (G1–G3) is:
+
+- `/account/security` — authenticated list of the user's credentials (label,
+  transport hint, added, last used), rename, and remove-after-confirmation.
+  Several keys are allowed up to `CAD_WEBAUTHN_MAX_CREDENTIALS`; the lost-key
+  copy points to OAuth recovery, and the last key may be removed because OAuth
+  can still sign the user in.
+- `GET /account/security/keys/new` — mints a registration challenge, stores it
+  in the signed session, and renders the browser options; `passkeys.js` runs
+  `navigator.credentials.create`.
+- `POST /account/security/keys` — consumes the session challenge before
+  verification, stores the verified credential with the user's label and the
+  client transports, and redirects to `/account/security`.
+- `/sign-in` — a Cadence-owned page that keeps the AAP OAuth/demo components
+  and adds a first-class security-key/passkey CTA only while the feature is
+  enabled.
+- `GET /auth/passkeys/sign-in` — mints a discoverable-credential challenge and
+  renders the ceremony page; `POST /auth/passkeys/sign-in` verifies the
+  assertion, advances the sign counter, renews the session, and stores the
+  AshAuthentication session. Both ceremony POSTs are rate-limited per IP from
+  `CAD_WEBAUTHN_RATE_LIMIT` / `CAD_WEBAUTHN_RATE_SCALE`.
+
+Both ceremony posts carry `log: false`, delete the one-shot challenge before
+verification, and map every verification failure to the same generic sign-in
+copy (no account/key enumeration). The endpoint is hidden when the feature is
+disabled. Management/recovery polish (G4) and hardening (G5 — including the
+pre-existing production session-cookie `secure` flag) remain tracked in
+`docs/webauthn-plan.md`.
 
 ### 7.5 Repository browser
 
@@ -2165,6 +2195,10 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - The Docker socket proxy is root-equivalent (§8.4); keep action containers off
   its network and treat project `Dockerfile` `FROM` references as able to reach
   any registry the daemon can reach.
+- The signed session cookie (`_cadence_key`) does not set `secure` in production
+  today. This is a pre-existing gap, recorded as a G5 WebAuthn prerequisite
+  (§16); do not weaken it further, and passkey hardening must not ship without
+  revisiting it.
 
 ---
 
@@ -2470,9 +2504,17 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - G1 (shipped): `wax_` 0.7 dependency, `webauthn_credentials` store, `CoseKey`
   type, challenge lifecycle, attestation/assertion verification, credential
   CRUD, sign-count rules, and the `CAD_WEBAUTHN_*` boot validation.
-- G2–G5 (pending): account-security registration UI, passkey sign-in page,
-  management/recovery, rate limiting, session hardening, and the browser/key
-  matrix. See `docs/webauthn-plan.md`.
+- G2 (shipped): `/account/security` list, `/account/security/keys/new`,
+  `POST /account/security/keys`, labels, per-user cap, duplicate handling, and
+  `passkeys.js`.
+- G3 (shipped): Cadence-owned `/sign-in` with the AAP OAuth/demo components
+  plus the passkey CTA, `GET`/`POST /auth/passkeys/sign-in`, discoverable
+  credentials, session renewal, generic failure copy, and the IP ceremony
+  limiter.
+- G4–G5 (pending): management/recovery polish beyond the shipped list/rename/
+  remove (operator runbook, optional mix task) and hardening (strict sign-count
+  CAS review, proxy/origin tests, browser/key matrix, and the production
+  session-cookie `secure` flag). See `docs/webauthn-plan.md`.
 
 ---
 
@@ -2797,8 +2839,13 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 - [x] **WebAuthn implementation:** resolved — `wax_` 0.7 behind a
       Cadence-owned layer on AshAuthentication 4.15.1; the credential table is
       shaped to match the AA5 WebAuthn strategy. G1 (store, verification,
-      config) ships; registration/sign-in UI and hardening follow. Revisit the
-      AA5 strategy when 5.0 is stable.
+      config), G2 (account-security registration), and G3 (Cadence-owned
+      sign-in page, passkey ceremony) ship; G4–G5 hardening follows. Revisit
+      the AA5 strategy when 5.0 is stable.
+- [ ] **WebAuthn hardening (G5):** finish the strict sign-count/CAS review,
+      proxy/origin test matrix, and browser/key manual matrix. The session
+      cookie's pre-existing production `secure` flag gap is a G5 prerequisite
+      and is not changed by the G2/G3 slice (§12.9).
 - [x] **WebAuthn attestation policy:** resolved — `none`; no FIDO MDS, AAGUID
       allowlist, or enterprise attestation. Possession plus user verification
       is the assurance model.

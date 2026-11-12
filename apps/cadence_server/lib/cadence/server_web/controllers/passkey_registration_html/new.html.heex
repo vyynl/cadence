@@ -1,0 +1,56 @@
+<article class="passkey-page">
+  <header class="project-header">
+    <p class="eyebrow">Account</p>
+    <h1>Add a security key or passkey</h1>
+    <p class="note">
+      Give this key a name you will recognize, then follow the browser prompt. You can add more
+      than one key, and a second key is strongly recommended.
+    </p>
+  </header>
+
+  <div
+    id="passkey-ceremony"
+    data-passkeys
+    data-mode="register"
+    data-options-json={@options_json}
+    data-endpoint="/account/security/keys"
+  >
+    <form data-passkey-form class="passkey-form">
+      <label for="passkey-label">Name this key</label>
+      <input
+        id="passkey-label"
+        name="label"
+        type="text"
+        value="Security key"
+        maxlength="60"
+        autocomplete="off"
+        required
+      />
+      <button data-passkey-submit type="submit" class="admin-button button-primary">
+        Add security key or passkey
+      </button>
+    </form>
+    <p data-passkey-status class="passkey-status" role="status" aria-live="polite"></p>
+  </div>
+
+  <section class="callout" aria-labelledby="before-heading">
+    <h2 id="before-heading">Before you start</h2>
+    <p>
+      <strong>Using a security key?</strong>
+      Plug it in (or hold it to your phone), then touch it when it blinks. If it asks for a PIN,
+      enter your security-key PIN.
+    </p>
+    <p>
+      <strong>Using a phone passkey?</strong>
+      Choose <strong>Use a phone</strong> in the browser prompt and scan the QR code with your
+      camera.
+    </p>
+    <p>
+      A security key with no free passkey slots cannot store another credential. Remove an old
+      passkey with your key's management app or use another key.
+    </p>
+  </section>
+
+  <p class="note"><a href="/account/security">Cancel and go back</a></p>
+  <script src="/assets/js/passkeys.js" defer></script>
+</article>

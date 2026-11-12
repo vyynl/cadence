@@ -36,6 +36,12 @@ defmodule Cadence.ServerWeb.Router do
     plug(:load_from_session)
   end
 
+  pipeline :passkey do
+    # The WebAuthn ceremony POSTs are public (sign-in) or session-guarded
+    # (registration); the bound is per client IP and disabled at rate 0.
+    plug(Cadence.ServerWeb.Plugs.PasskeyRateLimit)
+  end
+
   pipeline :api do
     plug(Cadence.ServerWeb.AuthPlug)
     # After auth: the bucket is keyed on the authenticated user (spec §10.1).
@@ -46,6 +52,17 @@ defmodule Cadence.ServerWeb.Router do
     pipe_through(:public)
 
     get("/health", HealthController, :index)
+  end
+
+  # These two POSTs must be matched before `auth_routes/3` installs the
+  # AshAuthentication strategy catch-all under `/auth`. They still need the
+  # full browser pipeline (session, CSRF, CSP), plus the IP rate limiter.
+  scope "/", Cadence.ServerWeb do
+    pipe_through([:browser, :passkey])
+
+    # Credential material must never reach access logs.
+    post("/account/security/keys", PasskeyRegistrationController, :create, log: false)
+    post("/auth/passkeys/sign-in", PasskeySessionController, :create, log: false)
   end
 
   scope "/", Cadence.ServerWeb do
@@ -72,7 +89,21 @@ defmodule Cadence.ServerWeb.Router do
     get("/auth/tokens/new", TokenController, :new)
     post("/auth/tokens", TokenController, :create, log: false)
 
-    sign_in_route(auth_routes_prefix: "/auth", layout: {Cadence.ServerWeb.Layouts, :app})
+    # Account security / passkey management (authenticated in every action).
+    get("/account/security", AccountSecurityController, :index)
+    get("/account/security/keys/new", PasskeyRegistrationController, :new)
+    post("/account/security/keys/:id/rename", AccountSecurityController, :rename)
+    post("/account/security/keys/:id/delete", AccountSecurityController, :delete)
+
+    # Public passkey sign-in ceremony (the POST sets the session).
+    get("/auth/passkeys/sign-in", PasskeySessionController, :new)
+
+    sign_in_route(
+      auth_routes_prefix: "/auth",
+      live_view: Cadence.ServerWeb.SignInLive,
+      layout: {Cadence.ServerWeb.Layouts, :app}
+    )
+
     sign_out_route(AuthController, "/sign-out", layout: {Cadence.ServerWeb.Layouts, :app})
 
     auth_routes(AuthController, Cadence.Server.Accounts.User, path: "/auth")

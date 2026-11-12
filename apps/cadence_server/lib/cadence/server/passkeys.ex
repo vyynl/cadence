@@ -338,14 +338,7 @@ defmodule Cadence.Server.Passkeys do
           {:ok, WebAuthnCredential.t()} | {:error, reason()}
   def rename(user, credential_id, label) do
     with {:ok, credential} <- fetch_scoped(user, credential_id) do
-      credential
-      |> Ash.Changeset.for_update(:rename, %{label: label})
-      |> Ash.update(domain: Accounts)
-      |> case do
-        {:ok, updated} -> {:ok, updated}
-        {:error, %Ash.Error.Invalid{}} -> {:error, :invalid_label}
-        {:error, _error} -> {:error, :storage_error}
-      end
+      update_label(credential, label)
     end
   end
 
@@ -353,11 +346,34 @@ defmodule Cadence.Server.Passkeys do
   @spec delete(User.t() | binary(), binary()) :: :ok | {:error, reason()}
   def delete(user, credential_id) do
     with {:ok, credential} <- fetch_scoped(user, credential_id) do
-      case Ash.destroy(credential, domain: Accounts) do
-        :ok -> :ok
-        {:ok, _credential} -> :ok
-        {:error, _error} -> {:error, :storage_error}
-      end
+      destroy(credential)
+    end
+  end
+
+  @doc """
+  Deletes a credential owned by `user`, addressed by its Ash row id.
+
+  Account pages expose the row id in URLs rather than the raw credential id,
+  which is marked sensitive on the resource. A malformed id is treated as
+  `:not_found`, never as a query error.
+  """
+  @spec delete_by_id(User.t() | binary(), binary()) :: :ok | {:error, reason()}
+  def delete_by_id(user, credential_row_id) do
+    with {:ok, credential} <- fetch_scoped_by_row_id(user, credential_row_id) do
+      destroy(credential)
+    end
+  end
+
+  @doc """
+  Renames a credential owned by `user`, addressed by its Ash row id.
+
+  See `delete_by_id/2` for why the account surface uses the row id.
+  """
+  @spec rename_by_id(User.t() | binary(), binary(), String.t()) ::
+          {:ok, WebAuthnCredential.t()} | {:error, reason()}
+  def rename_by_id(user, credential_row_id, label) do
+    with {:ok, credential} <- fetch_scoped_by_row_id(user, credential_row_id) do
+      update_label(credential, label)
     end
   end
 
@@ -675,6 +691,44 @@ defmodule Cadence.Server.Passkeys do
     end
   end
 
+  defp fetch_scoped_by_row_id(user, row_id) when is_binary(row_id) do
+    with {:ok, uuid} <- Ecto.UUID.cast(row_id) do
+      uid = user_id(user)
+
+      WebAuthnCredential
+      |> Ash.Query.filter(id == ^uuid and user_id == ^uid)
+      |> Ash.read_one(domain: Accounts)
+      |> case do
+        {:ok, %WebAuthnCredential{} = credential} -> {:ok, credential}
+        {:ok, nil} -> {:error, :not_found}
+        {:error, _error} -> {:error, :storage_error}
+      end
+    else
+      :error -> {:error, :not_found}
+    end
+  end
+
+  defp fetch_scoped_by_row_id(_user, _row_id), do: {:error, :not_found}
+
+  defp update_label(credential, label) do
+    credential
+    |> Ash.Changeset.for_update(:rename, %{label: label})
+    |> Ash.update(domain: Accounts)
+    |> case do
+      {:ok, updated} -> {:ok, updated}
+      {:error, %Ash.Error.Invalid{}} -> {:error, :invalid_label}
+      {:error, _error} -> {:error, :storage_error}
+    end
+  end
+
+  defp destroy(credential) do
+    case Ash.destroy(credential, domain: Accounts) do
+      :ok -> :ok
+      {:ok, _credential} -> :ok
+      {:error, _error} -> {:error, :storage_error}
+    end
+  end
+
   defp count_credentials(user_id) do
     WebAuthnCredential
     |> Ash.Query.filter(user_id == ^user_id)
@@ -709,10 +763,10 @@ defmodule Cadence.Server.Passkeys do
   defp validate_registration(_registration), do: {:error, :invalid_credential}
 
   defp map_create_error(%Ash.Error.Invalid{errors: errors}) do
-    if Enum.any?(errors, &duplicate_error?/1) do
-      :duplicate_credential
-    else
-      :invalid_credential
+    cond do
+      Enum.any?(errors, &duplicate_error?/1) -> :duplicate_credential
+      Enum.any?(errors, &label_error?/1) -> :invalid_label
+      true -> :invalid_credential
     end
   end
 
@@ -726,6 +780,10 @@ defmodule Cadence.Server.Passkeys do
   end
 
   defp duplicate_error?(_error), do: false
+
+  defp label_error?(%Ash.Error.Changes.InvalidAttribute{field: :label}), do: true
+  defp label_error?(%Ash.Error.Changes.Required{field: :label}), do: true
+  defp label_error?(_error), do: false
 
   defp credentials_for(user, opts) do
     case Keyword.fetch(opts, :credentials) do

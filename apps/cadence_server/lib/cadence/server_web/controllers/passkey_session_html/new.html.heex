@@ -1,0 +1,46 @@
+<article class="passkey-page">
+  <header class="project-header">
+    <p class="eyebrow">Sign in</p>
+    <h1>Sign in with a security key or passkey</h1>
+    <p class="note">
+      No email needed. The browser finds the passkey or security key registered for this site.
+    </p>
+  </header>
+
+  <div
+    id="passkey-ceremony"
+    data-passkeys
+    data-mode="sign-in"
+    data-options-json={@options_json}
+    data-endpoint="/auth/passkeys/sign-in"
+    data-return-to={@return_to}
+  >
+    <form data-passkey-form>
+      <button data-passkey-submit type="submit" class="admin-button button-primary">
+        Use security key or passkey
+      </button>
+    </form>
+    <p data-passkey-status class="passkey-status" role="status" aria-live="polite"></p>
+  </div>
+
+  <section class="callout" aria-labelledby="hints-heading">
+    <h2 id="hints-heading">Sign-in hints</h2>
+    <p>
+      <strong>Security key:</strong>
+      plug it in (or hold it to your phone), then touch it when it blinks. Enter the key's PIN if
+      asked.
+    </p>
+    <p>
+      <strong>Phone passkey:</strong>
+      choose <strong>Use a phone</strong> in the browser prompt and scan the QR code with your
+      camera.
+    </p>
+    <p>
+      Lost the key or phone? <a href="/sign-in">Use another sign-in method</a> such as GitHub or
+      Google, then replace the key from your account security page.
+    </p>
+  </section>
+
+  <p class="note"><a href="/sign-in">Back to sign in</a></p>
+  <script src="/assets/js/passkeys.js" defer></script>
+</article>
