@@ -43,21 +43,133 @@ directed acyclic graph (DAG) of snapshots instead of Git branches.
   TOTP and recovery codes; database-backed sessions with remember-me and sudo
   mode. OAuth and passkeys are optional secondary methods.
 
-## Quick start
+## Try it locally (demo)
 
 ```bash
 docker compose up --build
 ```
 
-Open <http://localhost:4000> and sign in with a seeded account
-(`owner@demo.local`, password `cadence-demo`). The stack is a seeded,
-development-mode server; it is not a production deployment.
+Open <http://localhost:4000> and sign in at `/sign-in` as
+`owner@demo.local` with password `cadence-demo`. The demo accounts also require
+a TOTP code; print the current one with:
 
-Then:
+```bash
+docker compose exec server mix cadence.totp --email owner@demo.local
+```
 
-- [Import an existing Git repository](docs/import.md)
-- [Set up the local daemon](docs/daemon-setup.md)
-- [Deploy the server](docs/deploy.md)
+This is a seeded, development-mode server for browsing the UI. It is **not** a
+production deployment. See [`docs/demo.md`](docs/demo.md) for the guided tour.
+
+## Run it in production
+
+The production stack is `docker-compose.prod.yml`: a `MIX_ENV=prod` release,
+PostgreSQL, a one-shot migration service, and a Docker socket proxy. Each step
+below is the minimum to get a working instance; [`docs/deploy.md`](docs/deploy.md)
+is the full operator guide.
+
+### 1. Prerequisites
+
+- Docker Engine 26+ and Docker Compose v2.17+.
+- A DNS hostname pointing at the machine.
+- A TLS-terminating reverse proxy (Caddy, nginx, or your platform's ingress).
+  Production session cookies are `secure`, so **sign-in only works over HTTPS**.
+- Nothing else: PostgreSQL and the release build run in containers. Docker
+  actions are optional (see step 9).
+
+### 2. Get the code and create the env file
+
+```bash
+git clone https://github.com/vyynl/cadence.git
+cd cadence
+cp .env.example .env
+chmod 600 .env
+```
+
+### 3. Fill in the required settings
+
+Edit `.env` and set at least these values:
+
+```bash
+CAD_PHX_HOST=cadence.example.com
+CAD_PUBLIC_URL=https://cadence.example.com
+CAD_SECRET_KEY_BASE=<output of: openssl rand -base64 48>
+CAD_DATABASE_URL=ecto://cadence:<db-password>@postgres:5432/cadence
+CAD_DB_USER=cadence
+CAD_DB_PASS=<db-password>
+```
+
+`CAD_PUBLIC_URL` must be the exact public HTTPS origin; it is used for OAuth
+callbacks and proposal links. Replace the sample database password in both
+places. Do not commit `.env`.
+
+Optional: add `CAD_LLM_API_KEY` for AI commit messages, melds, and docs, and
+`CAD_WEBAUTHN_*` to enable passkeys. Both are off/unconfigured by default. If
+you do not want Docker actions, set `CAD_ACTIONS_ENABLED=false`.
+
+### 4. Start the stack
+
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+Compose builds `cadence-server:prod`, runs the one-shot `migrate` service, and
+starts `cadence` only after migrations succeed.
+
+### 5. Verify, then put TLS in front
+
+```bash
+docker compose -f docker-compose.prod.yml ps
+docker compose -f docker-compose.prod.yml logs migrate
+curl -fsS http://127.0.0.1:4000/health   # {"status":"ok"}
+```
+
+Point your reverse proxy at port `4000` and serve `CAD_PUBLIC_URL` over HTTPS.
+Do not expose the container's plain HTTP port to users directly.
+
+### 6. Create the first account
+
+There is no public registration; accounts are operator-created. Run this once
+against the running container:
+
+```bash
+docker compose -f docker-compose.prod.yml exec cadence \
+  /app/bin/cadence eval 'Cadence.Server.Release.create_user("you@example.com", "Your Name", "a long password")'
+```
+
+Use a password of at least 12 characters (`CAD_AUTH_PASSWORD_MIN_LENGTH`).
+
+### 7. Sign in and enroll TOTP
+
+Open `https://cadence.example.com/sign-in` with the account and password from
+step 6. The first sign-in forces TOTP enrollment: scan the QR code, confirm a
+code, and save the recovery codes — they are shown once.
+
+### 8. Connect a daemon
+
+In the web UI, open `/account` (or `/auth/tokens/new`) and create a daemon
+token. Copy it once, then follow
+[`docs/daemon-setup.md`](docs/daemon-setup.md) to install the daemon, run its
+migration, register a project, and sync.
+
+### 9. Operate it
+
+```bash
+# Upgrade after pulling a new release
+git pull
+docker compose -f docker-compose.prod.yml up -d --build
+
+# Logs
+docker compose -f docker-compose.prod.yml logs -f cadence
+```
+
+- Back up the `postgres_data` and `cadence_data` volumes together; metadata and
+  Git objects must stay in sync.
+- Docker actions (optional) need the socket **proxy** — never mount the raw
+  Docker socket. The reference stack already includes the proxy; see
+  [`docs/deploy.md#docker-actions`](docs/deploy.md#docker-actions).
+- Migrations are idempotent and run on every `up`. Volumes, ownership, image
+  publishing, passkeys, and troubleshooting are in
+  [`docs/deploy.md`](docs/deploy.md).
 
 ## How it works
 
@@ -97,7 +209,7 @@ there is no shared runtime and no distributed Erlang.
 | [`docs/demo.md`](docs/demo.md) | One-command demo stack and guided tour |
 | [`docs/import.md`](docs/import.md) | Import a local Git repository |
 | [`docs/daemon-setup.md`](docs/daemon-setup.md) | Install, configure, and run the daemon |
-| [`docs/deploy.md`](docs/deploy.md) | Production server deployment |
+| [`docs/deploy.md`](docs/deploy.md) | Step-by-step production deployment and operations |
 | [`docs/passkeys.md`](docs/passkeys.md) | Security keys and passkeys |
 | [`docs/spec.md`](docs/spec.md) | Canonical product and technical contract |
 | [`docs/README.md`](docs/README.md) | Full documentation index |
