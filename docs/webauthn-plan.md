@@ -1,6 +1,7 @@
 # Cadence — WebAuthn / Passkey (FIDO2) Plan
 
-> **Status:** approved 2026-11-11; G1 implementation in progress.
+> **Status:** approved 2026-11-11; G1 (data/config/Wax verification) shipped;
+> G2–G5 pending.
 > **Date:** 2026-11-11
 > **Scope:** `apps/cadence_server` only. No daemon, shared-schema, or sync changes.
 > **Approval:** `wax_ ~> 0.7` and the defaults below are approved. The §11/§12.6/§16
@@ -716,7 +717,7 @@ Assumes one engineer familiar with the codebase; days are focused dev days.
 | Slice | Deliverable | Depends on | Est. |
 |---|---|---|---|
 | **G0** | This document | — | done |
-| **G1 — data + config + Wax spike** | `wax_` dependency; `CoseKey` type; `WebAuthnCredential` resource + migration + snapshots; `Passkeys` challenge/verify skeleton; runtime config + boot validation; unit tests. Prove registration/sign-in against a localhost fake authenticator. | §11 approval | 1.5–2 d |
+| **G1 — data + config + Wax spike (shipped)** | `wax_` dependency; `CoseKey` type; `WebAuthnCredential` resource + migration + snapshots; `Passkeys` challenge/verify skeleton; runtime config + boot validation; unit tests. Prove registration/sign-in against a localhost fake authenticator. | §11 approval | 1.5–2 d |
 | **G2 — registration** | `/account/security` + `/account/security/keys/new`; challenge in session; `create()`; `passkeys.js`; labels, cap, duplicate handling; nav link. | G1 | 2 d |
 | **G3 — sign-in** | Passkey-first `/sign-in` page (or linked page); discoverable `get()`; `POST /sign-in/passkey`; session renewal; generic errors; QR/security-key copy. | G1 | 1.5 d |
 | **G4 — management + recovery** | Rename/remove, last-key rule, device list, last-used metadata, recovery copy, operator runbook, optional mix task. | G2 | 1.5 d |

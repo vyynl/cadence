@@ -938,6 +938,17 @@ without the flag and therefore contains no password strategy; additionally
 `config/runtime.exs` raises when a prod boot sees `CAD_DEMO_AUTH=true`. The
 demo password is public by design and never reused outside a local demo.
 
+**Passkeys / security keys (WebAuthn/FIDO2)** are an additional browser sign-in
+method for existing accounts, behind `CAD_WEBAUTHN_ENABLED` (default `false`).
+Registration requires an authenticated session; OAuth remains the recovery
+path. A YubiKey 5-series works over USB/NFC with user verification (PIN or
+biometric), discoverable credentials, and several named keys per account. The
+browser draws the cross-device QR for phone passkeys; Cadence does not render
+or scan a QR. `CAD_WEBAUTHN_RP_ID` is a hostname and is permanent — changing it
+invalidates every credential. The credential store and verification layer ship
+first; the account-security and sign-in UI follow (G2–G5 of
+`docs/webauthn-plan.md`).
+
 ### 7.5 Repository browser
 
 The right pane is a read-only browser over the selected node's Git commit
@@ -1659,7 +1670,8 @@ inserts); the daemon can mark only that node failed and retry the rest.
 | File watching | `file_system` |
 | LLM client | `axiom_ai` (DeepSeek via OpenAI-compatible base URL) |
 | Markdown rendering | `MDEx` |
-| Auth | `AshAuthentication` + `Ash` (daemon PATs use the API-key strategy) |
+| Auth | `AshAuthentication` + `Ash` (daemon PATs use the API-key strategy; browser passkeys use the Cadence-owned WebAuthn layer, §7.4) |
+| Passkey / WebAuthn (FIDO2) | `wax_` `~> 0.7` (declared in `cadence_server`; server-side challenge generation, attestation/assertion verification, and COSE keys. Transitive `cbor`, `x509`, `asn1_compiler`. The browser performs the ceremony and draws the cross-device QR; the app renders none) |
 | Demo password hashing (compile-gated, demo builds only) | `bcrypt_elixir` |
 | Ash data layer | `ash_postgres` |
 | Phoenix auth routes | `ash_authentication_phoenix` |
@@ -1956,6 +1968,15 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
 | `CAD_SYNC_MAX_BODY_BYTES` | no | `67108864` | Sync-scoped `Plug.Parsers` body limit; browser/public routes keep Plug's 8 MiB default (non-positive falls back to 64 MiB) |
 | `CAD_SYNC_RATE_LIMIT` | no | `300` | Max `/sync/*` requests per authenticated user per window (a non-positive value disables the bound) |
 | `CAD_SYNC_RATE_SCALE` | no | `60000` | `/sync/*` rate window in milliseconds (non-positive or non-integer falls back to the default) |
+| `CAD_WEBAUTHN_ENABLED` | no | `false` | Enable passkey/security-key sign-in and the account security page |
+| `CAD_WEBAUTHN_RP_ID` | when enabled | `localhost` | Relying Party ID, a hostname only; permanent — changing it invalidates every credential |
+| `CAD_WEBAUTHN_RP_NAME` | no | `Cadence` | Name shown in the browser's WebAuthn prompt |
+| `CAD_WEBAUTHN_ORIGIN` | when enabled | `CAD_PUBLIC_URL` in dev; required in prod | Exact expected origin (`https://host[:port]`); required behind a TLS-terminating proxy |
+| `CAD_WEBAUTHN_USER_VERIFICATION` | no | `required` | `required` \| `preferred` \| `discouraged` |
+| `CAD_WEBAUTHN_TIMEOUT_MS` | no | `120000` | Browser ceremony timeout; the server challenge lifetime is capped to the same window |
+| `CAD_WEBAUTHN_MAX_CREDENTIALS` | no | `10` | Max passkeys/security keys per user |
+| `CAD_WEBAUTHN_RATE_LIMIT` | no | `10` | Ceremony POSTs per IP per window (`<= 0` disables) |
+| `CAD_WEBAUTHN_RATE_SCALE` | no | `60000` | WebAuthn rate window in milliseconds |
 | `CAD_DAG_INTRO_MS` | no | `1200` | First-load DAG/repo intro animation duration |
 | `CAD_DAG_MAX_NODES` | no | `150` | Newest nodes rendered in the public project DAG (older nodes stay in the data and remain reachable by node URL; a non-positive value falls back to the default) |
 | `CAD_DAG_INTRO_MAX_NODES` | no | `60` | Skip the DAG intro animation when the project has more nodes than this (a non-positive value falls back to the default) |
@@ -2445,6 +2466,14 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   headless Chromium checked 1440px and 390px without horizontal overflow.
   Phase 9 is complete.
 
+**Post-1.0 — WebAuthn / passkeys (in progress)**
+- G1 (shipped): `wax_` 0.7 dependency, `webauthn_credentials` store, `CoseKey`
+  type, challenge lifecycle, attestation/assertion verification, credential
+  CRUD, sign-count rules, and the `CAD_WEBAUTHN_*` boot validation.
+- G2–G5 (pending): account-security registration UI, passkey sign-in page,
+  management/recovery, rate limiting, session hardening, and the browser/key
+  matrix. See `docs/webauthn-plan.md`.
+
 ---
 
 ## 14. Non-Goals
@@ -2760,6 +2789,28 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       treated as `false`, so the default summary path no longer raises after a
       successful job and the exit status reflects the job result. The
       `POST /import` / `GET /import/:id` API and `--json` were unaffected.
+- [x] **Passkey QR and YubiKey UX:** resolved — use the browser's native
+      cross-device WebAuthn (hybrid) QR; Cadence renders no QR. A YubiKey
+      5-series uses USB/NFC with user verification and discoverable
+      credentials. An app-rendered pairing QR (kiosk/TV or phone app) remains a
+      separate feature and is not adopted.
+- [x] **WebAuthn implementation:** resolved — `wax_` 0.7 behind a
+      Cadence-owned layer on AshAuthentication 4.15.1; the credential table is
+      shaped to match the AA5 WebAuthn strategy. G1 (store, verification,
+      config) ships; registration/sign-in UI and hardening follow. Revisit the
+      AA5 strategy when 5.0 is stable.
+- [x] **WebAuthn attestation policy:** resolved — `none`; no FIDO MDS, AAGUID
+      allowlist, or enterprise attestation. Possession plus user verification
+      is the assurance model.
+- [x] **Passkey-only accounts and recovery:** resolved for v1 — registration
+      requires an existing OAuth/demo account, and OAuth is the recovery path.
+      A no-OAuth, YubiKey-only deployment would need recovery codes or an
+      operator path and is deferred.
+- [x] **WebAuthn user verification:** resolved — `required` for both
+      ceremonies; U2F-only keys are unsupported and fail with a clear error.
+- [ ] **Conditional UI and passkey step-up:** deferred — conditional/autofill
+      credential UI and a fresh passkey assertion before minting a daemon PAT
+      are later hardening slices.
 - [ ] **Image publishing / CI:** `docker-compose.prod.yml` builds
       `cadence-server:prod` (or `CAD_SERVER_IMAGE`) locally and the image is
       otherwise operator-managed. Registry publishing, version pinning, and a
