@@ -80,6 +80,9 @@ defmodule Cadence.ServerWeb.ProjectLiveTest do
     assert html =~ "sandbox node"
     assert html =~ "dag-node intro default selected"
     assert has_element?(view, "a[href='/p/demo/n/#{functioning.id}']")
+    assert has_element?(view, "div#node-pane-#{functioning.id}-node-[phx-update=replace]")
+    assert has_element?(view, "section.repo-panel.reveal")
+    assert html =~ "--pane-delay:"
     assert html =~ "README.md"
     assert html =~ "src"
     assert html =~ "Functioning"
@@ -95,11 +98,17 @@ defmodule Cadence.ServerWeb.ProjectLiveTest do
     tree_html = render_patch(view, "/p/demo/n/#{functioning.id}/tree/src")
     assert tree_html =~ "app.ex"
     refute tree_html =~ "Functioning</h1>"
+    assert has_element?(view, "div#node-pane-#{functioning.id}-tree-src[phx-update=replace]")
 
     file_html = render_patch(view, "/p/demo/n/#{functioning.id}/blob/src/app.ex")
     assert file_html =~ "defmodule Demo"
     assert file_html =~ "line-number"
     assert file_html =~ "src/app.ex"
+
+    assert has_element?(
+             view,
+             "div#node-pane-#{functioning.id}-blob-src-app-ex[phx-update=replace]"
+           )
   end
 
   test "renders canonical metadata for project and tree URLs", %{
@@ -904,6 +913,20 @@ defmodule Cadence.ServerWeb.ProjectLiveTest do
       refute html =~ "Members ("
     end
 
+    test "a malformed run_action payload is refused without navigating", %{
+      conn: conn,
+      owner: owner,
+      visible: visible
+    } do
+      {:ok, view, _html} = live(signed_conn(conn, owner), "/p/auth-demo")
+      render_patch(view, "/p/auth-demo/n/#{visible.id}")
+
+      html = render_click(view, "run_action", %{})
+
+      assert html =~ "Only the project owner or a trusted member can run actions."
+      assert has_element?(view, "div#node-pane-#{visible.id}-node-")
+    end
+
     test "owner raw view reveals a quarantined snapshot and can be toggled off", %{
       conn: conn,
       owner: owner,
@@ -958,9 +981,10 @@ defmodule Cadence.ServerWeb.ProjectLiveTest do
 
   test "renders the empty state", %{conn: conn} do
     insert_project("empty")
-    {:ok, _view, html} = live(conn, "/p/empty")
+    {:ok, view, html} = live(conn, "/p/empty")
 
     assert html =~ "No commits yet."
+    assert has_element?(view, "div#node-pane-empty[phx-update=replace]")
   end
 
   test "renders a not-found page for an unknown project", %{conn: conn} do
