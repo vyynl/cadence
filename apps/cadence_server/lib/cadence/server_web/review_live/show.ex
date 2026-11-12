@@ -44,7 +44,7 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
     PublicContent
   }
 
-  alias Cadence.ServerWeb.Components.Repo
+  alias Cadence.ServerWeb.Components.ProposalResult
   alias Cadence.ServerWeb.Presentation
   alias Cadence.ServerWeb.ReviewAccess
   alias Cadence.Shared.UUID
@@ -219,67 +219,12 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
           </section>
 
           <section class="proposal-result">
-            <h2>Result</h2>
-
-            <%= cond do %>
-              <% review.isolated? -> %>
-                <Repo.quarantine
-                  eyebrow="Protected proposal"
-                  title="Result hidden for review"
-                  body="The meld result is hidden while a critical incident is open. Resolve it before deciding, or reject and re-propose."
-                />
-              <% review.result == :none -> %>
-                <p class="note">Promotion proposals have no meld result.</p>
-                <p :if={review.target_node}>
-                  <a href={~p"/p/#{@project.slug}/n/#{review.target_node.id}"}>
-                    View the target node
-                  </a>
-                </p>
-                <p :if={is_nil(review.target_node)} class="note">The target node is not available.</p>
-              <% true -> %>
-                <%= case review.result do %>
-                  <% {:ok, result} -> %>
-                    <%= if result.quarantined? do %>
-                      <Repo.quarantine
-                        eyebrow="Protected proposal"
-                        title="Result hidden for review"
-                        body="The meld result is hidden while it is reviewed for sensitive content."
-                      />
-                    <% else %>
-                      <p class="note">
-                        {result.summary.added} added · {result.summary.modified} modified · {result.summary.deleted} deleted
-                        — compared with the first parent.
-                      </p>
-
-                      <ul :if={result.files != []} class="file-tree">
-                        <li :for={file <- result.files}>
-                          <div class="file-row">
-                            <span class={Presentation.file_status_class(file.status)}>
-                              {file.status}
-                            </span>
-                            <span class="file-name">{file.path}</span>
-                          </div>
-                        </li>
-                      </ul>
-
-                      <p :if={result.files == []} class="note">
-                        No file changes against the first parent.
-                      </p>
-
-                      <p :if={result.hidden_count > 0} class="note">
-                        {result.hidden_count} {if result.hidden_count == 1, do: "file", else: "files"} hidden for security.
-                      </p>
-
-                      <p :if={result.truncated?} class="note">The file list is truncated.</p>
-                    <% end %>
-                  <% {:error, :missing_objects} -> %>
-                    <p class="note">The meld result is not available yet.</p>
-                  <% {:error, :too_large} -> %>
-                    <p class="note">The result is too large to review in the browser.</p>
-                  <% _other -> %>
-                    <p class="note">The meld result is not available yet.</p>
-                <% end %>
-            <% end %>
+            <ProposalResult.result
+              result={if review.isolated?, do: :isolated, else: review.result}
+              audience={:review}
+              project_slug={@project.slug}
+              target_node={review.target_node}
+            />
 
             <div :if={review.integrity != :ok} class="callout callout-warning">
               <p class="note">
@@ -453,8 +398,9 @@ defmodule Cadence.ServerWeb.ReviewLive.Show do
       target_node: ProposalView.target_node(proposal),
       isolated?: isolated?,
       # Isolation hides the result, so its walks and cache entry would be dead
-      # work; the template's first branch and both decision helpers read
-      # `isolated?` before `result`.
+      # work. `isolated?` is read only by `approvable?/1` and `blocked_reason/1`;
+      # the template maps it to `:isolated` and never reads `result` here, which
+      # stays nil for an isolated proposal.
       result: if(isolated?, do: nil, else: ProposalView.result(project, proposal)),
       integrity: Proposals.result_integrity(project.id, proposal),
       result_node: Proposals.result_node(proposal),

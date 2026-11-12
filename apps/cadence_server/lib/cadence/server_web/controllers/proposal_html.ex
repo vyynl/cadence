@@ -5,7 +5,7 @@ defmodule Cadence.ServerWeb.ProposalHTML do
 
   use Cadence.ServerWeb, :html
 
-  alias Cadence.ServerWeb.Components.Repo
+  alias Cadence.ServerWeb.Components.ProposalResult
   alias Cadence.ServerWeb.Presentation
 
   embed_templates "proposal_html/*"

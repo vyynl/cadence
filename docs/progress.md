@@ -936,6 +936,19 @@ is optional and recorded in spec §16.
   lookup still runs on a hit (it is part of the key). Spec §7.6/§12.6 and
   `.env.example` updated. Gate: 1224 tests (332 + 649 + 243), format and
   dev/prod compile clean.
+- **Audit 100 slice, A2 (2026-11-11)** — the proposal result block is one
+  component. `Cadence.ServerWeb.Components.ProposalResult.result/1` owns the
+  heading, the isolation/quarantine sentinels, the promotion branch, the
+  payload branch (summary, file rows via `Presentation.file_status_class/1`,
+  hidden-count pluralisation, truncation note) and the three error branches;
+  the public page's "Approval is not available" callout, the review page's
+  integrity notice, and both `<section>` wrappers stay with the callers. The two
+  isolation sentinels remain deliberately different, selected by an `audience`
+  assign: the public copy says what stays visible, the review copy says how to
+  unblock. Clean payloads render byte-identically for both audiences (pinned by
+  a direct string-equality test). The duplicated-markup note is removed from
+  this file. Gate: 1240 tests (332 + 665 + 243), format and dev/prod compile
+  clean.
 - **Audit 100 slice, wave 2 (2026-11-11)** — **S1 + S2 + S3 shipped.**
   **S1:** `sobelow` 0.18.1 is a dev/test-only `cadence_server` dependency (spec
   §11 row; run from `apps/cadence_server`, the umbrella root refuses). Its scan
@@ -1697,11 +1710,6 @@ expected for the closeout follow-ups.
   tokens alias existing palette values, so contrast is inherited, but the
   light/dark render was not exercised visually. The optional demo check in
   **Next** covers it.
-- **Result markup is still duplicated (4c-2 → 4e)** — the review page repeats
-  the public proposal result block (`proposal_html/show.html.heex`) with its own
-  isolation sentinel. The format/badge helpers now live in
-  `Cadence.ServerWeb.Presentation` (4e), so the remaining work is the result
-  component itself; extract it when the public page next changes.
 - **`{:nodes_pushed, ...}` semantics (4c-1)** — emitted only for meld
   approvals (plan D11), including when an already existing node was merely
   re-pinned; promotions broadcast `{:proposal_decided, ...}` alone, so 4d
