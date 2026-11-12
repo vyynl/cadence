@@ -9,6 +9,8 @@ defmodule Cadence.Server.Accounts do
 
   use Ash.Domain
 
+  require Ash.Query
+
   resources do
     resource(Cadence.Server.Accounts.User)
     resource(Cadence.Server.Accounts.Token)
@@ -37,18 +39,48 @@ defmodule Cadence.Server.Accounts do
   @doc """
   Load users by ID for the membership read view.
 
-  Returns a `%{user_id => user}` map; missing/deleted users are omitted.
+  Reads the whole list in one query (`id in ids`). Returns a
+  `%{user_id => user}` map; users that are missing/deleted are omitted, as are
+  ids that cannot be cast to a UUID (any term is accepted and dropped). A list
+  with no usable ids returns `%{}` without querying, so the membership panel
+  never pays for an empty panel.
+
+  Keys are always canonical lowercase UUID strings, even when an id is passed
+  in the raw 16-byte form; a caller holding the raw form must normalise it
+  (`Ecto.UUID.load!/1`) before `Map.get/2`.
+
+  Reads are batched but not swallowed: an infrastructure failure raises
+  (`Ash.read!`), because a partial identity map silently degrades the UI.
   """
-  @spec users_by_ids([Ecto.UUID.t() | String.t()]) :: %{
+  @spec users_by_ids([term()]) :: %{
           optional(String.t()) => Ash.Resource.record()
         }
   def users_by_ids(ids) when is_list(ids) do
-    Enum.reduce(ids, %{}, fn id, acc ->
-      case Ash.get(Cadence.Server.Accounts.User, id, domain: __MODULE__) do
-        {:ok, user} -> Map.put(acc, user.id, user)
-        _ -> acc
-      end
-    end)
+    ids =
+      ids
+      |> Enum.map(&cast_id/1)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    case ids do
+      [] ->
+        %{}
+
+      ids ->
+        Cadence.Server.Accounts.User
+        |> Ash.Query.filter(id in ^ids)
+        |> Ash.read!(domain: __MODULE__)
+        |> Map.new(&{&1.id, &1})
+    end
+  end
+
+  # Ids are cast before the query: one malformed element would otherwise fail
+  # the whole batch, so a bad id is dropped rather than poisoning every lookup.
+  defp cast_id(id) do
+    case Ecto.UUID.cast(id) do
+      {:ok, uuid} -> uuid
+      :error -> nil
+    end
   end
 
   @doc """
