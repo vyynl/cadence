@@ -148,8 +148,14 @@ T1, D1) lands at ~97 and costs about half the effort.
 **T4. Add CI.**
 - One workflow: `mix format --check-formatted`, dev+prod compile with
   `--warnings-as-errors`, `mix deps.get`, Postgres service on 55432,
-  `mix test`, `mix test --cover`, `mix hex.audit`, `mix sobelow`, and
-  `mix deps.audit`.
+  `mix test`, `mix test --cover`, `mix hex.audit`, `mix sobelow` (from
+  `apps/cadence_server`), and `mix deps.audit --ignore-file .mix_audit.ignore`
+  from the umbrella root.
+- Guard the CVE scan against a silent pass: mix_audit reads a git clone at
+  `~/.local/share/elixir-security-advisories-mirego` and ignores clone/pull
+  failures, so assert it is populated after the run —
+  `find ~/.local/share/elixir-security-advisories-mirego/packages -name '*.yml' -print -quit`
+  must print a path.
 - Acceptance: a PR runs the gate; the badge/link is in the README.
 - Effort: half a session (plus operator setup for the runner).
 
@@ -157,9 +163,12 @@ T1, D1) lands at ~97 and costs about half the effort.
 
 **D1. Add a CVE scanner.**
 - Add `{:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false}` (spec §11
-  row) and run `mix deps.audit` in CI. `hex.audit` stays for retirement.
-- Acceptance: `mix deps.audit` exits 0; a documented ignore entry exists only
-  if a finding is genuinely not applicable.
+  row) and run `mix deps.audit --ignore-file .mix_audit.ignore` from the
+  umbrella root in CI. `hex.audit` stays for retirement.
+- Acceptance: `mix deps.audit --ignore-file .mix_audit.ignore` exits 0 when
+  run from the umbrella root; any documented ignore is by exact advisory ID
+  and time-boxed (spec §16). The bare command exits 1 (2.1.5 has no
+  auto-discovery) and an app-local run scans no lockfile.
 - Effort: 1 hour.
 
 **D2. Bump `libgraph` to 0.17.1.**

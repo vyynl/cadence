@@ -54,6 +54,7 @@ defmodule Cadence.Server.MixProject do
       {:hammer, "~> 7.5"},
       {:sourceror, "~> 1.7", only: [:dev, :test]},
       {:sobelow, "~> 0.18", only: [:dev, :test], runtime: false},
+      {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
       {:lazy_html, ">= 0.1.0", only: :test},
       {:slipstream, "~> 1.2", only: [:dev, :test]}
     ]

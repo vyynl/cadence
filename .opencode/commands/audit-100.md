@@ -104,7 +104,9 @@ more than one writer at a time. The brief must contain:
    `MIX_ENV=prod mix compile --warnings-as-errors`,
    `mix test`.
 3. Run the item's acceptance checks from the plan (e.g. `mix xref graph`,
-   `mix sobelow --exit medium`, `mix deps.audit`, `mix test --cover`).
+   `mix sobelow --exit medium` from `apps/cadence_server`,
+   `mix deps.audit --ignore-file .mix_audit.ignore` from the umbrella root,
+   `mix test --cover`).
 4. If it fails, send precise findings back to the **same** child session
    (`subagent` with `sessionID`). Max 3 attempts per item, then mark BLOCKED.
 

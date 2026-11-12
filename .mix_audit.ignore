@@ -1,0 +1,65 @@
+# mix_audit 2.1.5 ignore list (docs/spec.md §11, §16).
+#
+# FORMAT: exactly one advisory ID per line, nothing else.
+#   - Comments must start with "#" at column 0. A whitespace-prefixed "#" line
+#     is parsed as an ID: it is harmless, but it is not a comment.
+#   - Trailing whitespace or a CRLF ending silently disables that entry (lines
+#     are split on "\n" and compared by exact string). This fails closed: the
+#     un-ignored advisory is reported again.
+#   - No wildcards and no package names exist. Ignoring an ID is narrower than
+#     ignoring the package, so any new hackney advisory still fails.
+# `--ignore-file` is the only file-backed key and 2.1.5 has no auto-discovery,
+# so bare `mix deps.audit` ignores nothing. Run from the umbrella root (an
+# app-local run finds no mix.lock and scans nothing):
+#
+#   mix deps.audit --ignore-file .mix_audit.ignore
+#
+# SCOPE: the audit reads every lockfile at the given root, so it covers the
+# whole umbrella lock — dev/test-only packages included, not just prod deps.
+#
+# SILENT PASS: the advisory DB is a git clone at
+# ~/.local/share/elixir-security-advisories-mirego that mix_audit refreshes
+# with `git pull`; both clone and pull failures are ignored, so a missing or
+# stale checkout prints "No vulnerabilities found." anyway. CI must assert the
+# DB is populated after the run (needs the `git` binary and network):
+#
+#   test -n "$(find ~/.local/share/elixir-security-advisories-mirego/packages \
+#     -name '*.yml' -print -quit)" || { echo "advisory DB missing"; exit 1; }
+#
+# Accepted risk, time-boxed: re-review by 2027-02-11, or earlier when
+# axiom_ai/httpoison relax their hackney constraint or the LLM transport
+# moves to Req (Req/Finch instead of HTTPoison/hackney).
+#
+# hackney 1.25.0 is a prod transitive dep pinned below 2.0 by axiom_ai
+# (`~> 1.9`) and httpoison (`~> 1.21`). ex_aws's `~> 1.16` is
+# `optional: true`, and tesla already accepts `~> 1.21 or >= 4.0.2`, so
+# neither is the blocker. Every patched release is 4.x and no 1.x patch
+# exists. No custom `cacert`/`cacerts` option is set anywhere (hackney always
+# uses certifi CA certs).
+
+# GHSA-gp9c-pm5m-5cxr — CVE-2026-47071, "SOCKS5 TLS upgrade ignores caller
+# timeout" (high, vulnerable >= 0.10.0, < 4.0.1): hackney's SOCKS5 proxy
+# transport (`hackney_socks5.erl`) performs the TLS upgrade with no timeout.
+# Mitigation: SOCKS5 is unreachable here — neither Cadence, HTTPoison, nor
+# axiom_ai configures a proxy or `socks5_*` option, so that transport is never
+# started.
+GHSA-gp9c-pm5m-5cxr
+
+# GHSA-j9wq-vxxc-94wf — CVE-2026-47075, "CR/LF injection in query parameter"
+# (moderate, vulnerable < 4.0.1). Mitigation: query strings are built from
+# fixed provider paths in axiom_ai; no user input reaches a query parameter,
+# and the only host is `CAD_LLM_BASE_URL`.
+GHSA-j9wq-vxxc-94wf
+
+# GHSA-mp55-p8c9-rfw2 — CVE-2026-47069, "CRLF injection via unvalidated
+# `domain` and `path` options" (low, vulnerable >= 0.9.0, < 4.0.1).
+# Mitigation: Cadence never passes the `domain`/`path` cookie/header options;
+# requests carry only internal headers plus `CAD_LLM_BASE_URL`.
+GHSA-mp55-p8c9-rfw2
+
+# GHSA-pj7v-xfvx-wmjq — CVE-2026-47076, "SSRF allowlist bypass in
+# hackney_url:normalize/2 via percent-encoded host" (moderate, vulnerable
+# >= 0.13.0, < 4.0.1). Mitigation: Cadence configures no host allowlist for
+# hackney to bypass and fetches no user-supplied URL; the single host is
+# `CAD_LLM_BASE_URL`.
+GHSA-pj7v-xfvx-wmjq

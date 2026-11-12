@@ -1525,6 +1525,7 @@ inserts); the daemon can mark only that node failed and retry the rest.
 | Phoenix auth routes | `ash_authentication_phoenix` |
 | Ash DSL formatting / codegen | `sourceror` (dev/test only) |
 | Static security analysis | `sobelow` (dev/test only, `~> 0.18`) |
+| CVE scanning (Mix dependencies) | `mix_audit` (dev/test only, `~> 2.1`; declared in `cadence_server`); run `mix deps.audit --ignore-file .mix_audit.ignore` from the **umbrella root** — an app-local run finds no `mix.lock` and scans nothing. Audits the whole umbrella lock (dev/test packages included). The advisory DB is a `~/.local/share/elixir-security-advisories-mirego` git clone, so a missing or stale checkout still prints a clean pass; CI must guard it |
 | LiveView test DOM | `lazy_html` (test only; required by `Phoenix.LiveViewTest`) |
 | Docker API | `ex_docker_api` `~> 1.55` (Tesla + the built-in httpc adapter; requires Elixir 1.20) |
 | Rate limiting | `Hammer` (declared in `cadence_shared`; used by the daemon's `LLMRateLimit` and the server's `LLMRateLimit` / `MeldWorker` / `SyncRateLimit`) |
@@ -2560,6 +2561,25 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       `cadence-server:prod` (or `CAD_SERVER_IMAGE`) locally and the image is
       otherwise operator-managed. Registry publishing, version pinning, and a
       build pipeline are deferred until a registry workflow exists.
+- [ ] **Accepted hackney advisories (audit D1, time-boxed):** `mix deps.audit`
+      reported four advisories against hackney 1.25.0 — GHSA-gp9c-pm5m-5cxr
+      (SOCKS5 TLS upgrade ignores the caller timeout, high),
+      GHSA-j9wq-vxxc-94wf (query CR/LF injection, moderate),
+      GHSA-mp55-p8c9-rfw2 (CRLF injection via `domain`/`path` options, low),
+      and GHSA-pj7v-xfvx-wmjq (SSRF allowlist bypass, moderate). They are
+      ignored by exact advisory ID in `.mix_audit.ignore` (not by package), so
+      a new hackney advisory still fails. hackney is pinned below 2.0 by
+      `axiom_ai ~> 1.9` and `httpoison ~> 1.21` (`ex_aws ~> 1.16` is
+      `optional: true` and tesla already accepts `~> 1.21 or >= 4.0.2`, so
+      neither is the blocker); every patched release is 4.x and no 1.x patch
+      exists, so upgrading requires changing the LLM transport. Mitigations are
+      per advisory and distinct: no SOCKS5 proxy is configured anywhere, query
+      strings come from fixed provider paths with no user input, no
+      `domain`/`path` option is passed, and there is no host allowlist to
+      bypass (the single host is `CAD_LLM_BASE_URL`); no custom
+      `cacert`/`cacerts` option is set. Revisit by 2027-02-11 or when
+      `axiom_ai`/`httpoison` relax their hackney constraint or the LLM
+      transport moves to Req.
 
 ---
 
