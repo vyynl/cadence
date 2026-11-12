@@ -911,6 +911,31 @@ is optional and recorded in spec §16.
   (prefix from the repo module name) filtered to `source: "users"` pins one
   query for N ids and zero for `[]`. Gate: 1210 tests (332 + 635 + 243),
   Sobelow exit 0, format and dev/prod compile clean.
+- **Audit 100 slice, P2 (2026-11-11)** — `Portfolio.preview_node/1` resolves in
+  one `LIMIT 1` statement instead of up to three sequential `Repo.one` calls.
+  The `ORDER BY` is the spec §4.4 cascade as a three-tier `CASE` (pinned,
+  functioning, else) with `created_at DESC, id DESC` inside each tier — a plain
+  lexicographic `pinned DESC, functioning DESC` would have preferred an older
+  pinned+functioning node over the newest pinned node, diverging from
+  `Cadence.Shared.DAG.preview_node/1`. A telemetry counter over
+  `[:cadence, :server, :repo, :query]` (`source: "nodes"`) pins one query for
+  the worst case; new cases pin the multi-pin and tier-1 recency rules. Gate:
+  1214 tests (332 + 639 + 243), format and dev/prod compile clean.
+- **Audit 100 slice, P3 (2026-11-11)** — the public proposal result is memoized.
+  `Cadence.Server.ProposalCache` is a GenServer owning a bounded, `:protected`
+  ETS table (FIFO, `CAD_PROPOSAL_CACHE_ENTRIES` default 256, `0` disables, bound
+  enforced on writes). The key is content-derived (`project_id`,
+  `result_commit_sha`, `first_parent_sha`, `max_files`, `scan_max_files`,
+  `scan_max_bytes`) and the value is the already-filtered payload (paths and
+  statuses only), so §7.6 is unchanged. Errors and `:none` are never stored;
+  `result_integrity/3` and `verify_resolution/1` never read it. There is no
+  invalidation hook: a decision changes only `status`/`decided_at`, and the
+  payload is a pure function of immutable commits plus caps. Isolation stays
+  uncached, and `ReviewLive.Show` now binds it first and skips the result walks
+  (and the cache entry) entirely for an isolated proposal. The first-parent
+  lookup still runs on a hit (it is part of the key). Spec §7.6/§12.6 and
+  `.env.example` updated. Gate: 1224 tests (332 + 649 + 243), format and
+  dev/prod compile clean.
 - **Audit 100 slice, wave 2 (2026-11-11)** — **S1 + S2 + S3 shipped.**
   **S1:** `sobelow` 0.18.1 is a dev/test-only `cadence_server` dependency (spec
   §11 row; run from `apps/cadence_server`, the umbrella root refuses). Its scan
@@ -996,35 +1021,26 @@ is optional and recorded in spec §16.
 ## Next
 
 **Audit 100 cleanup — slice summary** (see `docs/audit-100-plan.md`).
-Shipped this run: T1 (fixed sleeps), T2 (80% coverage floor + AGENTS docs),
-S1 (Sobelow 0.18 + two XSS fixes), S2 (`/sync/*` per-user rate limit),
-S3 (CSP; Sobelow now exits 0), P1 (`users_by_ids/1` batching). That completes
-the 6-item slice; the rest is listed below in wave order.
+Shipped: T1 (fixed sleeps), T2 (80% coverage floor + AGENTS docs), S1 (Sobelow
+0.18 + two XSS fixes), S2 (`/sync/*` per-user rate limit), S3 (CSP; Sobelow now
+exits 0), P1 (`users_by_ids/1` batching), P2 (one-query preview node), P3
+(content-keyed proposal-result cache). Performance is now clean; architecture,
+dependencies, CI, and the exemption notes remain.
 
 **Remaining audit items, in wave order** (resume with `/audit-100 <IDs>`):
 
-1. **P2** — fold `Portfolio.preview_node/1` into one `ORDER BY pinned DESC,
-   functioning DESC, created_at DESC, id DESC LIMIT 1`; the three precedence
-   tests in `portfolio_test.exs` pin it.
-2. **P3** — cache the public proposal diff. Research says key on content, not
-   proposal id: `{project_id, result_commit_sha, first_parent_sha, max_files,
-   scan_max_files, scan_max_bytes}`, value is the `%{quarantined?, truncated?,
-   hidden_count, summary, files}` payload only. Keep `ProposalView.isolated?/1`
-   uncached and **before** the lookup (one indexed `EXISTS`), never cache
-   `{:error, _}`, bound with `CAD_PROPOSAL_CACHE_ENTRIES` (256, 0 disables), and
-   never route `result_integrity/3` or `verify_resolution/1` through it.
-3. **A2** — extract `Components.ProposalResult`; the two isolation sentinels
+1. **A2** — extract `Components.ProposalResult`; the two isolation sentinels
    differ by copy ("Resolve it before deciding" vs read-only) and must stay.
-4. **A1** — split `ProjectLive` into a plain `ProjectPane` module + function
+2. **A1** — split `ProjectLive` into a plain `ProjectPane` module + function
    component (not a LiveComponent: all 16 test event sites dispatch at the root
    view). Target 8 outgoing edges; keep the `phx-update="replace"` pane id, the
    `{node_id, blocking_node?}` quarantine cache as one unit, and `raw_view?`
    derivation in `handle_params`. Extraction order is in the run ledger.
-5. **D1** — `mix_audit` **needs a new dev/test dependency + spec §11 row and
+3. **D1** — `mix_audit` **needs a new dev/test dependency + spec §11 row and
    explicit user approval** before the child starts.
-6. **D2** — `libgraph` 0.17.1; run `graph_test.exs`, the DAG layout tests, and
+4. **D2** — `libgraph` 0.17.1; run `graph_test.exs`, the DAG layout tests, and
    the project page.
-7. **T4** — CI workflow last, so it can call `sobelow` (from
+5. **T4** — CI workflow last, so it can call `sobelow` (from
    `apps/cadence_server`) and `mix deps.audit`. `mix test.coverage` needs
    `mix test --cover --export-coverage default` first. A3/P4/T3 are
    documentation-only exemptions; fold their one-line rationales into the final
@@ -1132,6 +1148,22 @@ expected for the closeout follow-ups.
 
 ## Spec Deltas / Open Items
 
+- **Audit 100 P2/P3 notes (2026-11-11)** — (a) `Portfolio.preview_node/1` is a
+  three-tier `CASE` rather than a lexicographic `pinned DESC, functioning DESC`
+  sort: §4.4 consults `functioning` only when no node is pinned, so the
+  lexicographic form would change which pinned node wins. (b) The proposal-result
+  cache is keyed on the immutable content plus the caps, so a decision
+  deliberately does **not** invalidate it; only a status/timestamp changes, and
+  the page renders those from the row. (c) Isolation (`ProposalView.isolated?/1`)
+  is never cached and is now bound before the result on the review page, which
+  skips the walks for an isolated proposal. (d) A cache hit still performs the
+  single indexed first-parent lookup, because the parent SHA is part of the key.
+  (e) The entry bound is enforced on writes, so lowering
+  `CAD_PROPOSAL_CACHE_ENTRIES` takes effect on the next store, not on reads.
+  (f) `nodes.created_at` is nullable at the DB level; the preview tie-break uses
+  `created_at DESC` (Postgres sorts NULLs first under `DESC`), but the changeset
+  and sync always populate it, so this is pre-existing and unreachable through
+  Ecto.
 - **Phase 9c implementation notes (2026-11-11)** — (a) The parent policy is
   enforced for **new rows** in `insert_node/4`, not during payload parsing: a
   re-push of an already-stored node must stay idempotent even if
@@ -1739,6 +1771,13 @@ expected for the closeout follow-ups.
   the review UI (optional 4d/UI-pass work).
 
 ## Last Updated
+2026-11-11 (audit 100, wave 1 of run 2) — **P2 + P3 shipped** (`28008ed`,
+`441be8b`). Performance is now clean: the preview resolver is one query and the
+public proposal result is content-keyed and cached. Wave boundary gate: 1224
+tests (332 shared + 649 server + 243 daemon), format and dev/prod compile
+clean; log at `/tmp/opencode/audit-100-gate.log`. Next wave: **A2** (extract
+`Components.ProposalResult`) then **A1** (`ProjectLive` split, 19 → ≤8 outgoing
+xref edges). Ledger: `.claude/plans/audit-100/progress.md`.
 2026-11-11 (audit 100, slice complete) — **T1, T2, S1, S2, S3, P1 shipped**
 (`73c9d65`, `0bb6dfc`, `9113d8e`, `7564087`, `ed382b1`, `c4d7cb9`) — the
 6-item slice is done. Coverage has an explicit 80% floor; fixed sleeps are
