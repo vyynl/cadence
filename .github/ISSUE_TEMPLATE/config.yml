@@ -1,0 +1,7 @@
+# Cadence issue forms.
+#
+# Blank issues are disabled so reports arrive with the fields needed to act on
+# them. Security reports must not go through this tracker at all; see
+# SECURITY.md. A contact link for GitHub private vulnerability reporting can be
+# added here once the repository has a public home.
+blank_issues_enabled: false

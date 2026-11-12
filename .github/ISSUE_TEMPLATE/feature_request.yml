@@ -1,0 +1,73 @@
+name: Feature request
+description: Propose a change to Cadence. Describe the problem before the solution.
+title: "[feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Cadence is spec-first: `docs/spec.md` is the contract. Check the
+        relevant section, §16 Open Decisions, and the known limitations in
+        `docs/release-notes.md` before filing. A new dependency must be added to
+        the §11 table before implementation.
+
+        **Do not use this form for a security vulnerability.** Follow
+        `SECURITY.md` and report privately through GitHub Security Advisories.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of Cadence would change?
+      options:
+        - cadence_shared (schemas, sync protocol, GitStore, LLM client)
+        - cadence_daemon (watcher, commit queue, socket API, doc automation)
+        - cadence_server (Phoenix web UI, sync API, proposals, actions)
+        - cadence.nvim (Neovim plugin)
+        - Documentation (spec, guides, release notes)
+        - Cross-cutting / not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can you not do today, or what is painful? Describe the use case rather than the implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: The behavior you want, which apps it touches, and any spec section it would change.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other designs or workarounds, and why the current behavior is not enough.
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Scope and impact
+      description: Does this need a new dependency (spec §11), a database migration, a CAD_* config variable, or a decision recorded in spec §16? Is it backward compatible?
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched existing issues, the relevant spec sections, and the known limitations in docs/release-notes.md.
+          required: true
+        - label: This is not a security vulnerability; security reports go through SECURITY.md.
+          required: true
+        - label: I am willing to implement or test this change.
+          required: false

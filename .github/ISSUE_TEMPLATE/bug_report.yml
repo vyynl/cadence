@@ -1,0 +1,117 @@
+name: Bug report
+description: Report a defect in the daemon, server, plugin, object store, or sync.
+title: "[bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Cadence is spec-first: `docs/spec.md` is the
+        contract, and `docs/release-notes.md` lists known limitations. Please
+        check both before filing.
+
+        **Do not use this form for a security vulnerability.** Follow
+        `SECURITY.md` and report privately through GitHub Security Advisories.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of Cadence is affected?
+      options:
+        - cadence_shared (schemas, sync protocol, GitStore, LLM client)
+        - cadence_daemon (watcher, commit queue, socket API, doc automation)
+        - cadence_server (Phoenix web UI, sync API, proposals, actions)
+        - cadence.nvim (Neovim plugin)
+        - Documentation (spec, guides, release notes)
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: The release version, or the commit SHA you built from.
+      placeholder: "1.0.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment
+      options:
+        - Source checkout (mix run / mix phx.server)
+        - Daemon release (mix release)
+        - docker compose demo stack
+        - docker compose production stack
+        - Neovim plugin only
+        - Not applicable
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: OS and runtime
+      description: OS/arch, plus the Elixir and OTP versions for a source checkout, or the Docker version when actions are involved.
+      placeholder: "Linux x86_64, Elixir 1.20.1, OTP 29"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: The smallest sequence that reproduces the problem. Include commands, socket/HTTP calls, repository shape, and relevant CAD_* settings with secrets removed.
+      placeholder: |
+        1. Start the daemon with ...
+        2. Register a project containing ...
+        3. Run ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you expected to happen, and which spec section you believe applies.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead. Paste stack traces or error messages here.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Server/daemon logs, browser console output, or the failing test output. Remove tokens, cookies, CAD_SECRET_KEY_BASE, CAD_LLM_API_KEY, CAD_AUTH_TOKEN, and personal data.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Workarounds, whether this is a regression, and anything else a reviewer should know.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched existing issues and the known limitations in docs/release-notes.md.
+          required: true
+        - label: This is not a security vulnerability; security reports go through SECURITY.md.
+          required: true
+        - label: I removed secrets, tokens, and personal data from this report.
+          required: true
