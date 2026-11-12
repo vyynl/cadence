@@ -49,6 +49,7 @@ is complete; remaining work is optional and recorded in spec §16 and
 | `ui-notes.md` | UI/tuning backlog — drop observations here between sessions |
 | `opencode.md` | Agent tooling: skills, formatter, gates, artifact conventions |
 | `phase-9-prep.md` | Phase 9 import brief: Git history → Cadence DAG (9a–9d shipped) |
+| `webauthn-plan.md` | Approved WebAuthn/passkey (FIDO2) design: YubiKey, recovery, schema, phases |
 | `archive/` | Completed-phase briefs and historical progress log |
 
 ## Adding a phase brief
