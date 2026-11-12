@@ -152,6 +152,48 @@ defmodule Cadence.ServerWeb.Presentation do
   def run_error_label(_reason), do: "The action failed to run."
 
   @doc """
+  The Git import author display name for a node's `session_metadata`, or `nil`.
+
+  Provenance is only trusted when the metadata is a map, its `"import"` value
+  is a map, and that map says `"source" => "git"` (the same marker the server's
+  parent policy checks, spec §10.2). The author is trimmed, and a blank or
+  non-binary name yields `nil` so a caller can render its own placeholder.
+
+  The author **email** is deliberately not exposed here: it belongs to
+  `import_provenance/2`, which gates it on the manager audience (§7.2).
+  """
+  @spec import_author(term()) :: String.t() | nil
+  def import_author(session_metadata) do
+    case import_metadata(session_metadata) do
+      {:ok, import} -> trimmed_binary(import["author"])
+      :error -> nil
+    end
+  end
+
+  @doc """
+  Git import provenance for a node pane, or `nil` for a non-imported node.
+
+  Same gating as `import_author/1`. `email` is the trimmed
+  `session_metadata["import"]["author_email"]` **only** when `can_manage?` is
+  `true`; anonymous visitors, signed-in non-members, and viewer members always
+  get `email: nil` and see the display name at most (§7.2).
+  """
+  @spec import_provenance(term(), boolean() | nil) ::
+          %{author: String.t() | nil, email: String.t() | nil} | nil
+  def import_provenance(session_metadata, can_manage?) do
+    case import_metadata(session_metadata) do
+      {:ok, import} ->
+        %{
+          author: trimmed_binary(import["author"]),
+          email: if(can_manage? == true, do: trimmed_binary(import["author_email"]))
+        }
+
+      :error ->
+        nil
+    end
+  end
+
+  @doc """
   Parse a `?page=`-style query param into a 1-based page number.
 
   Absent, non-numeric, zero, and negative values all mean page 1. The upper
@@ -241,4 +283,23 @@ defmodule Cadence.ServerWeb.Presentation do
     minutes = div(ms, 60_000)
     "#{div(minutes, 60)}h #{rem(minutes, 60)}m"
   end
+
+  # Import metadata is trusted only when its shape and source marker agree.
+  defp import_metadata(session_metadata) when is_map(session_metadata) do
+    case session_metadata["import"] do
+      %{"source" => "git"} = import -> {:ok, import}
+      _other -> :error
+    end
+  end
+
+  defp import_metadata(_session_metadata), do: :error
+
+  defp trimmed_binary(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp trimmed_binary(_value), do: nil
 end

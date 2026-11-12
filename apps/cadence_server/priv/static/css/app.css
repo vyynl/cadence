@@ -1190,8 +1190,9 @@ code {
   text-decoration: underline;
 }
 
-/* Offset paging for run history and artifacts (spec §7.2). */
-.run-pager {
+/* Offset paging for run history, artifacts, and commit history (spec §7.2/§7.3). */
+.run-pager,
+.history-pager {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem 1rem;
@@ -1200,14 +1201,95 @@ code {
   font-size: 0.9rem;
 }
 
-.run-pager .pager-link {
+.run-pager .pager-link,
+.history-pager .pager-link {
   font-weight: 600;
   text-decoration: none;
 }
 
 .run-pager .pager-link:hover,
-.run-pager .pager-link:focus-visible {
+.run-pager .pager-link:focus-visible,
+.history-pager .pager-link:hover,
+.history-pager .pager-link:focus-visible {
   text-decoration: underline;
+}
+
+/* Public commit history (spec §7.3): newest first, 50 per page. */
+.history-list {
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  list-style: none;
+  overflow: hidden;
+}
+
+.history-list li + li {
+  border-top: 1px solid var(--line);
+}
+
+.history-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2.4fr) minmax(0, 1fr) minmax(0, 1.1fr) minmax(0, 0.7fr);
+  gap: 0.35rem 0.9rem;
+  align-items: baseline;
+  padding: 0.65rem 0.8rem;
+}
+
+.history-row:hover,
+.history-row:focus-within {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.history-message {
+  color: var(--fg);
+  font-weight: 600;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.history-message:hover,
+.history-message:focus-visible {
+  text-decoration: underline;
+}
+
+.history-author,
+.history-date {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.history-sha {
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.history-sha code {
+  font-size: 0.8rem;
+}
+
+.history-sha:hover,
+.history-sha:focus-visible {
+  color: var(--accent);
+}
+
+@media (max-width: 720px) {
+  .history-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Git import provenance and the out-of-window affordance (spec §7.3/§16). */
+.node-provenance {
+  margin: 0 0 0.35rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.node-outside-graph {
+  margin: 0.6rem 0 0;
 }
 
 .run-detail-heading {

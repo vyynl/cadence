@@ -3,8 +3,8 @@
 **Spec:** §4.1 (nodes), §5.1/§5.3 (daemon, commit pipeline), §6 (DAG), §7.3
 (web DAG), §10.1/§10.2 (push protocol), §12.6 (env contract), §13 (build
 order), §16 (open decisions).
-**Status:** approved 2026-11-11 (recommended defaults D1–D10); **9a, 9b, and 9c
-shipped 2026-11-11**; 9d–9e pending, no web-side import UI yet.
+**Status:** approved 2026-11-11 (recommended defaults D1–D10); **9a, 9b, 9c,
+and 9d shipped 2026-11-11**; 9e pending, no web-side import UI yet.
 **Dependencies:** none new. `GitStore` already reads loose objects and packs.
 
 ## Goal
@@ -168,7 +168,7 @@ Shipped as `Cadence.Daemon.Importer` (+ `ImportTasks`), `POST /import`,
 - Spec §10.2/§10.4/§12.6/§13/§16 record the exception, the parser limit, and the
   governance trade.
 
-### 9d — web scale and provenance
+### 9d — web scale and provenance (shipped 2026-11-11)
 
 - `Portfolio.list_nodes/2` with `:limit`/`:offset`; the project page renders
   the newest `CAD_DAG_MAX_NODES` and shows the count/truncation note.

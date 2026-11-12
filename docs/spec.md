@@ -634,6 +634,7 @@ The Docker action panel is a member view (§7.2), not a public one; the manifest
 file itself remains browsable as ordinary repository content.
 
 Public routes: `/` is the portfolio index, `/p/:slug` is the project home,
+`/p/:slug/history` is the paged commit history (§7.3),
 `/p/:slug/n/:node_id/tree/*path` is a directory view,
 `/p/:slug/n/:node_id/blob/*path` is a file view, and `/proposals/:token` is the
 public read-only proposal page. `/p/:slug/reviews` and
@@ -760,6 +761,27 @@ project has more nodes than `CAD_DAG_INTRO_MAX_NODES` (default 60, §12.6). A no
 whose parent falls outside the window is placed at depth 1 (as if the first
 trimmed parent were a root) and its boundary edge is omitted, so the web row
 spacing can differ from the daemon/picker depth for those nodes.
+
+**History list (public):** `/p/:slug/history` is the escape hatch for commits
+outside the render window. It is public, newest first in the same
+`created_at DESC, id DESC` order as the DAG, and pages 50 rows at a time under
+`?page=N`. Each row shows the message (redacted by the §7.6 secret filter) as a
+link to the node, the imported author's display name when the node carries
+`session_metadata["import"]["source"] == "git"` (otherwise a dash), the author
+date, and the 12-character commit SHA. Junk or non-positive page params mean
+page 1, and an out-of-range page clamps to the last page; the pager reads
+"Page M of N" and offers newer/older links. The project home's truncation note
+links here.
+
+**Import provenance:** the selected-node pane shows
+`Imported from git · <author>` when a node's
+`session_metadata["import"]["source"] == "git"`.
+The author email is shown only to the `can_manage?` (owner/trusted) audience,
+never to anonymous visitors or viewer members (§7.2). When the selected node is
+older than the rendered window, the pane shows a note that the commit is older
+than the graph, with a direct link to its History page and row
+(`/p/:slug/history?page=N#node-<id>`); the rendered count and truncation note
+still refresh on navigation.
 
 **Interactivity:** LiveView owns selection state. Hover shows a CSS tooltip
 with the commit message and node status (flags/pinned) and highlights the node;
@@ -2291,9 +2313,17 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
   `duplicate_parent`, `unknown_parent`). The endpoint parses `/sync/*` bodies
   with `CAD_SYNC_MAX_BODY_BYTES` (default 64 MiB); browser/public routes keep
   Plug's 8 MiB default.
-- 9d–9e remain: web newest-N DAG + paged History + provenance, and the
-  docs/spec/live smoke (§5.7, §7.3, §16). 9e adds the normative pipeline text
-  as §5.7.
+- 9d — web scale and provenance (shipped): 9d-1 caps the public DAG at the
+  newest `CAD_DAG_MAX_NODES` (150), shows "Showing the newest N of M commits"
+  with a link to the History page, and skips the intro above
+  `CAD_DAG_INTRO_MAX_NODES` (60). 9d-2 adds the public paged History list
+  (`/p/:slug/history`, 50 per page, redacted message, imported author display
+  name, date, short SHA, node link), the node-pane provenance line ("Imported
+  from git · author"; emails only to `can_manage?` audiences), and the
+  out-of-window affordance linking a selected old node to its History page and
+  row (§7.3). A node outside the window still opens in the pane.
+- 9e remains: docs/spec closeout and the live smoke (§5.7, §7.3, §16). 9e adds
+  the normative pipeline text as §5.7.
 
 ---
 
@@ -2371,12 +2401,14 @@ Every configurable value is an env var with a sensible default. Prefix: `CAD_`.
       `nodes_pushed` remains deferred: `DAGLayout.layout/2` recomputes intro
       timing, so a live refresh would replay the animation and disturb the
       selected pane.
-- [ ] **DAG render-window selection affordance (Phase 9d):** a selected node
-      outside the newest `CAD_DAG_MAX_NODES` window (a direct node URL or an old
-      pinned preview) still opens in the pane, but it cannot be highlighted in
-      the SVG because it is not placed (§7.3). 9d's History list and pane
-      slice add the affordance. The rendered count and truncation note refresh
-      on navigation, not on `nodes_pushed`.
+- [x] **DAG render-window selection affordance (Phase 9d):** resolved in 9d-2 —
+      a selected node outside the newest `CAD_DAG_MAX_NODES` window (a direct
+      node URL or an old pinned preview) still opens in the pane, which shows
+      "This commit is older than the rendered graph." with a direct link to the
+      node's History page and row (`/p/:slug/history?page=N#node-<id>`); the
+      public History list (§7.3) is the full newest-first view. The rendered
+      count and truncation note still refresh on navigation, not on
+      `nodes_pushed`.
 - [x] **Doc agent model:** resolved for Phase 5 — the doc agent uses the
       configured `CAD_LLM_*` client through `Cadence.Shared.LLM`; per-project
       model overrides remain deferred.

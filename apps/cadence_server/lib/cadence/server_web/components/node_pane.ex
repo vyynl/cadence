@@ -34,6 +34,9 @@ defmodule Cadence.ServerWeb.Components.NodePane do
   attr(:readme_notice, :string, default: nil)
   attr(:path_error, :string, default: nil)
   attr(:pane_delay, :integer, default: 0)
+  attr(:provenance, :map, default: nil)
+  attr(:node_in_graph?, :boolean, default: true)
+  attr(:history_page, :integer, default: nil)
 
   def pane(assigns) do
     ~H"""
@@ -47,6 +50,7 @@ defmodule Cadence.ServerWeb.Components.NodePane do
           <header class="node-header">
             <p class="eyebrow">Node</p>
             <h2>{@selected_node.message || "(no message)"}</h2>
+            <p :if={@provenance} class="node-provenance">{provenance_text(@provenance)}</p>
             <p class="node-meta">
               <span class="flag-badge">
                 {Presentation.format_flags(@selected_node.flags, @selected_node.pinned)}
@@ -68,6 +72,13 @@ defmodule Cadence.ServerWeb.Components.NodePane do
               <code>{String.slice(@selected_node.git_commit_sha, 0, 12)}</code>
             </p>
           </header>
+
+          <p :if={not @node_in_graph?} class="note node-outside-graph">
+            This commit is older than the rendered graph.
+            <.link navigate={history_path(@project, @selected_node, @history_page)}>
+              Find it in History
+            </.link>
+          </p>
 
           <div :if={@can_manage?} class="admin-controls">
             <button
@@ -190,5 +201,18 @@ defmodule Cadence.ServerWeb.Components.NodePane do
       |> String.replace(~r/[^A-Za-z0-9_-]/, "-")
 
     "node-pane-#{node.id}-#{action}-#{suffix}"
+  end
+
+  # Manager-only emails are already withheld upstream by
+  # `Presentation.import_provenance/2`, so the text is just the parts present.
+  defp provenance_text(%{author: author, email: email}) do
+    ["Imported from git" | Enum.reject([author, email], &is_nil/1)]
+    |> Enum.join(" · ")
+  end
+
+  defp history_path(project, _node, nil), do: ~p"/p/#{project.slug}/history"
+
+  defp history_path(project, node, page) do
+    ~p"/p/#{project.slug}/history?#{[page: page]}" <> "#node-#{node.id}"
   end
 end

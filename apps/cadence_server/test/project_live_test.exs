@@ -1005,13 +1005,25 @@ defmodule Cadence.ServerWeb.ProjectLiveTest do
         created_at: ~U[2026-10-22 00:00:00Z]
       })
 
-      {:ok, _view, html} = live(conn, "/p/dag-cap")
+      {:ok, view, html} = live(conn, "/p/dag-cap")
 
       assert dag_node_count(html) == 2
       assert length(Regex.scan(~r/class="dag-edge /, html)) == 1
       assert html =~ "Showing the newest 2 of 3 commits."
       assert html =~ "cap three"
       refute html =~ "cap one"
+      assert has_element?(view, "a[href='/p/dag-cap/history']", "Browse the full history")
+    end
+
+    test "does not link the history page while the whole DAG renders", %{conn: conn} do
+      put_config(:dag_max_nodes, 2)
+      project = insert_project("dag-no-cap")
+      insert_bare_nodes(project, 2)
+
+      {:ok, _view, html} = live(conn, "/p/dag-no-cap")
+
+      refute html =~ "Showing the newest"
+      refute html =~ "/p/dag-no-cap/history"
     end
 
     test "skips the intro above dag_intro_max_nodes", %{conn: conn} do
@@ -1120,6 +1132,101 @@ defmodule Cadence.ServerWeb.ProjectLiveTest do
 
       assert has_element?(view, "div#node-pane-#{old.id}-node-[phx-update=replace]")
       assert Repo.get!(Node, newest.id).pinned
+    end
+
+    test "an out-of-window selected node links its history page and row", %{conn: conn} do
+      put_config(:dag_max_nodes, 2)
+      project = insert_project("dag-outside")
+      nodes = insert_bare_nodes(project, 51)
+      oldest = hd(nodes)
+
+      {:ok, view, html} = live(conn, "/p/dag-outside/n/#{oldest.id}")
+
+      assert html =~ "This commit is older than the rendered graph."
+
+      href = "/p/dag-outside/history?page=2#node-#{oldest.id}"
+      assert has_element?(view, "p.node-outside-graph a[href='#{href}']", "Find it in History")
+    end
+
+    test "an in-window selected node has no outside-graph note", %{conn: conn} do
+      put_config(:dag_max_nodes, 2)
+      project = insert_project("dag-inside")
+      nodes = insert_bare_nodes(project, 51)
+      newest = List.last(nodes)
+
+      {:ok, view, html} = live(conn, "/p/dag-inside/n/#{newest.id}")
+
+      refute html =~ "This commit is older than the rendered graph."
+      refute has_element?(view, ".node-outside-graph")
+    end
+  end
+
+  describe "import provenance" do
+    setup do
+      metadata = %{
+        "import" => %{
+          "source" => "git",
+          "author" => "Ada Lovelace",
+          "author_email" => "ada@example.com"
+        }
+      }
+
+      project = insert_project("provenance")
+      imported = insert_bare_node(project, %{message: "imported", session_metadata: metadata})
+      local = insert_bare_node(project, %{message: "local"})
+
+      %{project: project, imported: imported, local: local}
+    end
+
+    test "anonymous visitors see the author but never the email", %{
+      conn: conn,
+      project: project,
+      imported: imported
+    } do
+      {:ok, _view, html} = live(conn, "/p/#{project.slug}/n/#{imported.id}")
+
+      assert html =~ "Imported from git · Ada Lovelace"
+      refute html =~ "ada@example.com"
+    end
+
+    test "the owner sees the author and the email", %{
+      conn: conn,
+      project: project,
+      imported: imported
+    } do
+      owner = seed_user("provenance-owner@example.com", "Owner")
+      insert_membership(project, owner, :owner)
+
+      {:ok, _view, html} = live(signed_conn(conn, owner), "/p/#{project.slug}/n/#{imported.id}")
+
+      assert html =~ "Imported from git · Ada Lovelace · ada@example.com"
+    end
+
+    test "a viewer member sees the author but not the email", %{
+      conn: conn,
+      project: project,
+      imported: imported
+    } do
+      owner = seed_user("provenance-viewer-owner@example.com", "Owner")
+      viewer = seed_user("provenance-viewer@example.com", "Viewer")
+      insert_membership(project, owner, :owner)
+      insert_membership(project, viewer, :viewer)
+
+      {:ok, _view, html} = live(signed_conn(conn, viewer), "/p/#{project.slug}/n/#{imported.id}")
+
+      assert html =~ "Imported from git · Ada Lovelace"
+      refute html =~ "ada@example.com"
+    end
+
+    test "a non-imported node shows no provenance line", %{
+      conn: conn,
+      project: project,
+      local: local
+    } do
+      {:ok, _view, html} = live(conn, "/p/#{project.slug}/n/#{local.id}")
+
+      refute html =~ "Imported from git"
+      refute html =~ "node-provenance"
     end
   end
 

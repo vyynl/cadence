@@ -28,7 +28,7 @@ limitations are in `release-notes.md`.
 | Phase 6 — Docker actions | Complete (6a manifest foundation, 6b runner, 6c web run experience, post-close run queue, retention and run/artifact paging); action log streaming remains a §16 delta |
 | Phase 7 — Storage engineering | Complete (7a pack layer, 7b repacker, 7c existence handshake, 7d multi-pack/index/delta-depth/repack verification + demo-stack smoke); pack consolidation remains a §16 delta |
 | Phase 8 — Release engineering | Complete (8a production server image, umbrella release, `Cadence.Server.Release.migrate/0`, prod compose, deploy docs; 8b `cadence_daemon` release with `Cadence.Daemon.Release.migrate/0`, release registration, systemd/install/upgrade docs) |
-| Phase 9 — Import a local Git repository | In progress (9a shared import primitives, 9b daemon importer/job API/CLI, 9c server multi-parent push + sync body limit); 9d web cap/history/provenance and 9e docs/spec/live smoke remain |
+| Phase 9 — Import a local Git repository | In progress (9a shared import primitives, 9b daemon importer/job API/CLI, 9c server multi-parent push + sync body limit, 9d web DAG cap + paged History + provenance); 9e docs/spec/live smoke remains |
 
 Current release: **1.0.0** (2026-11-11) — the planned build order (Phases 1–8)
 is complete; remaining work is optional and recorded in spec §16 and
@@ -48,7 +48,7 @@ is complete; remaining work is optional and recorded in spec §16 and
 | `demo.md` | Local demo stack: compose, seed accounts, guided tour |
 | `ui-notes.md` | UI/tuning backlog — drop observations here between sessions |
 | `opencode.md` | Agent tooling: skills, formatter, gates, artifact conventions |
-| `phase-9-prep.md` | Phase 9 import brief: Git history → Cadence DAG (9a–9c shipped) |
+| `phase-9-prep.md` | Phase 9 import brief: Git history → Cadence DAG (9a–9d shipped) |
 | `archive/` | Completed-phase briefs and historical progress log |
 
 ## Adding a phase brief

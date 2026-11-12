@@ -136,6 +136,217 @@ defmodule Cadence.Server.PortfolioTest do
     end
   end
 
+  describe "node_page/3" do
+    test "an empty project is one empty page" do
+      project = insert_project()
+
+      assert %{
+               nodes: [],
+               offset: 0,
+               limit: 50,
+               page: 1,
+               total: 0,
+               total_pages: 1,
+               has_prev: false,
+               has_next: false
+             } = Portfolio.node_page(project.id, 1)
+    end
+
+    test "exactly one page of 50 rows has no neighbour links" do
+      project = insert_project()
+      insert_ordered_nodes(project, 50)
+
+      page = Portfolio.node_page(project.id, 1)
+
+      assert page.total == 50
+      assert page.total_pages == 1
+      assert page.offset == 0
+      assert length(page.nodes) == 50
+      refute page.has_prev
+      refute page.has_next
+    end
+
+    test "51 rows put the oldest alone on page 2" do
+      project = insert_project()
+      nodes = insert_ordered_nodes(project, 51)
+      oldest = hd(nodes)
+      newest = List.last(nodes)
+
+      first = Portfolio.node_page(project.id, 1)
+      second = Portfolio.node_page(project.id, 2)
+
+      assert first.total_pages == 2
+      assert length(first.nodes) == 50
+      assert hd(first.nodes).id == newest.id
+      refute Enum.any?(first.nodes, &(&1.id == oldest.id))
+      assert first.has_next
+      refute first.has_prev
+
+      assert second.offset == 50
+      assert ids(second.nodes) == [oldest.id]
+      assert second.has_prev
+      refute second.has_next
+    end
+
+    test "100 rows page 2 starts at offset 50 with 50 rows" do
+      project = insert_project()
+      insert_ordered_nodes(project, 100)
+
+      page = Portfolio.node_page(project.id, 2)
+
+      assert page.total == 100
+      assert page.total_pages == 2
+      assert page.offset == 50
+      assert page.page == 2
+      assert length(page.nodes) == 50
+      assert page.has_prev
+      refute page.has_next
+    end
+
+    test "junk, zero, and negative pages read page 1" do
+      project = insert_project()
+      nodes = insert_ordered_nodes(project, 51)
+      newest = List.last(nodes)
+
+      for page <- [0, -3, "abc", nil, 1.5] do
+        page_data = Portfolio.node_page(project.id, page)
+
+        assert page_data.page == 1
+        assert page_data.offset == 0
+        assert hd(page_data.nodes).id == newest.id
+      end
+    end
+
+    test "an out-of-range page clamps to the last page" do
+      project = insert_project()
+      nodes = insert_ordered_nodes(project, 51)
+      oldest = hd(nodes)
+
+      page = Portfolio.node_page(project.id, 999)
+
+      assert page.page == 2
+      assert page.total_pages == 2
+      assert page.offset == 50
+      assert ids(page.nodes) == [oldest.id]
+      refute page.has_next
+    end
+
+    test "an invalid project yields an empty page" do
+      assert %{nodes: [], total: 0, total_pages: 1, page: 1, offset: 0} =
+               Portfolio.node_page("not-a-uuid", 3)
+
+      assert %{nodes: [], total: 0, total_pages: 1, page: 1, offset: 0} =
+               Portfolio.node_page(Ecto.UUID.generate(), 1)
+    end
+
+    test "a custom size drives the page window and a bad size falls back" do
+      project = insert_project()
+      insert_ordered_nodes(project, 5)
+
+      page = Portfolio.node_page(project.id, 3, 2)
+
+      assert page.limit == 2
+      assert page.total_pages == 3
+      assert page.offset == 4
+      assert length(page.nodes) == 1
+
+      assert Portfolio.node_page(project.id, 1, 0).limit == 50
+      assert Portfolio.node_page(project.id, 1, -5).limit == 50
+      assert Portfolio.node_page(project.id, 1, "big").limit == 50
+    end
+
+    test "one count and one page read" do
+      attach_node_query_counter()
+      project = insert_project()
+      insert_ordered_nodes(project, 3)
+
+      # Drop the seeding inserts so the count measures only the read.
+      _ = node_query_count()
+
+      Portfolio.node_page(project.id, 1)
+
+      assert node_query_count() == 2
+    end
+  end
+
+  describe "history_page/2" do
+    test "the newest node is on page 1" do
+      project = insert_project()
+      nodes = insert_ordered_nodes(project, 51)
+      newest = List.last(nodes)
+
+      assert Portfolio.history_page(project.id, newest) == 1
+    end
+
+    test "the oldest of 51 is on page 2" do
+      project = insert_project()
+      oldest = hd(insert_ordered_nodes(project, 51))
+
+      assert Portfolio.history_page(project.id, oldest) == 2
+    end
+
+    test "the page boundary is exact" do
+      project = insert_project()
+      # Oldest first: node 20 sorts after 10 newer nodes, so with size 10 it is
+      # the first row of page 2; node 21 has only 9 newer.
+      nodes = insert_ordered_nodes(project, 30)
+      node_20 = Enum.at(nodes, 19)
+      node_21 = Enum.at(nodes, 20)
+
+      assert Portfolio.history_page(project.id, node_20, 10) == 2
+      assert Portfolio.history_page(project.id, node_21, 10) == 1
+    end
+
+    test "a created_at tie breaks by id descending" do
+      project = insert_project()
+      at = ~U[2026-10-24 12:00:00.000000Z]
+
+      lower =
+        insert_node(project, %{
+          id: "00000000-0000-0000-0000-000000000001",
+          message: "lower id",
+          created_at: at
+        })
+
+      higher =
+        insert_node(project, %{
+          id: "00000000-0000-0000-0000-000000000002",
+          message: "higher id",
+          created_at: at
+        })
+
+      # The ordering is `created_at DESC, id DESC`, so the higher id sorts
+      # first and the lower id has exactly one newer row.
+      assert Portfolio.history_page(project.id, higher, 1) == 1
+      assert Portfolio.history_page(project.id, lower, 1) == 2
+    end
+
+    test "returns nil without a usable project, node, or timestamp" do
+      project = insert_project()
+      node = insert_node(project, %{message: "node"})
+
+      assert Portfolio.history_page("not-a-uuid", node) == nil
+      assert Portfolio.history_page(project.id, nil) == nil
+      assert Portfolio.history_page(project.id, %Node{id: Ecto.UUID.generate()}) == nil
+
+      assert Portfolio.history_page(
+               project.id,
+               %Node{id: "not-a-uuid", created_at: ~U[2026-10-24 12:00:00Z]}
+             ) == nil
+    end
+
+    test "one aggregate count, never a full load" do
+      attach_node_query_counter()
+      project = insert_project()
+      nodes = insert_ordered_nodes(project, 3)
+
+      _ = node_query_count()
+
+      assert Portfolio.history_page(project.id, hd(nodes)) == 1
+      assert node_query_count() == 1
+    end
+  end
+
   describe "preview_node/1" do
     test "prefers a pinned node over a newer functioning node" do
       project = insert_project()

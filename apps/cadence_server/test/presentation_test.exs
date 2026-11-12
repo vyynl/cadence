@@ -171,6 +171,85 @@ defmodule Cadence.ServerWeb.PresentationTest do
     end
   end
 
+  describe "import_author/1" do
+    test "returns the trimmed author for a git import" do
+      metadata = %{"import" => %{"source" => "git", "author" => "  Ada Lovelace  "}}
+
+      assert Presentation.import_author(metadata) == "Ada Lovelace"
+    end
+
+    test "returns nil for missing, malformed, or non-git metadata" do
+      assert Presentation.import_author(nil) == nil
+      assert Presentation.import_author(%{}) == nil
+      assert Presentation.import_author(%{"import" => "nope"}) == nil
+
+      assert Presentation.import_author(%{
+               "import" => %{"source" => "svn", "author" => "Ada"}
+             }) == nil
+
+      assert Presentation.import_author(%{"import" => %{"author" => "Ada"}}) == nil
+      assert Presentation.import_author(:not_a_map) == nil
+    end
+
+    test "returns nil for a blank or non-binary author" do
+      assert Presentation.import_author(%{
+               "import" => %{"source" => "git", "author" => "   "}
+             }) == nil
+
+      assert Presentation.import_author(%{
+               "import" => %{"source" => "git", "author" => 123}
+             }) == nil
+    end
+  end
+
+  describe "import_provenance/2" do
+    setup do
+      %{
+        metadata: %{
+          "import" => %{
+            "source" => "git",
+            "author" => "  Ada Lovelace ",
+            "author_email" => " ada@example.com "
+          }
+        }
+      }
+    end
+
+    test "a manager sees the author and the email", %{metadata: metadata} do
+      assert Presentation.import_provenance(metadata, true) == %{
+               author: "Ada Lovelace",
+               email: "ada@example.com"
+             }
+    end
+
+    test "false or nil hides the email but keeps the author", %{metadata: metadata} do
+      assert Presentation.import_provenance(metadata, false) == %{
+               author: "Ada Lovelace",
+               email: nil
+             }
+
+      assert Presentation.import_provenance(metadata, nil) == %{
+               author: "Ada Lovelace",
+               email: nil
+             }
+    end
+
+    test "a blank email is nil even for a manager", %{metadata: metadata} do
+      metadata = put_in(metadata, ["import", "author_email"], "  ")
+
+      assert Presentation.import_provenance(metadata, true) == %{
+               author: "Ada Lovelace",
+               email: nil
+             }
+    end
+
+    test "non-imported and malformed metadata yield nil" do
+      assert Presentation.import_provenance(nil, true) == nil
+      assert Presentation.import_provenance(%{"import" => %{"author" => "Ada"}}, true) == nil
+      assert Presentation.import_provenance(%{"import" => "git"}, true) == nil
+    end
+  end
+
   describe "page_number/1" do
     test "parses a positive integer page" do
       assert Presentation.page_number("3") == 3

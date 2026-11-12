@@ -118,6 +118,7 @@ defmodule Cadence.ServerWeb.ProjectLive do
           <div class="dag-rail">
             <p :if={@node_total > @dag_layout.count} class="note">
               Showing the newest {@dag_layout.count} of {@node_total} commits.
+              <.link navigate={~p"/p/#{@project.slug}/history"}>Browse the full history</.link>
             </p>
 
             <DAG.dag
@@ -147,6 +148,9 @@ defmodule Cadence.ServerWeb.ProjectLive do
             readme_notice={@readme_notice}
             path_error={@path_error}
             pane_delay={@dag_layout.pane_delay}
+            provenance={@provenance}
+            node_in_graph?={@node_in_graph?}
+            history_page={@history_page}
           />
         </div>
       </article>

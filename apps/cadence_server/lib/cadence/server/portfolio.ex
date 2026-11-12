@@ -157,6 +157,110 @@ defmodule Cadence.Server.Portfolio do
   end
 
   @doc """
+  Default page size for the public commit history (spec §7.3).
+
+  The History LiveView derives its page number from this value, so the page
+  size and the context default cannot drift apart.
+  """
+  @spec node_page_size() :: pos_integer()
+  def node_page_size, do: 50
+
+  @doc """
+  One page of a project's nodes, newest first (spec §7.3).
+
+  The DAG window and the History list share the ordering in
+  `ordered_nodes/1` (`created_at DESC, id DESC`), so pages are stable for a
+  given set of rows.
+
+  `page` is clamped into `1..total_pages` **before** the offset is computed, so
+  a hand-edited `?page=` can never produce an out-of-range Postgres bind; a
+  non-integer or non-positive value means page 1. `size` falls back to
+  `node_page_size/0` when it is not a positive integer.
+
+  Returns a page map; an unknown or invalid project yields an empty page with
+  `total: 0` and `total_pages: 1`.
+  """
+  @spec node_page(Ecto.UUID.t() | String.t(), term(), term()) :: %{
+          nodes: [Node.t()],
+          offset: non_neg_integer(),
+          limit: pos_integer(),
+          page: pos_integer(),
+          total: non_neg_integer(),
+          total_pages: pos_integer(),
+          has_prev: boolean(),
+          has_next: boolean()
+        }
+  def node_page(project_id, page, size \\ node_page_size()) do
+    size = page_size(size)
+
+    with {:ok, project_id} <- UUID.cast(project_id) do
+      total = count_nodes(project_id)
+      total_pages = max(ceil_div(total, size), 1)
+      page = clamp_page(page, total_pages)
+      offset = (page - 1) * size
+
+      nodes =
+        Repo.all(
+          page_query(ordered_nodes(project_id),
+            limit: size,
+            offset: offset
+          )
+        )
+
+      %{
+        nodes: nodes,
+        offset: offset,
+        limit: size,
+        page: page,
+        total: total,
+        total_pages: total_pages,
+        has_prev: page > 1,
+        has_next: page < total_pages
+      }
+    else
+      :error -> empty_node_page(size)
+    end
+  end
+
+  @doc """
+  The 1-based History page that contains `node`, in the newest-first order.
+
+  One aggregate counts the nodes that sort before `node` — newer
+  `created_at`, or the same timestamp with a larger id (the ordering's
+  descending tie-break) — so no window of rows has to be loaded. Returns `nil`
+  for an invalid project id, an unknown node shape, or a node without
+  `created_at`.
+  """
+  @spec history_page(Ecto.UUID.t() | String.t(), Node.t() | nil, term()) ::
+          pos_integer() | nil
+  def history_page(project_id, node, size \\ node_page_size())
+
+  def history_page(project_id, %Node{id: id, created_at: %DateTime{} = created_at}, size)
+      when is_binary(id) do
+    size = page_size(size)
+
+    with {:ok, project_id} <- UUID.cast(project_id),
+         {:ok, node_id} <- UUID.cast(id) do
+      newer =
+        Repo.one(
+          from(n in Node,
+            where: n.project_id == ^project_id,
+            where:
+              n.created_at > ^created_at or
+                (n.created_at == ^created_at and n.id > ^node_id),
+            select: count(n.id)
+          )
+        )
+
+      div(newer, size) + 1
+    else
+      :error -> nil
+    end
+  end
+
+  def history_page(_project_id, _node, _size), do: nil
+
+  @doc """
   Resolve the preview node (spec §4.4): pinned, then functioning, then newest.
 
   Precedence is a three-tier `ORDER BY` expression — the pinned tier, then the
@@ -537,4 +641,27 @@ defmodule Cadence.Server.Portfolio do
 
   defp page_offset(value) when is_integer(value) and value > 0, do: value
   defp page_offset(_value), do: 0
+
+  defp page_size(value) when is_integer(value) and value > 0, do: value
+  defp page_size(_value), do: node_page_size()
+
+  defp clamp_page(page, total_pages) when is_integer(page) and page > 0,
+    do: min(page, total_pages)
+
+  defp clamp_page(_page, _total_pages), do: 1
+
+  defp ceil_div(total, size), do: div(total + size - 1, size)
+
+  defp empty_node_page(size) do
+    %{
+      nodes: [],
+      offset: 0,
+      limit: size,
+      page: 1,
+      total: 0,
+      total_pages: 1,
+      has_prev: false,
+      has_next: false
+    }
+  end
 end

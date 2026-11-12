@@ -16,8 +16,9 @@ and the accepted hackney advisories recorded. Phase 9 (import a local Git
 repository) is approved; slices **9a** (shared read-only Git primitives), **9b**
 (daemon importer, job API, CLI), and **9c** (server owner-only multi-parent
 push + sync body limit) shipped. **9d-1** (web DAG render cap + intro
-threshold) shipped; 9d-2 (paged History + provenance) is next. Remaining work
-is optional and recorded in spec §16.
+threshold) and **9d-2** (paged public History + import provenance) shipped.
+Only **9e** (import docs/spec/live smoke) remains in Phase 9; everything after
+that is optional and recorded in spec §16.
 
 ## Done (summary)
 
@@ -990,6 +991,26 @@ is optional and recorded in spec §16.
   Gate: 1254 tests (332 + 679 + 243), focused 96, format and dev/prod compile
   clean. Review found the blocker and two layout mediums; all fixed and
   re-reviewed. Visual rail/scroll verification is deferred to the 9e smoke.
+- **Phase 9d-2 (paged public History + import provenance, 2026-11-11)** — the
+  commits outside the DAG window are browsable. `Portfolio.node_page/3` returns
+  one newest-first page with a count, `total_pages`, and clamped page/offset
+  (`node_page_size/0` = 50; junk/non-positive → page 1, out-of-range → last
+  page; always passes a limit). `Portfolio.history_page/2` finds a selected
+  node's page from one `created_at DESC, id DESC` aggregate. New public
+  `HistoryLive.Index` at `/p/:slug/history` (inside the `:project` live-session
+  block) renders an async 50-row page: `PublicContent.redact_message/1` message
+  linked to the node, imported author display name (or `—`), date, 12-char SHA,
+  `node-<uuid>` anchors, and newer/older links with “Page M of N”. The DAG
+  truncation note links here. `Presentation.import_author/1` and
+  `import_provenance/2` gate `session_metadata["import"]["source"] == "git"`;
+  the node pane shows `Imported from git · author`, and the author email only
+  to `can_manage?` (owner/trusted), never to anonymous/viewer audiences. A
+  selected node outside the rendered layout shows “This commit is older than
+  the rendered graph.” and links directly to
+  `/p/:slug/history?page=N#node-<id>`. Spec §7.1/§7.3/§13/§16; README and
+  phase-9 brief status updated. Gate: 164 focused server tests (history 10,
+  project_live 61, portfolio 47, presentation 46), format and dev/prod compile
+  clean; full suite left to the user. Visual 390px check remains in 9e.
 - **Audit 100 slice, wave 6 + final audit (2026-11-11)** — **T4 shipped and
   the audit is closed at 100/A.** `.github/workflows/ci.yml` is the merge gate:
   format, dev+prod compile with warnings-as-errors, `mix test`,
@@ -1120,22 +1141,25 @@ a time-boxed exact-ID hackney ignore), D2 (`libgraph` 0.17.1), and T4 (CI).
 (`docs/audit-2026-11-11.md`), with the A3/P4/T3 method exemptions and the
 accepted hackney advisories recorded there.
 
-**Immediate product step:** **Phase 9d-2 — paged History + provenance.**
-9d-1 (render cap, truncation note, intro threshold) shipped at `0c6ab52`;
-9a–9c are shipped, so an imported history can publish. The full plan is
-`docs/phase-9-prep.md` (D1–D10 approved). 9d-2 must:
+**Immediate product step:** **Phase 9e — import docs, spec closeout, and the
+live smoke.** 9a–9d are shipped, so an imported history publishes and is
+browsable at `/p/:slug` + `/p/:slug/history`. The full plan is
+`docs/phase-9-prep.md` (D1–D10 approved). 9e must:
 
-1. A public paged `History` list at `/p/:slug/history` (50 per page: redacted
-   message, author display name, date, short SHA, link to the node) for the
-   commits outside the DAG window; the truncation note links to it.
-2. A node-pane provenance line (`Imported from git · <author name>`); author
-   emails only to `can_manage?` audiences, never anonymously. Add the
-   "outside the graph" affordance recorded in spec §16.
-3. Tests: history paging (boundaries, junk/out-of-range pages), provenance
-   visibility, message redaction for anonymous viewers, and the note link.
-
-Then 9e (docs/spec/live smoke: `docs/import.md`, spec §5.7 + §7.3, a fixture
-repo imported and published end to end).
+1. Write `docs/import.md`: prerequisites, the `mix cad.import` / `POST /import`
+   flow, the caps (`CAD_IMPORT_*`, `CAD_DAG_*`, `CAD_SYNC_MAX_PUSH_PARENTS`,
+   `CAD_SYNC_MAX_BODY_BYTES`), shallow/LFS/submodule/alternates limitations,
+   the historical-secrets warning, offline publication, and the upgrade path.
+2. Add the normative spec text: a new §5.7 “Importing an existing repository”,
+   and finish §7.3 (History/provenance), §10.2 (multi-parent exception),
+   §12.6 (new keys), §13 (Phase 9), §16 (merge topology, large blobs, history
+   browsing).
+3. Run the live smoke: generate a fixture repo (GitStore + refs files, ~50
+   commits with a merge and a tag), import it, publish to the demo stack, and
+   verify identical SHAs/parents on both sides, the capped DAG + paged History,
+   `/p/:slug/n/:node_id`, and a secret-bearing commit being quarantined. This
+   is also where the deferred 390px visual check for the DAG rail and History
+   list happens.
 
 After that, optional follow-ups, roughly in priority order:
 
@@ -1204,9 +1228,10 @@ expected for the closeout follow-ups.
   8a (production server release), Phase 8b (daemon release), closeout slice 1
   (proposal links, `actions_manifest`, meld docs state), closeout slice 2 (run
   queue cap, header nav, seeded run, raw-log download), the DAG width fix,
-  closeout slice 3 (final audit, P1 fixes, 1.0.0 release), and Phase 9a/9b/9c
-  (shared import primitives + daemon importer/API/CLI + server multi-parent
-  push/body limit) are complete, and
+  closeout slice 3 (final audit, P1 fixes, 1.0.0 release), and Phase
+  9a/9b/9c/9d (shared import primitives + daemon importer/API/CLI + server
+  multi-parent push/body limit + web DAG cap/paged History/provenance) are
+  complete, and
   every review's must-fix item is applied and verified. The audit-100 slice
   (T1/T2, S1–S3, P1–P3, A1/A2, D1/D2, T4) is complete at 100/A, with the
   accepted risks recorded in `docs/audit-2026-11-11.md` — none are blockers.
@@ -1217,14 +1242,28 @@ expected for the closeout follow-ups.
 
 ## Spec Deltas / Open Items
 
+- **Phase 9d-2 notes (2026-11-11)** — (a) History lists **all** nodes
+  newest-first, not only the nodes outside the DAG window; the full list is a
+  superset of the prep brief's “remainder” and the truncation note is its entry
+  point. (b) A junk/non-positive `?page` means page 1 and an out-of-range page
+  clamps to the last page; a single full page renders no pager, while an empty
+  project shows “Page 1 of 1”. (c) History is a snapshot list (no PubSub
+  subscription); a push appears on the next navigation. (d) `history_page/2`
+  counts newer rows with the `created_at DESC, id DESC` tie-break and is only
+  called for a selected node outside the rendered window. (e) The History row
+  renders `nodes.created_at` directly; the column is nullable at the DB level
+  but every writer populates it (pre-existing, unreachable through Ecto). (f)
+  The 390px visual check remains part of 9e. (g) The truncation-note link is
+  rendered only when the graph is truncated.
 - **Phase 9d-1 notes (2026-11-11)** — (a) A trimmed window drops edges whose
   parent is outside the window; the boundary child renders at depth 1, so its
   web row spacing can differ from the daemon/picker depth (§7.3 records this).
   (b) An out-of-window selected node opens in the pane but cannot be highlighted
-  in the SVG; the affordance belongs to 9d-2 (§16). (c) The rendered count and
+  in the SVG; 9d-2 resolves the affordance with a pane note linking its History
+  page and row (§16). (c) The rendered count and
   truncation note refresh on navigation, not on `nodes_pushed` (live DAG rebuild
   remains out of scope). (d) `list_nodes/2` ignores `:offset` without a positive
-  `:limit`; 9d-2's history paging must always pass a limit. (e) The rail
+  `:limit`; History uses `node_page/3`, which always passes a limit. (e) The rail
   wrapper keeps `min-width: 0` and `.dag-scroll` is bounded at
   `min(70vh, 48rem)`; the headless width/scroll check is deferred to 9e's live
   smoke (static CSS assertions only so far). (f) The intro is skipped by project
@@ -2858,3 +2897,21 @@ tests green (332 shared + 615 server + 243 daemon), format check and dev/prod
 compile clean. Review: 2 findings (idempotent re-push, cap fallback) fixed and
 pinned by tests. Next: **9d — web newest-N DAG + paged History + provenance**.
 Tree is formatted and compiled; changes are uncommitted.
+
+2026-11-11 — **Phase 9d-2 (paged public History + import provenance) shipped.**
+A public `/p/:slug/history` lists every commit newest-first, 50 per page under
+`?page=N`; junk means page 1, an out-of-range page clamps to the last page, and
+the page label is derived from the loaded offset. Rows show the redacted
+message, imported author display name, date, 12-char SHA, and a link to the
+node. `Portfolio.node_page/3` (one count + one page read, always limited) and
+`history_page/2` (one newer-row aggregate) back it; `Presentation.import_author/1`
+and `import_provenance/2` gate Git provenance on
+`session_metadata["import"]["source"] == "git"`, with the author email only for
+`can_manage?` audiences. The node pane shows `Imported from git · author` and,
+for a selected node outside the rendered window, a note linking
+`/p/:slug/history?page=N#node-<id>`; the DAG truncation note links the full
+history. Spec §7.1/§7.3/§13/§16, `docs/README.md`, and the phase-9 brief status
+updated. Verification: 164 focused server tests (history 10, project_live 61,
+portfolio 47, presentation 46), format and dev/prod compile clean; the full
+suite is the user's. Next: **9e — import docs, spec §5.7, and the live smoke**.
+Tree is formatted and compiled; shipped with this commit.

@@ -47,7 +47,7 @@ defmodule Cadence.ServerWeb.ProjectPane do
   }
 
   alias Cadence.Server.Actions.Runs
-  alias Cadence.ServerWeb.DAGLayout
+  alias Cadence.ServerWeb.{DAGLayout, Presentation}
   alias Cadence.ServerWeb.Metadata
   alias Cadence.Shared.{Node, Project}
 
@@ -295,7 +295,10 @@ defmodule Cadence.ServerWeb.ProjectPane do
       readme_name: nil,
       readme_redacted?: false,
       readme_notice: nil,
-      path_error: nil
+      path_error: nil,
+      provenance: nil,
+      node_in_graph?: true,
+      history_page: nil
     ]
   end
 
@@ -349,6 +352,9 @@ defmodule Cadence.ServerWeb.ProjectPane do
           intro_ms: intro_ms(node_total)
         )
 
+      {provenance, node_in_graph?, history_page} =
+        selection_context(project, selected_node, dag_layout, auth.can_manage?)
+
       path = URI.parse(uri).path || "/p/#{project.slug}"
 
       socket =
@@ -362,6 +368,9 @@ defmodule Cadence.ServerWeb.ProjectPane do
           node_total: node_total,
           selected_node: selected_node,
           docs_child: selected_node && Portfolio.docs_child(project.id, selected_node.id),
+          provenance: provenance,
+          node_in_graph?: node_in_graph?,
+          history_page: history_page,
           actions: actions_for(project, selected_node, auth.membership, quarantine),
           actions_enabled?: Actions.enabled?(),
           not_found: false,
@@ -555,11 +564,31 @@ defmodule Cadence.ServerWeb.ProjectPane do
         %Node{id: id} -> project.id |> Portfolio.node_for_project(id) |> redact_node()
       end
 
+    {provenance, node_in_graph?, history_page} =
+      selection_context(project, selected_node, dag_layout, socket.assigns.can_manage?)
+
     assign(socket,
       node_total: node_total,
       dag_layout: dag_layout,
-      selected_node: selected_node
+      selected_node: selected_node,
+      provenance: provenance,
+      node_in_graph?: node_in_graph?,
+      history_page: history_page
     )
+  end
+
+  # Provenance is gated on the manager audience (emails only), and the
+  # out-of-window affordance needs the history page for a selected node that the
+  # rendered layout does not place. Both are recomputed wherever the layout or
+  # the selection is rebuilt.
+  defp selection_context(_project, nil, _dag_layout, _can_manage?), do: {nil, true, nil}
+
+  defp selection_context(project, %Node{} = node, dag_layout, can_manage?) do
+    provenance = Presentation.import_provenance(node.session_metadata, can_manage?)
+    in_graph? = Enum.any?(dag_layout.nodes, &(&1.id == node.id))
+    history_page = if in_graph?, do: nil, else: Portfolio.history_page(project.id, node)
+
+    {provenance, in_graph?, history_page}
   end
 
   defp reload_repo(socket) do
