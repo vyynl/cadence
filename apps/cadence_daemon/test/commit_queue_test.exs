@@ -228,6 +228,11 @@ defmodule Cadence.Daemon.CommitQueueTest do
     ref = make_ref()
 
     Application.put_env(:cadence_daemon, :docs_llm, Cadence.Daemon.TestDocsLLM)
+    # The `:docs` Hammer window is shared by the whole suite. Give this test a
+    # fresh high bound so an earlier test cannot rate-limit the job and turn
+    # the barrier below into a timeout.
+    Application.put_env(:cadence_daemon, :docs_rate_limit, 1_000)
+    Application.put_env(:cadence_daemon, :docs_rate_scale, 60_000)
 
     Application.put_env(
       :cadence_daemon,
@@ -237,6 +242,8 @@ defmodule Cadence.Daemon.CommitQueueTest do
 
     on_exit(fn ->
       Application.delete_env(:cadence_daemon, :docs_llm)
+      Application.delete_env(:cadence_daemon, :docs_rate_limit)
+      Application.delete_env(:cadence_daemon, :docs_rate_scale)
       Application.delete_env(:cadence_daemon, :test_docs_llm_result)
     end)
 
