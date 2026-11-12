@@ -1,0 +1,157 @@
+# Cadence CI — the merge gate (docs/audit-100-plan.md T4).
+#
+# Every step is the same command documented in AGENTS.md §6/§11, so a local run
+# of those commands reproduces this job. The one exception is the Postgres
+# service: locally the test database is a container on the same port.
+#
+# Actions are pinned to full commit SHAs (version in the trailing comment) so a
+# moved tag cannot execute new code; .github/dependabot.yml keeps the pins
+# current. `"on"` is quoted on purpose: YAML 1.1 parsers (Ruby's Psych
+# included) read a bare `on:` key as the boolean `true`, which hides the
+# trigger list from any program that inspects this file.
+
+name: CI
+
+"on":
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+# The gate only reads the repository. Declaring it keeps a fork PR from ever
+# receiving a write-scoped token, and GitHub already downgrades fork tokens.
+permissions:
+  contents: read
+
+# A newer commit on the same branch/PR makes the older run's verdict irrelevant.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The suite (including the server tests) is the default environment for the
+  # job; the compile steps override it where they need dev/prod.
+  MIX_ENV: test
+
+jobs:
+  gate:
+    name: Gate
+    runs-on: ubuntu-latest
+    # Generous for the first landing: two full suites plus a cold dep build.
+    # Tighten once real run timings exist.
+    timeout-minutes: 45
+
+    services:
+      postgres:
+        # config/test.exs defaults CAD_TEST_DATABASE_URL to
+        # postgres:postgres@localhost:55432/cadence_test, so the host port,
+        # password, and database name must match exactly.
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cadence_test
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d cadence_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # The gate never pushes, so the job must not retain a usable token.
+          persist-credentials: false
+
+      - name: Set up Elixir and OTP
+        id: beam
+        # Matches the minor version of the docker/Dockerfile toolchain
+        # (elixir:1.20-otp-29); patch releases float.
+        uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        with:
+          elixir-version: "1.20"
+          otp-version: "29"
+
+      - name: Cache deps and _build
+        # One umbrella-wide cache: deps/ and _build/ live at the root. The key
+        # tracks mix.lock and the resolved toolchain, so a lockfile or Elixir
+        # upgrade starts a cold build; restore-keys lets any older tree seed it.
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-
+
+      - name: Fetch dependencies
+        # Must precede format/compile: .formatter.exs imports dep formatters,
+        # and mix_audit/sobelow are test/dev-only deps.
+        run: mix deps.get
+
+      - name: Check formatting
+        # The `mix` formatter rewrites files after edits, so this is the only
+        # proof the tree is formatter-clean.
+        run: mix format --check-formatted
+
+      - name: Compile (dev)
+        # The job defaults to MIX_ENV=test; this is the documented dev compile.
+        run: mix compile --warnings-as-errors
+        env:
+          MIX_ENV: dev
+
+      - name: Compile (prod)
+        # A release build must stay warning-free; prod-only warnings have
+        # shipped broken releases before.
+        run: mix compile --warnings-as-errors
+        env:
+          MIX_ENV: prod
+
+      - name: Run the test suite
+        # The server test helper creates the database and runs migrations
+        # against the Postgres service above.
+        run: mix test
+
+      - name: Run the test suite with coverage
+        # Exits 3 on a coverage miss and 2 on a test failure (`mix help test`:
+        # --exit-status defaults to 2); the floor is 80% per app
+        # (test_coverage in each mix.exs).
+        run: mix test --cover
+
+      - name: Audit Hex package retirements
+        # Only reports retired package versions. CVE scanning is deps.audit.
+        run: mix hex.audit
+
+      - name: Check for unused lockfile entries
+        run: mix deps.unlock --check-unused
+
+      - name: Sobelow static analysis
+        # Must run from apps/cadence_server: the umbrella root refuses, and the
+        # tool is a server-only test/dev dep. --exit medium fails the job on
+        # any medium-or-higher finding.
+        working-directory: apps/cadence_server
+        run: mix sobelow --exit medium
+
+      - name: Audit dependency CVEs
+        # From the umbrella root so it reads the whole umbrella lock (an
+        # app-local run finds no mix.lock and scans nothing).
+        run: mix deps.audit --ignore-file .mix_audit.ignore
+
+      - name: Verify the advisory database is populated
+        # mix_audit refreshes a git clone at
+        # ~/.local/share/elixir-security-advisories-mirego and silently ignores
+        # clone/pull failures, so a missing DB would still print a clean pass.
+        # Fail closed on the lockfile, the YAML set, and the clone's HEAD; the
+        # clone happens in the audit step above, so this must run after it.
+        run: |
+          set -euo pipefail
+          db="$HOME/.local/share/elixir-security-advisories-mirego"
+          fail() { echo "advisory DB check failed: $*" >&2; exit 1; }
+          test -f mix.lock || fail "mix.lock missing at the umbrella root"
+          test -n "$(find "$db/packages" -name '*.yml' -print -quit 2>/dev/null)" \
+            || fail "no advisory YAML under $db/packages (the clone did not happen)"
+          git -C "$db" rev-parse --verify HEAD >/dev/null 2>&1 \
+            || fail "no git HEAD in $db (incomplete clone)"
