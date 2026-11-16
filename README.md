@@ -36,13 +36,14 @@ backups, and upgrades are in [DEPLOY.md](DEPLOY.md); paste-ready variants live i
 
 ## Connect a daemon
 
-```bash
-cp .env.daemon.example .env.daemon    # set CAD_SERVER_URL and CAD_AUTH_TOKEN
-docker compose -f docker-compose.daemon.yml up -d
-```
+The daemon ships as a published image, so there is no toolchain to install. One
+command pulls it, migrates its state directory, and starts it with the socket at
+`~/.local/state/cadence/daemon.sock` — where the Neovim plugin looks by default.
+Copy it from
+[DAEMON.md → One command](DAEMON.md#one-command-pull-and-run); that page also
+covers the token, project registration, and the compose variant.
 
-The first run needs a one-time migration; [DAEMON.md](DAEMON.md) covers it, the
-host release artifact, and project registration.
+Then open a registered project in Neovim and run `:CadOpen`.
 
 ## Demo
 

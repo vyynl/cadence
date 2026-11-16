@@ -7,12 +7,14 @@ A seeded, development-mode Cadence on <http://localhost:4000>: PostgreSQL plus a
 deployment — the production stack is `docker-compose.yml`.
 
 ```bash
-docker compose -f docker-compose.demo.yml up --build
+docker compose -f docker-compose.demo.yml up -d --build
+docker compose -f docker-compose.demo.yml logs -f server
 ```
 
-Wait for the `Demo data ready` block in the logs, open <http://localhost:4000>,
-and sign in at `/sign-in` as `owner@demo.local` with password `cadence-demo`.
-The form then asks for a TOTP code:
+The first build compiles the whole application, so it takes **10–15 minutes**
+before anything appears. When the logs show `Demo data ready`, open
+<http://localhost:4000> and sign in at `/sign-in` as `owner@demo.local` with
+password `cadence-demo`. The form then asks for a TOTP code:
 
 ```bash
 docker compose -f docker-compose.demo.yml exec server mix cadence.totp --email owner@demo.local
