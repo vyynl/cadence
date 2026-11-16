@@ -10,7 +10,9 @@ Start with `docker compose ps` and
 before any container starts.
 **Cause:** the image lives in a private GHCR package and this machine has no
 registry credentials, so `docker pull` cannot see it. `docker compose ps` shows
-nothing because nothing was created.
+nothing because nothing was created. Package visibility is a **separate setting
+from the repository's**: making the repository public does not change an
+existing package, so a public repo can still serve a private image.
 **Fix:** log in once with a token that has `read:packages`:
 
 ```bash

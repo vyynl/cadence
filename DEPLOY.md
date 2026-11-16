@@ -4,8 +4,8 @@ One Compose file runs the published image — no local build, no host scripting,
 no `openssl`; secrets are generated in a volume on first start. Configuration is
 [`.env.example`](.env.example).
 
-If the GHCR package is private (the default for a private repository), log in
-once or the pull fails with `unauthorized`:
+If the GHCR package is private — a setting independent of the repository's own
+visibility — log in once or the pull fails with `unauthorized`:
 
 ```bash
 echo "$GHCR_PAT" | docker login ghcr.io -u <github-user> --password-stdin
