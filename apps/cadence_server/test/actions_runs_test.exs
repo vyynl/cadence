@@ -1014,6 +1014,30 @@ defmodule Cadence.Server.Actions.RunsTest do
       assert Repo.get!(ActionRun, run_id).container_id == nil
       assert FakeDocker.calls(:remove) == [["container-dead"]]
     end
+
+    test "concurrent sweeps remove a terminal row's container once", %{
+      project: project,
+      owner: owner,
+      node: node
+    } do
+      run = insert_run(project, node, owner)
+      run_id = run.id
+
+      Repo.update_all(
+        from(r in ActionRun, where: r.id == ^run_id),
+        set: [status: :failed, error_reason: "run_failed", container_id: "container-dead"]
+      )
+
+      # The finished-run dispatch runs a sweep while `await_and_collect` is still
+      # removing the same container; the container_id CAS must let only one of
+      # them reach Docker, or two `remove` calls race and the row loses its id.
+      1..2
+      |> Task.async_stream(fn _ -> Runs.recover_all() end, max_concurrency: 2, timeout: 15_000)
+      |> Enum.to_list()
+
+      assert FakeDocker.calls(:remove) == [["container-dead"]]
+      assert Repo.get!(ActionRun, run_id).container_id == nil
+    end
   end
 
   ## Helpers

@@ -607,10 +607,8 @@ defmodule Cadence.Server.Actions.Runs do
     if count == 1 do
       broadcast(row.project_id, row.id, :interrupted)
 
-      if remove? and is_binary(row.container_id) and
-           remove_container(row.container_id) == :ok do
-        from(r in ActionRun, where: r.id == ^row.id)
-        |> Repo.update_all(set: [container_id: nil])
+      if remove? and is_binary(row.container_id) do
+        remove_claimed(row.id, row.container_id)
       end
     end
 
@@ -643,16 +641,11 @@ defmodule Cadence.Server.Actions.Runs do
       )
     )
     |> Enum.each(fn row ->
-      if remove_container(row.container_id) == :ok do
-        from(r in ActionRun, where: r.id == ^row.id)
-        |> Repo.update_all(set: [container_id: nil])
-      end
+      remove_claimed(row.id, row.container_id)
     end)
 
     :ok
   end
-
-  defp remove_container(nil), do: :ok
 
   defp remove_container(container_id) do
     Docker.impl().remove(container_id)
@@ -812,23 +805,44 @@ defmodule Cadence.Server.Actions.Runs do
           finish_failure(run, "run_failed")
       end
 
-    if remove_container(container_id) == :ok do
-      clear_container_id(run.id)
-    end
+    # Claim the container before removing it: the run is already terminal, so a
+    # concurrent `sweep_orphans/1` can see this row and would otherwise remove
+    # the same container a second time.
+    remove_claimed(run.id, container_id)
 
     result
   end
 
-  # Only terminal write in await_and_collect; keep a failed removal for the sweep.
-  defp clear_container_id(run_id) do
-    from(r in ActionRun, where: r.id == ^run_id)
-    |> Repo.update_all(set: [container_id: nil])
+  # Exactly-once container removal. The CAS clears `container_id`, so only the
+  # caller that wins is allowed to touch Docker; a loser sees `nil` and does
+  # nothing. A failed removal puts the id back for the next sweep to retry.
+  defp remove_claimed(_run_id, nil), do: :ok
 
-    :ok
+  defp remove_claimed(run_id, container_id) do
+    {count, _rows} =
+      from(r in ActionRun,
+        where: r.id == ^run_id and r.container_id == ^container_id
+      )
+      |> Repo.update_all(set: [container_id: nil])
+
+    if count == 1 do
+      case remove_container(container_id) do
+        :ok ->
+          :ok
+
+        {:error, _reason} = error ->
+          from(r in ActionRun, where: r.id == ^run_id)
+          |> Repo.update_all(set: [container_id: container_id])
+
+          error
+      end
+    else
+      :ok
+    end
   rescue
     error ->
-      Logger.warning("action container id not cleared: #{shape(error)}")
-      :ok
+      Logger.warning("action container claim failed: #{shape(error)}")
+      {:error, :remove_failed}
   end
 
   # If the container could not be stopped after a wait failure it may still be
