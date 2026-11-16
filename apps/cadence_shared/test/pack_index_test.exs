@@ -97,7 +97,12 @@ defmodule Cadence.Shared.GitStore.Pack.IndexTest do
   describe "validation" do
     test "rejects a corrupted checksum" do
       encoded = Index.encode([], @checksum)
-      corrupted = binary_part(encoded, 0, byte_size(encoded) - 1) <> <<0>>
+
+      # Flip the last byte instead of overwriting it with zero: `@checksum` is
+      # random, so a zero byte is a no-op 1 run in 256 and the assertion fails.
+      flipped = Bitwise.bxor(:binary.last(encoded), 0xFF)
+      corrupted = binary_part(encoded, 0, byte_size(encoded) - 1) <> <<flipped>>
+
       assert {:error, :invalid_index_checksum} = Index.decode(corrupted)
     end
 
