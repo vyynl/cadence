@@ -1,0 +1,66 @@
+# Publish the daemon image to GHCR.
+#
+# `docker-compose.daemon.yml` pulls `ghcr.io/vyynl/cadence-daemon:latest` by
+# default. This workflow builds `docker/Dockerfile.daemon` on master, version
+# tags, and manual dispatch.
+#
+# The package is private for a private repository. Pulling it elsewhere needs
+# GHCR credentials (username = GitHub user, password = a PAT with
+# `read:packages`).
+
+name: Publish daemon image
+
+"on":
+  push:
+    branches: [master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-daemon-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Build and push
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Build and push
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/cadence-daemon
+        run: |
+          set -euo pipefail
+
+          # GITHUB_TOKEN is preferred. A classic PAT with write:packages in the
+          # GHCR_TOKEN repository secret is the fallback for an existing package
+          # that is not linked to this repository (GHCR's first-push catch-22).
+          echo "${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}" \
+            | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+          tags=("${IMAGE}:sha-${GITHUB_SHA::12}")
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tags+=("${IMAGE}:${GITHUB_REF_NAME}" "${IMAGE}:latest")
+          else
+            tags+=("${IMAGE}:edge" "${IMAGE}:latest")
+          fi
+
+          build_args=()
+          for tag in "${tags[@]}"; do
+            build_args+=(-t "$tag")
+          done
+
+          docker build -f docker/Dockerfile.daemon "${build_args[@]}" .
+          for tag in "${tags[@]}"; do
+            docker push "$tag"
+          done

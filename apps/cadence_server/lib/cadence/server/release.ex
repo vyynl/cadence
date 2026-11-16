@@ -4,10 +4,10 @@ defmodule Cadence.Server.Release do
   §12.8).
 
   Migrations are deliberately **not** run from the container entrypoint. The
-  reference compose stack runs this module as a one-shot `migrate` service and
+  production compose stack runs this module as a one-shot `migrate` service and
   starts the endpoint only after it succeeds:
 
-      docker compose -f docker-compose.prod.yml up -d --build
+      docker compose up -d
 
   The same command can be run by hand:
 

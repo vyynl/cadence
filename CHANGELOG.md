@@ -1,0 +1,104 @@
+# Changelog
+
+Notable changes to Cadence. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+On `master`, waiting for the 1.1.0 cut; `mix.exs` stays at 1.0.0 until then.
+
+### Added
+
+- Git repository import: `mix cad.import` preserves original commit SHAs,
+  parents (including merges), author timestamps, tags, and provenance, and
+  pushes the imported DAG through the normal node API. Owner-only multi-parent
+  push; paged public History.
+- WebAuthn/passkeys: registration and sign-in, `/account/security` credential
+  management, per-IP ceremony limits, and a `secure` production cookie.
+- Local accounts: operator-created Argon2id passwords, mandatory TOTP with ten
+  recovery codes, and database-backed browser sessions with rotation,
+  remember-me, logout revocation, and a sudo window.
+- Turnkey self-hosting: the compose stack generates its secrets, creates the
+  first admin from a one-shot `bootstrap` service, and bundles Caddy under the
+  `tls` profile. Root `lua/` and `plugin/` shims make the monorepo installable
+  with lazy.nvim, Packer, vim-plug, and mini.deps.
+
+### Changed
+
+- `CAD_DEMO_AUTH` and the compile-gated demo password strategy are retired.
+  Password login is part of every build.
+- A successful OAuth callback returns to the stored local `return_to` or `/`,
+  no longer always to the token page.
+- Existing browser sessions are invalidated once by the session rebuild, so
+  every user signs in again after upgrading.
+
+### Removed
+
+- `bcrypt_elixir` is no longer a direct dependency; Argon2id is the password
+  hash.
+
+## [1.0.0] — 2026-11-11
+
+The planned build order (spec Phases 1–8) is complete. This is the first
+release whose contract is considered stable; remaining items are optional and
+listed under Known limitations.
+
+### Added
+
+- **Daemon** — per-OS watcher backends with debounced auto-commits and a
+  serialized queue per project; a Git object store with pack v2 reads and
+  writes; optional AI commit messages and doc automation with rate limits and
+  background retries; a Unix-socket API for the DAG, spawn/switch, unions, and
+  docs; background sync with parent-first pushes and an existence handshake;
+  `mix cad.*` tasks and a `cadence_daemon` release with ERTS bundled and Erlang
+  distribution off.
+- **Server** — Phoenix 1.8 / LiveView portfolio, full DAG, repository browser,
+  and sanitized README rendering; proposals and incidents with integrity
+  checks, quarantine, and verify-before-resolve; the meld pipeline
+  (deterministic union, conflict-only model calls, strict parsing, materialized
+  result, pending proposal); sandboxed Docker actions through an allowlisted
+  socket proxy; pack-aware storage with a verified background repacker.
+- **Neovim plugin** — `:CadOpen`, `:CadSpawn`, `:CadSwitch`, `:CadUnion`,
+  `:CadProposals`, `:CadDocSync`, `:CadDocDiff`, the DAG picker, and hover
+  diffs.
+- **Demo stack** — one command gives a seeded, browsable dev-mode server.
+- **Editor independence** — nodes come from the daemon's watcher, so any
+  process writing inside a registered directory produces history.
+- **CI** — one merge gate: format, dev and prod compiles, tests, the 80%
+  per-app coverage floor, Hex retirement and unused-lock checks, Sobelow,
+  dependency CVEs, and a fail-closed advisory-database check.
+
+### Upgrade notes
+
+- Back up `CAD_STATE_DIR` before upgrading the daemon: the SQLite schema is not
+  purely additive (`Project.actions_manifest` is dropped). Roll the release and
+  the database back together.
+- Run the daemon migration once after upgrading
+  (`bin/cadence_daemon eval "Cadence.Daemon.Release.migrate()"`, or
+  `mix ecto.migrate -r Cadence.Daemon.Repo` from a checkout). A boot on an
+  unmigrated database is safe but syncs nothing.
+- Rebuild the server image so it picks up the shared `config/runtime.exs` split;
+  the daemon release no longer requires the server's prod variables.
+- The daemon release is built per OS and architecture (`exqlite` ships a
+  precompiled NIF). Linux needs `inotifywait` from `inotify-tools`, or set
+  `CAD_WATCH_BACKEND=fs_poll`.
+
+### Known limitations
+
+- Conflict-bearing melds and doc generation have not been smoke-tested live
+  against a real `CAD_LLM_API_KEY`; conflict-free unions skip the model.
+- Web review of generated docs is deferred; the web UI shows a read-only docs
+  badge.
+- Action logs are captured after the container exits; there is no live stream.
+- Each repack run adds a pack; there is no multi-pack index or consolidation.
+- There is no WAF or bot protection in the app. Keep it behind normal edge
+  protection if exposed publicly.
+- Image publishing is operator-side; CI runs the merge gate but does not publish
+  images. The actions volume must be size-limited by the operator.
+- A `burrito` single-file daemon artifact is not implemented.
+
+## See also
+
+- [README.md](README.md) — what Cadence is.
+- [SECURITY.md](SECURITY.md) — supported versions.

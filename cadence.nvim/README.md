@@ -10,7 +10,7 @@ socket and provides the DAG picker plus convenience commands: `:CadOpen`,
 - Neovim 0.9+
 - [plenary.nvim](https://github.com/nvim-lua/plenary.nvim)
 - `curl` on `PATH`
-- A running Cadence daemon — see [daemon setup](../docs/daemon-setup.md) for the
+- A running Cadence daemon — see [daemon setup](../DAEMON.md) for the
   token, migration, boot command, and project registration
 
 ## Install
@@ -108,7 +108,7 @@ configurable through `require("cadence").setup({ graph = { ... } })`).
 - `q`/`<Esc>` close.
 
 When Neovim starts inside a registered project directory, the picker opens
-automatically ([spec §6.3](../docs/spec.md#63-default-selection-logic)). Disable
+automatically (`auto_open`, see [architecture](../ARCHITECTURE.md)). Disable
 it with `setup({ auto_open = false })`.
 
 The current project is determined by matching `vim.fn.getcwd()` against the
@@ -132,7 +132,7 @@ require("cadence").setup({
 ## Manual smoke test
 
 ```bash
-# terminal A — daemon (see docs/daemon-setup.md for token and migration)
+# terminal A — daemon (see ../DAEMON.md for token and migration)
 mix run --no-start --no-halt -e 'Application.ensure_all_started(:cadence_daemon)'
 
 # terminal B — register a project (work_dir must be an existing directory)
@@ -159,14 +159,12 @@ nvim --headless -l cadence.nvim/spec/proposal_spec.lua
 nvim --headless -l cadence.nvim/spec/client_spec.lua
 ```
 
-A normal commit advances the session pointer automatically
-([spec §5.3](../docs/spec.md#53-commit-pipeline)), so `:CadSpawn` works
-immediately after any commit.
+A normal commit advances the session pointer automatically, so `:CadSpawn`
+acts on the new head immediately after a commit.
 
 ## Related docs
 
-- [Daemon setup](../docs/daemon-setup.md) — install, token, environment, and
+- [Daemon setup](../DAEMON.md) — install, token, environment, and
   troubleshooting.
-- [Import a Git repository](../docs/import.md) — history without the editor.
-- [Spec §6.1](../docs/spec.md#61-neovim-plugin-commands) — plugin command
+- [Architecture](../ARCHITECTURE.md) — DAG, plugin commands, and the sync
   contract.

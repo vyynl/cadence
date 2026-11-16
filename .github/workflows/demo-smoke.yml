@@ -1,0 +1,96 @@
+# Demo smoke test: build docker-compose.demo.yml, boot it, and wait for a
+# healthy server.
+#
+# The demo needs no .env and no secrets — the compose file carries its own
+# dev-mode configuration. A cold run compiles the whole umbrella inside the
+# image, so the health-check budget is generous.
+#
+# Actions are pinned to full commit SHAs (version in the trailing comment) so a
+# moved tag cannot execute new code; .github/dependabot.yml keeps the pins
+# current. `"on"` is quoted on purpose: YAML 1.1 parsers (Ruby's Psych
+# included) read a bare `on:` key as the boolean `true`, which hides the
+# trigger list from any program that inspects this file.
+
+name: Demo smoke
+
+"on":
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+# The job only reads the repository.
+permissions:
+  contents: read
+
+# A newer commit on the same branch/PR makes the older run's verdict irrelevant.
+concurrency:
+  group: demo-smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Boot the demo stack
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    env:
+      COMPOSE_FILE: docker-compose.demo.yml
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # The job never pushes, so it must not retain a usable token.
+          persist-credentials: false
+
+      - name: Show the Compose version
+        run: docker compose version
+
+      - name: Build and start the stack
+        run: docker compose -f "$COMPOSE_FILE" up -d --build
+
+      - name: Wait for a healthy server
+        # The image compiles the umbrella cold, so poll for up to 15 minutes.
+        run: |
+          set -euo pipefail
+
+          url="http://localhost:4000/health"
+          deadline=$(( SECONDS + 900 ))
+
+          while true; do
+            body="$(curl --fail --silent --max-time 5 "$url" || true)"
+            if [[ "$body" == '{"status":"ok"}' ]]; then
+              echo "healthy after ${SECONDS}s: $body"
+              break
+            fi
+
+            if (( SECONDS >= deadline )); then
+              echo "::error::$url did not return {\"status\":\"ok\"} within 15 minutes" >&2
+              exit 1
+            fi
+
+            sleep 5
+          done
+
+      - name: Check the public pages
+        run: |
+          set -euo pipefail
+
+          for path in / /sign-in; do
+            code="$(curl --silent --max-time 10 --output /dev/null \
+              --write-out '%{http_code}' "http://localhost:4000$path")"
+            echo "$path -> $code"
+            if [[ "$code" != "200" ]]; then
+              echo "::error::$path returned $code" >&2
+              exit 1
+            fi
+          done
+
+      - name: Dump the stack logs on failure
+        if: failure()
+        run: docker compose -f "$COMPOSE_FILE" logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f "$COMPOSE_FILE" down -v

@@ -1,0 +1,91 @@
+# Demo stack: Postgres + a seeded, development-mode Cadence server.
+#
+#   docker compose -f docker-compose.demo.yml up --build
+#
+# This is a development-mode stack, not a deployment: the image is MIX_ENV=dev,
+# the server migrates and seeds the database on boot, and the seeded accounts
+# share a fixed, public TOTP secret. The production stack is the root
+# docker-compose.yml; see DEPLOY.md.
+#
+# The project name is pinned, so these containers and volumes never collide
+# with another compose project's.
+#
+# The socket proxy allowlists only the endpoints the action runner uses
+# (spec §8.4); CAD_ACTIONS_ENABLED and the limits still gate every run.
+name: cadence-demo
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: cadence_demo
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d cadence_demo"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    volumes:
+      - cadence-demo-pg:/var/lib/postgresql/data
+
+  server:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.demo
+    depends_on:
+      db:
+        condition: service_healthy
+      docker-proxy:
+        condition: service_started
+    environment:
+      CAD_DATABASE_URL: "ecto://postgres:postgres@db:5432/cadence_demo"
+      CAD_SECRET_KEY_BASE: "cadence-demo-secret-key-base-do-not-use-in-production-0123456789abcdef"
+      CAD_PUBLIC_URL: "http://localhost:4000"
+      CAD_DEMO_HINTS: "true"
+      CAD_GIT_STORE_PATH: "/data/git"
+      CAD_ARTIFACT_PATH: "/data/artifacts"
+      CAD_DOCKER_SOCKET: "http://docker-proxy:2375"
+      CAD_ACTIONS_VOLUME: "cadence-demo-actions"
+      CAD_ACTIONS_VOLUME_PATH: "/data/actions"
+      CAD_HTTP_PORT: "4000"
+      # Demo only: localhost is a secure context, so WebAuthn works over plain
+      # HTTP. Production stays opt-in and requires an explicit https origin.
+      CAD_WEBAUTHN_ENABLED: "true"
+      CAD_WEBAUTHN_RP_ID: "localhost"
+      CAD_WEBAUTHN_ORIGIN: "http://localhost:4000"
+    ports:
+      - "4000:4000"
+    volumes:
+      # Optional, for style iteration: edit CSS on the host and refresh the
+      # browser. Everything else needs an image rebuild.
+      - ./apps/cadence_server/priv/static/css:/app/apps/cadence_server/priv/static/css
+      - cadence-demo-git:/data/git
+      # Actions: the server stages snapshots here and the host daemon mounts
+      # the same named volume into each action container by subpath (§8.3).
+      - cadence-demo-actions:/data/actions
+      - cadence-demo-artifacts:/data/artifacts
+
+  # Allowlisted Docker API proxy (spec §8.4). The runner only needs container
+  # lifecycle, image inspect/build, and POST for wait/start.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      BUILD: 1
+      POST: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+volumes:
+  cadence-demo-pg:
+  cadence-demo-git:
+  # Pinned so the Docker volume name matches CAD_ACTIONS_VOLUME; compose would
+  # otherwise prefix both with the project name.
+  cadence-demo-actions:
+    name: cadence-demo-actions
+  cadence-demo-artifacts:
+    name: cadence-demo-artifacts

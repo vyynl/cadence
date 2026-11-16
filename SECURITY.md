@@ -85,15 +85,13 @@ Out of scope:
 - Issues that require an already-compromised host account, root on the server,
   or control of the Docker daemon.
 - The accepted hackney 1.25.0 and assent 0.2.13 advisories recorded in
-  `.mix_audit.ignore`, `mix.exs`, and
-  [spec §16](docs/spec.md#16-open-decisions). They are ignored by exact
-  advisory ID, not by package. Report them again only with a concrete exploit
-  path through Cadence's usage: no SOCKS5 proxy, custom CA, user-supplied query
-  string, or Apple OAuth strategy is configured.
+  `.mix_audit.ignore` and `mix.exs`. They are ignored by exact advisory ID, not
+  by package. Report them again only with a concrete exploit path through
+  Cadence's usage: no SOCKS5 proxy, custom CA, user-supplied query string, or
+  Apple OAuth strategy is configured.
 - Known limitations that are already documented as deployment prerequisites
   rather than defects — for example, action containers share the host user
-  namespace and `/out` has no quota. See `docs/release-notes.md`
-  (Known limitations) and spec §16.
+  namespace and `/out` has no quota. See `CHANGELOG.md` (Known limitations).
 - Reports that consist only of scanner output with no demonstrated impact.
 - Content a user deliberately commits to their own repository. Cadence is a
   source control system; the server's scanner and quarantine are mitigations,
@@ -106,3 +104,8 @@ no bug bounty. Please allow a reasonable window to ship a fix before publishing
 details, and coordinate the disclosure date through the advisory. Once a fix is
 released, the advisory records the affected versions, the fix, and any
 mitigation.
+
+## See also
+
+- [README.md](README.md) — what Cadence is and how to run it.
+- [CHANGELOG.md](CHANGELOG.md) — known limitations that are prerequisites, not defects.

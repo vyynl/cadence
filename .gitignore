@@ -15,8 +15,11 @@ erl_crash.dump
 /apps/*/_build/
 /apps/*/deps/
 
-# Local
+# Local. The daemon reads its own file, which `*.env` does not match; ignore it
+# explicitly so a minted token can never be committed. The examples stay tracked.
 .env
+.env.daemon
+.env.local
 *.env
 *.db
 *.db-shm
