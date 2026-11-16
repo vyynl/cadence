@@ -49,7 +49,7 @@ Preferences use last-write-wins on `preferences_updated_at`; `pinned` is
 server-authoritative and redelivered on the next pull.
 
 A **meld** is the only way Cadence combines divergence itself, and it is
-server-side: the server computes a deterministic union of 2–8 parents, calls the
+server-side: the server computes a deterministic union of 2-8 parents, calls the
 model only on paths whose blob SHAs differ, and materializes the result as a
 pending proposal. No node is created until a human approves, and approval
 attaches the node flagged `in-progress`, never `functioning`. The one exception

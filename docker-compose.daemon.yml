@@ -29,7 +29,7 @@ services:
       # defaults CAD_STATE_DIR to /data/state, so this volume is the state.
       - daemon-state:/data/state
 
-      # PROJECT DIRECTORIES — mount each one at its REAL host path:
+      # PROJECT DIRECTORIES: mount each one at its REAL host path:
       #
       #   - /home/you/code/my-project:/home/you/code/my-project
       #

@@ -11,7 +11,7 @@ docker compose -f docker-compose.demo.yml up -d --build
 docker compose -f docker-compose.demo.yml logs -f server
 ```
 
-The first build compiles the whole application, so it takes **10–15 minutes**
+The first build compiles the whole application, so it takes **10-15 minutes**
 before anything appears. When the logs show `Demo data ready`, open
 <http://localhost:4000> and sign in at `/sign-in` as `owner@demo.local` with
 password `cadence-demo`. The form then asks for a TOTP code:

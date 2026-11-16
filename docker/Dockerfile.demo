@@ -25,5 +25,5 @@ RUN mix local.hex --force \
 EXPOSE 4000
 
 # Migrate the server repo, seed the demo data (idempotent), then boot only the
-# server app — the daemon and its SQLite repo stay out of the demo.
+# server app; the daemon and its SQLite repo stay out of the demo.
 CMD ["sh", "-c", "mix ecto.migrate -r Cadence.Server.Repo && mix cadence.demo_seed && mix run --no-start --no-halt -e 'Application.ensure_all_started(:cadence_server)'"]

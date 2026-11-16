@@ -40,7 +40,7 @@ On `master`, waiting for the 1.1.0 cut; `mix.exs` stays at 1.0.0 until then.
 
 ## [1.0.0] - 2026-11-11
 
-The planned build order (spec Phases 1–8) is complete. This is the first
+The planned build order (spec Phases 1-8) is complete. This is the first
 release whose contract is considered stable; remaining items are optional and
 listed under Known limitations.
 
@@ -65,7 +65,7 @@ listed under Known limitations.
 - **Demo stack**: one command gives a seeded, browsable dev-mode server.
 - **Editor independence**: nodes come from the daemon's watcher, so any
   process writing inside a registered directory produces history.
-- **CI**: one merge gate: format, dev and prod compiles, tests, the 80%
+- **CI**: one merge gate covering format, dev and prod compiles, tests, the 80%
   per-app coverage floor, Hex retirement and unused-lock checks, Sobelow,
   dependency CVEs, and a fail-closed advisory-database check.
 
