@@ -1,66 +1,253 @@
-# One-command demo stack: Postgres + a seeded, dev-mode Cadence server.
+# Cadence production stack: server, PostgreSQL, one-shot migrate/bootstrap, and
+# opt-in Caddy TLS. No build context and no repo-relative files, so this file
+# works as a TrueNAS SCALE / Portainer "paste-a-stack" and on a clean Linux
+# host. The only host path is the Docker socket handed to the API proxy.
 #
-#   docker compose up --build
+#   cp .env.example .env     # set CAD_PUBLIC_URL and CAD_ADMIN_EMAIL
+#   docker compose up -d
 #
-# Not production: the image is MIX_ENV=dev and the seeded accounts use the same
-# local password + TOTP login as production (spec §7.4, §12.4). The socket
-# proxy allowlists only the endpoints the action runner uses (spec §8.4);
-# CAD_ACTIONS_ENABLED and the limits still gate every run.
+# TLS is opt-in: add `--profile tls` with CAD_TLS_MODE=auto|internal, or run
+# your own reverse proxy in front of CAD_HTTP_BIND. Server secrets are generated
+# into the `cadence-secrets` volume on first start; nothing to create on the
+# host, and no openssl/bash needed there.
+#
+# Project name is pinned so `down -v` here can never touch the demo stack.
+name: cadence-prod
+
+x-cadence-env: &cadence-env
+  # Required in practice: the release refuses to boot without it. The default
+  # exists only so `docker compose config` validates without a .env.
+  CAD_PUBLIC_URL: "${CAD_PUBLIC_URL:-http://localhost:4000}"
+  CAD_DB_POOL_SIZE: "${CAD_DB_POOL_SIZE:-10}"
+  CAD_GIT_STORE_PATH: "/data/git"
+  CAD_ARTIFACT_PATH: "/data/artifacts"
+  # CAD_ACTIONS_VOLUME is both the app setting and the compose volume name
+  # below: the host Docker daemon mounts that exact volume into action
+  # containers by name, so compose must not prefix it.
+  CAD_ACTIONS_ENABLED: "${CAD_ACTIONS_ENABLED:-true}"
+  CAD_ACTIONS_VOLUME: "${CAD_ACTIONS_VOLUME:-cadence_actions}"
+  CAD_ACTIONS_VOLUME_PATH: "/data/actions"
+  CAD_DOCKER_SOCKET: "http://docker-proxy:2375"
+  CAD_LLM_PROVIDER: "${CAD_LLM_PROVIDER:-deepseek}"
+  CAD_LLM_API_KEY: "${CAD_LLM_API_KEY:-}"
+  CAD_LLM_MODEL: "${CAD_LLM_MODEL:-deepseek-chat}"
+  CAD_LLM_BASE_URL: "${CAD_LLM_BASE_URL:-https://api.deepseek.com}"
+  CAD_TOTP_KEY: "${CAD_TOTP_KEY:-}"
+  CAD_OAUTH_GITHUB_CLIENT_ID: "${CAD_OAUTH_GITHUB_CLIENT_ID:-}"
+  CAD_OAUTH_GITHUB_CLIENT_SECRET: "${CAD_OAUTH_GITHUB_CLIENT_SECRET:-}"
+  CAD_OAUTH_GOOGLE_CLIENT_ID: "${CAD_OAUTH_GOOGLE_CLIENT_ID:-}"
+  CAD_OAUTH_GOOGLE_CLIENT_SECRET: "${CAD_OAUTH_GOOGLE_CLIENT_SECRET:-}"
+  CAD_WEBAUTHN_ENABLED: "${CAD_WEBAUTHN_ENABLED:-false}"
+  CAD_WEBAUTHN_RP_ID: "${CAD_WEBAUTHN_RP_ID:-}"
+  CAD_WEBAUTHN_RP_NAME: "${CAD_WEBAUTHN_RP_NAME:-Cadence}"
+  CAD_WEBAUTHN_ORIGIN: "${CAD_WEBAUTHN_ORIGIN:-}"
+
 services:
-  db:
-    image: postgres:16-alpine
+  # First-boot secret generation, inside the container (spec §12.7). Writes into
+  # the `cadence-secrets` volume: the Phoenix secret key base, the PostgreSQL
+  # password, the first-admin password, and an app.env the other services
+  # source. Values already in the volume are reused; a value supplied through
+  # .env wins and is written back. The admin password is printed to this
+  # service's logs on the run that creates it, and only then.
+  secrets:
+    image: alpine:3
+    restart: "no"
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: cadence_demo
+      CAD_SECRET_KEY_BASE: "${CAD_SECRET_KEY_BASE:-}"
+      CAD_DB_PASS: "${CAD_DB_PASS:-}"
+      CAD_ADMIN_PASSWORD: "${CAD_ADMIN_PASSWORD:-}"
+      CAD_DB_USER: "${CAD_DB_USER:-cadence}"
+      CAD_DB_NAME: "${CAD_DB_NAME:-cadence}"
+    volumes:
+      - cadence-secrets:/secrets
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        umask 022
+        d=/secrets
+        mkdir -p "$$d"
+        gen() { head -c "$$1" /dev/urandom | od -An -tx1 | tr -d ' \n'; }
+        first_admin=0
+
+        skb=$$(cat "$$d/secret_key_base" 2>/dev/null || true)
+        if [ -n "$${CAD_SECRET_KEY_BASE:-}" ]; then skb=$$CAD_SECRET_KEY_BASE; fi
+        if [ -z "$$skb" ]; then skb=$$(gen 64); fi
+
+        dbp=$$(cat "$$d/db_password" 2>/dev/null || true)
+        if [ -n "$${CAD_DB_PASS:-}" ]; then dbp=$$CAD_DB_PASS; fi
+        if [ -z "$$dbp" ]; then dbp=$$(gen 24); fi
+
+        adm=$$(cat "$$d/admin_password" 2>/dev/null || true)
+        if [ -n "$${CAD_ADMIN_PASSWORD:-}" ]; then
+          adm=$$CAD_ADMIN_PASSWORD
+        elif [ -z "$$adm" ]; then
+          adm=$$(gen 16)
+          first_admin=1
+        fi
+
+        printf '%s' "$$skb" > "$$d/secret_key_base"
+        printf '%s' "$$dbp" > "$$d/db_password"
+        printf '%s' "$$adm" > "$$d/admin_password"
+        printf 'CAD_SECRET_KEY_BASE=%s\nCAD_DATABASE_URL=ecto://%s:%s@postgres:5432/%s\nCAD_GENERATED_ADMIN_PASSWORD=%s\n' \
+          "$$skb" "$${CAD_DB_USER:-cadence}" "$$dbp" "$${CAD_DB_NAME:-cadence}" "$$adm" \
+          > "$$d/app.env"
+        # 0644: the cadence and postgres images use different uids, and only
+        # this stack's containers mount the volume.
+        chmod 644 "$$d/app.env" "$$d/secret_key_base" "$$d/db_password" "$$d/admin_password"
+
+        if [ "$$first_admin" = 1 ]; then
+          printf '\nFirst-admin password (shown once): %s\n\n' "$$adm"
+        else
+          printf 'Secrets already present; nothing generated.\n'
+        fi
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "${CAD_DB_USER:-cadence}"
+      POSTGRES_DB: "${CAD_DB_NAME:-cadence}"
+      # Read only while the data directory is empty. Once the cluster exists,
+      # changing this file does not change the role's password (ALTER ROLE).
+      POSTGRES_PASSWORD_FILE: /secrets/db_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - cadence-secrets:/secrets:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d cadence_demo"]
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 5s
       timeout: 5s
       retries: 12
       start_period: 5s
-    volumes:
-      - cadence-demo-pg:/var/lib/postgresql/data
-
-  server:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.demo
     depends_on:
-      db:
+      secrets:
+        condition: service_completed_successfully
+
+  # One-shot migration runner. Every `up` recreates it; Ecto.Migrator skips
+  # applied versions, so a second run is a no-op.
+  migrate:
+    image: "${CAD_SERVER_IMAGE:-ghcr.io/vyynl/cadence:latest}"
+    restart: "no"
+    environment: *cadence-env
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        set -a; . /secrets/app.env; set +a;
+        exec /app/bin/cadence eval 'Cadence.Server.Release.migrate()'
+    volumes:
+      - cadence-secrets:/secrets:ro
+    depends_on:
+      postgres:
         condition: service_healthy
+
+  # One-shot first account, created from CAD_ADMIN_EMAIL + a password. The
+  # generated password is the default; CAD_ADMIN_PASSWORD in .env overrides it.
+  # No-op once the account exists, and no-op while the password is empty.
+  bootstrap:
+    image: "${CAD_SERVER_IMAGE:-ghcr.io/vyynl/cadence:latest}"
+    restart: "no"
+    environment:
+      <<: *cadence-env
+      CAD_ADMIN_EMAIL: "${CAD_ADMIN_EMAIL:-}"
+      CAD_ADMIN_NAME: "${CAD_ADMIN_NAME:-}"
+      CAD_ADMIN_PASSWORD: "${CAD_ADMIN_PASSWORD:-}"
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        set -a; . /secrets/app.env; set +a;
+        if [ -n "$${CAD_ADMIN_EMAIL:-}" ] && [ -z "$${CAD_ADMIN_PASSWORD:-}" ]; then
+          CAD_ADMIN_PASSWORD="$$CAD_GENERATED_ADMIN_PASSWORD";
+          export CAD_ADMIN_PASSWORD;
+        fi;
+        exec /app/bin/cadence eval 'Cadence.Server.Release.bootstrap_admin()'
+    volumes:
+      - cadence-secrets:/secrets:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  cadence:
+    image: "${CAD_SERVER_IMAGE:-ghcr.io/vyynl/cadence:latest}"
+    restart: unless-stopped
+    environment: *cadence-env
+    # The image's CMD is the release entrypoint; the secret key base and the
+    # database URL live in the volume, so source them before exec'ing it.
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        set -a; . /secrets/app.env; set +a;
+        exec /app/bin/cadence start
+    # The app always listens on 4000 inside the container; CAD_HTTP_PORT is the
+    # host publish port only and is deliberately not passed inward.
+    # Loopback by default: the bundled Caddy profile or a same-host proxy
+    # reaches it there. Use 0.0.0.0 only for a proxy on another host.
+    ports:
+      - "${CAD_HTTP_BIND:-127.0.0.1}:${CAD_HTTP_PORT:-4000}:4000"
+    volumes:
+      - cadence-secrets:/secrets:ro
+      - cadence_data:/data
+      - cadence_actions:/data/actions
+      - cadence_artifacts:/data/artifacts
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:4000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      bootstrap:
+        condition: service_completed_successfully
       docker-proxy:
         condition: service_started
-    environment:
-      CAD_DATABASE_URL: "ecto://postgres:postgres@db:5432/cadence_demo"
-      CAD_SECRET_KEY_BASE: "cadence-demo-secret-key-base-do-not-use-in-production-0123456789abcdef"
-      CAD_PUBLIC_URL: "http://localhost:4000"
-      CAD_DEMO_HINTS: "true"
-      CAD_GIT_STORE_PATH: "/data/git"
-      CAD_ARTIFACT_PATH: "/data/artifacts"
-      CAD_DOCKER_SOCKET: "http://docker-proxy:2375"
-      CAD_ACTIONS_VOLUME: "cadence-demo-actions"
-      CAD_ACTIONS_VOLUME_PATH: "/data/actions"
-      CAD_HTTP_PORT: "4000"
-      # Local demo only: localhost is a secure context, so WebAuthn works over
-      # plain HTTP. Production stays opt-in with an explicit https origin
-      # (docs/passkeys.md).
-      CAD_WEBAUTHN_ENABLED: "true"
-      CAD_WEBAUTHN_RP_ID: "localhost"
-      CAD_WEBAUTHN_ORIGIN: "http://localhost:4000"
-    ports:
-      - "4000:4000"
-    volumes:
-      # Style iteration: edit CSS on the host and refresh the browser.
-      - ./apps/cadence_server/priv/static/css:/app/apps/cadence_server/priv/static/css
-      - cadence-demo-git:/data/git
-      # Actions: the server stages snapshots here and the host daemon mounts
-      # the same named volume into each action container by subpath (§8.3).
-      - cadence-demo-actions:/data/actions
-      - cadence-demo-artifacts:/data/artifacts
 
-  # Allowlisted Docker API proxy (spec §8.4). The runner only needs container
-  # lifecycle, image inspect/build, and POST for wait/start.
+  # Opt-in TLS (spec §12.9). The Caddyfile is generated in the container: a
+  # repo-relative bind mount would break paste-a-stack. `auto` uses ACME and
+  # needs public DNS plus ports 80/443; `internal` uses Caddy's local CA.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["tls"]
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        host="$${CAD_PHX_HOST:-}"
+        if [ -z "$$host" ]; then host="$${CAD_PUBLIC_URL:-}"; host="$${host#*://}"; host="$${host%%/*}"; fi
+        if [ -z "$$host" ]; then echo "set CAD_PUBLIC_URL" >&2; exit 1; fi
+        case "$${CAD_TLS_MODE:-auto}" in
+          auto|"") tls="" ;;
+          internal) tls="tls internal" ;;
+          *) echo "CAD_TLS_MODE must be auto or internal; omit the tls profile behind your own proxy" >&2; exit 1 ;;
+        esac
+        printf '%s {\n  %s\n  encode zstd gzip\n  reverse_proxy cadence:4000\n}\n' "$$host" "$$tls" > /tmp/Caddyfile
+        exec caddy run --config /tmp/Caddyfile --adapter caddyfile
+    environment:
+      CAD_PUBLIC_URL: "${CAD_PUBLIC_URL:-http://localhost:4000}"
+      CAD_PHX_HOST: "${CAD_PHX_HOST:-}"
+      CAD_TLS_MODE: "${CAD_TLS_MODE:-auto}"
+    ports:
+      - "${CAD_CADDY_HTTP_PORT:-80}:80"
+      - "${CAD_CADDY_HTTPS_PORT:-443}:443"
+      - "${CAD_CADDY_HTTPS_PORT:-443}:443/udp"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      cadence:
+        condition: service_started
+
+  # Allowlisted Docker API proxy (spec §8.4). Never mount the raw socket into
+  # the app container. This proxy is still root-equivalent on the host, so it
+  # is reachable only from this stack's network.
   docker-proxy:
     image: tecnativa/docker-socket-proxy:latest
     restart: unless-stopped
@@ -73,11 +260,13 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
 
 volumes:
-  cadence-demo-pg:
-  cadence-demo-git:
-  # Pinned so the Docker volume name matches CAD_ACTIONS_VOLUME; compose would
-  # otherwise prefix both with the project name.
-  cadence-demo-actions:
-    name: cadence-demo-actions
-  cadence-demo-artifacts:
-    name: cadence-demo-artifacts
+  cadence-secrets:
+  cadence_data:
+  # Pinned: the host daemon mounts this exact name into action containers
+  # (spec §8.3). Keep it equal to CAD_ACTIONS_VOLUME.
+  cadence_actions:
+    name: "${CAD_ACTIONS_VOLUME:-cadence_actions}"
+  cadence_artifacts:
+  postgres_data:
+  caddy_data:
+  caddy_config:

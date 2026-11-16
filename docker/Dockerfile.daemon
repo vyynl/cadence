@@ -1,0 +1,94 @@
+# syntax=docker/dockerfile:1
+# check=skip=SecretsUsedInArgOrEnv
+
+# Daemon image: the `cadence_daemon` release only (spec §12.2, §12.8).
+#
+# Published as `ghcr.io/vyynl/cadence-daemon`. The daemon dials out to
+# `CAD_SERVER_URL` and serves only its Unix socket, so this image publishes no
+# port and needs no healthcheck endpoint.
+
+ARG ELIXIR_VERSION=1.20
+ARG OTP_VERSION=29
+# Must match the Debian release of the `elixir` build image: the release ships
+# the ERTS binary built against that glibc. `elixir:1.20-otp-29` is trixie
+# (glibc 2.41); a bookworm runtime fails with `GLIBC_2.38 not found`.
+ARG DEBIAN_VERSION=trixie
+
+# -- Build stage -------------------------------------------------------------
+
+FROM elixir:${ELIXIR_VERSION}-otp-${OTP_VERSION} AS build
+
+ENV MIX_ENV=prod \
+    LANG=C.UTF-8
+
+WORKDIR /app
+
+RUN mix local.hex --force && mix local.rebar --force
+
+# Only the umbrella project files first, so `mix deps.get` is cached across
+# source-only changes. The umbrella root requires every child's mix.exs to
+# exist; their source is copied after the dependency layer.
+COPY mix.exs mix.lock ./
+COPY apps/cadence_shared/mix.exs apps/cadence_shared/mix.exs
+COPY apps/cadence_daemon/mix.exs apps/cadence_daemon/mix.exs
+COPY apps/cadence_server/mix.exs apps/cadence_server/mix.exs
+COPY config ./config
+
+RUN mix deps.get --only prod
+
+COPY apps ./apps
+# `rel_templates_path: "rel/daemon"` (root mix.exs) supplies this release's
+# env.sh, which turns Erlang distribution off.
+COPY rel ./rel
+
+RUN mix compile --warnings-as-errors
+RUN mix release cadence_daemon
+
+# -- Runtime stage -----------------------------------------------------------
+
+FROM debian:${DEBIAN_VERSION}-slim AS app
+
+# The release carries ERTS, so the runtime needs glibc, the CA bundle and
+# OpenSSL for HTTPS sync, libstdc++ for the exqlite NIF, ncurses for `erl`, and
+# libsctp for the ERTS SCTP probe (distribution is off). `inotify-tools` is
+# required by the default `fs_inotify` watcher, which runs the `inotifywait`
+# executable; `CAD_WATCH_BACKEND=fs_poll` removes that dependency (and is
+# necessary on hosts where the inotify watch limit is exhausted).
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+       ca-certificates \
+       inotify-tools \
+       libncurses6 \
+       libsctp1 \
+       libstdc++6 \
+       openssl \
+  && rm -rf /var/lib/apt/lists/* \
+  && groupadd --system --gid 10000 cadence \
+  && useradd --system --uid 10000 --gid cadence --home-dir /app --shell /usr/sbin/nologin cadence
+
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    HOME=/app \
+    MIX_ENV=prod \
+    RELEASE_DISTRIBUTION=none \
+    CAD_STATE_DIR=/data/state
+
+WORKDIR /app
+
+# GHCR uses the source label to link the package to this repository.
+LABEL org.opencontainers.image.source="https://github.com/vyynl/cadence" \
+      org.opencontainers.image.title="Cadence daemon" \
+      org.opencontainers.image.description="Local daemon for the Cadence source control server"
+
+COPY --from=build /app/_build/prod/rel/cadence_daemon ./
+
+# CAD_STATE_DIR holds the SQLite database, the per-project Git stores, and
+# `daemon.sock`; it must be a volume, not image state.
+RUN mkdir -p /app/tmp /data/state \
+  && chown -R cadence:cadence /app /data
+
+USER cadence
+
+# Migration is explicit in the release (`bin/cadence_daemon eval
+# "Cadence.Daemon.Release.migrate()"`); a plain boot never migrates.
+CMD ["/app/bin/cadence_daemon", "start"]

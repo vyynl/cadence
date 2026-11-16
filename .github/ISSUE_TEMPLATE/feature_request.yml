@@ -5,10 +5,10 @@ body:
   - type: markdown
     attributes:
       value: |
-        Cadence is spec-first: `docs/spec.md` is the contract. Check the
-        relevant section, §16 Open Decisions, and the known limitations in
-        `docs/release-notes.md` before filing. A new dependency must be added to
-        the §11 table before implementation.
+        Thanks for the proposal. Start from the problem: what is hard today,
+        and for whom. Check the known limitations in `CHANGELOG.md` before
+        filing. A new runtime dependency needs an explicit maintainer decision
+        before implementation.
 
         **Do not use this form for a security vulnerability.** Follow
         `SECURITY.md` and report privately through GitHub Security Advisories.
@@ -65,7 +65,7 @@ body:
     attributes:
       label: Confirmations
       options:
-        - label: I searched existing issues, the relevant spec sections, and the known limitations in docs/release-notes.md.
+        - label: I searched existing issues and the known limitations in CHANGELOG.md.
           required: true
         - label: This is not a security vulnerability; security reports go through SECURITY.md.
           required: true

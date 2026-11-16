@@ -1,12 +1,13 @@
 # Publish the production server image to GHCR.
 #
-# The Portainer stack (`docker-compose.portainer.yml`) pulls
-# `ghcr.io/vyynl/cadence:latest` by default. This workflow builds
-# `docker/Dockerfile` on master, version tags, and manual dispatch.
+# The production stack (`docker-compose.yml`) pulls
+# `ghcr.io/vyynl/cadence:latest` by default, and every `examples/*.yaml`
+# variant uses the same reference. This workflow builds `docker/Dockerfile` on
+# master, version tags, and manual dispatch.
 #
-# The package is private for a private repository. Add GHCR credentials in
-# Portainer (username = GitHub user, password = a PAT with `read:packages`)
-# before deploying the stack.
+# The package visibility follows the repository. For a private package, add
+# GHCR credentials wherever the stack runs (username = GitHub user, password =
+# a PAT with `read:packages`) before deploying.
 
 name: Publish server image
 

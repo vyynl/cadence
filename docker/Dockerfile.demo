@@ -2,7 +2,7 @@
 #
 # This is deliberately NOT a production artifact: it compiles with MIX_ENV=dev,
 # keeps sources for the code reloader, and seeds demo data on boot. The release
-# path (§12.8) remains separate work.
+# image is docker/Dockerfile.
 FROM elixir:1.20-otp-29
 
 ENV MIX_ENV=dev

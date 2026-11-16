@@ -5,9 +5,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting. Cadence is spec-first: `docs/spec.md` is the
-        contract, and `docs/release-notes.md` lists known limitations. Please
-        check both before filing.
+        Thanks for reporting. Known limitations and upgrade notes live in
+        `CHANGELOG.md`; check it before filing.
 
         **Do not use this form for a security vulnerability.** Follow
         `SECURITY.md` and report privately through GitHub Security Advisories.
@@ -109,7 +108,7 @@ body:
     attributes:
       label: Confirmations
       options:
-        - label: I searched existing issues and the known limitations in docs/release-notes.md.
+        - label: I searched existing issues and the known limitations in CHANGELOG.md.
           required: true
         - label: This is not a security vulnerability; security reports go through SECURITY.md.
           required: true

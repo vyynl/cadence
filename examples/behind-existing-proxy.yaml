@@ -1,0 +1,179 @@
+# Cadence behind an existing reverse proxy (Traefik, nginx, swag, an ingress).
+# No Caddy: the proxy terminates TLS and forwards to the app port. Edit the two
+# EDIT lines, then `docker compose -f examples/behind-existing-proxy.yaml up -d`.
+# CAD_PUBLIC_URL must be the proxy's public origin, including https:// — prod
+# session cookies are `secure` and passkeys compare against this origin.
+name: cadence-prod
+
+x-cadence-env: &cadence-env
+  CAD_PUBLIC_URL: "https://cadence.example.com" # EDIT: the proxy's public origin
+  CAD_ADMIN_EMAIL: "admin@example.com" # EDIT: first admin account
+  CAD_DB_POOL_SIZE: "10"
+  CAD_GIT_STORE_PATH: "/data/git"
+  CAD_ARTIFACT_PATH: "/data/artifacts"
+  CAD_ACTIONS_ENABLED: "true"
+  CAD_ACTIONS_VOLUME: "cadence_actions"
+  CAD_ACTIONS_VOLUME_PATH: "/data/actions"
+  CAD_DOCKER_SOCKET: "http://docker-proxy:2375"
+  CAD_LLM_PROVIDER: "deepseek"
+  CAD_LLM_API_KEY: ""
+  CAD_LLM_MODEL: "deepseek-chat"
+  CAD_LLM_BASE_URL: "https://api.deepseek.com"
+
+services:
+  # Generates the secret key base, the database password and the first admin
+  # password once, inside the cadence-secrets volume. The admin password is
+  # printed once by `docker compose logs secrets`.
+  secrets:
+    image: alpine:3
+    restart: "no"
+    environment:
+      CAD_DB_USER: "cadence"
+      CAD_DB_NAME: "cadence"
+    volumes:
+      - cadence-secrets:/secrets
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        umask 022
+        d=/secrets
+        mkdir -p "$$d"
+        gen() { head -c "$$1" /dev/urandom | od -An -tx1 | tr -d ' \n'; }
+        first_admin=0
+        skb=$$(cat "$$d/secret_key_base" 2>/dev/null || true)
+        if [ -z "$$skb" ]; then skb=$$(gen 64); fi
+        dbp=$$(cat "$$d/db_password" 2>/dev/null || true)
+        if [ -z "$$dbp" ]; then dbp=$$(gen 24); fi
+        adm=$$(cat "$$d/admin_password" 2>/dev/null || true)
+        if [ -z "$$adm" ]; then adm=$$(gen 16); first_admin=1; fi
+        printf '%s' "$$skb" > "$$d/secret_key_base"
+        printf '%s' "$$dbp" > "$$d/db_password"
+        printf '%s' "$$adm" > "$$d/admin_password"
+        printf 'CAD_SECRET_KEY_BASE=%s\nCAD_DATABASE_URL=ecto://%s:%s@postgres:5432/%s\nCAD_GENERATED_ADMIN_PASSWORD=%s\n' \
+          "$$skb" "$${CAD_DB_USER}" "$$dbp" "$${CAD_DB_NAME}" "$$adm" > "$$d/app.env"
+        chmod 644 "$$d/app.env" "$$d/secret_key_base" "$$d/db_password" "$$d/admin_password"
+        if [ "$$first_admin" = 1 ]; then
+          printf '\nFirst-admin password (shown once): %s\n\n' "$$adm"
+        else
+          printf 'Secrets already present; nothing generated.\n'
+        fi
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "cadence"
+      POSTGRES_DB: "cadence"
+      POSTGRES_PASSWORD_FILE: /secrets/db_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - cadence-secrets:/secrets:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    depends_on:
+      secrets:
+        condition: service_completed_successfully
+
+  migrate:
+    image: "ghcr.io/vyynl/cadence:latest" # EDIT: pin a version tag instead
+    restart: "no"
+    environment: *cadence-env
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        set -a; . /secrets/app.env; set +a;
+        exec /app/bin/cadence eval 'Cadence.Server.Release.migrate()'
+    volumes:
+      - cadence-secrets:/secrets:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  bootstrap:
+    image: "ghcr.io/vyynl/cadence:latest"
+    restart: "no"
+    environment:
+      <<: *cadence-env
+      CAD_ADMIN_NAME: ""
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        set -a; . /secrets/app.env; set +a;
+        if [ -n "$${CAD_ADMIN_EMAIL:-}" ] && [ -z "$${CAD_ADMIN_PASSWORD:-}" ]; then
+          CAD_ADMIN_PASSWORD="$$CAD_GENERATED_ADMIN_PASSWORD";
+          export CAD_ADMIN_PASSWORD;
+        fi;
+        exec /app/bin/cadence eval 'Cadence.Server.Release.bootstrap_admin()'
+    volumes:
+      - cadence-secrets:/secrets:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  cadence:
+    image: "ghcr.io/vyynl/cadence:latest"
+    restart: unless-stopped
+    environment: *cadence-env
+    # The image's CMD is the release entrypoint; the secret key base and the
+    # database URL live in the volume, so source them before exec'ing it.
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        set -a; . /secrets/app.env; set +a;
+        exec /app/bin/cadence start
+    # Loopback works for a proxy running on this host. For a proxy in another
+    # container, attach it to this stack's network instead of publishing.
+    # For a proxy on another host, change 127.0.0.1 to 0.0.0.0 and firewall it.
+    ports:
+      - "127.0.0.1:4000:4000"
+    volumes:
+      - cadence-secrets:/secrets:ro
+      - cadence_data:/data
+      - cadence_actions:/data/actions
+      - cadence_artifacts:/data/artifacts
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:4000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      bootstrap:
+        condition: service_completed_successfully
+      docker-proxy:
+        condition: service_started
+
+  # Allowlisted Docker API proxy (never mount the raw socket into the app).
+  # Still root-equivalent on the host: keep it off untrusted networks.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      BUILD: 1
+      POST: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+volumes:
+  cadence-secrets:
+  cadence_data:
+  # Pinned name: the host daemon mounts it into action containers.
+  cadence_actions:
+    name: "cadence_actions"
+  cadence_artifacts:
+  postgres_data:

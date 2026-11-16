@@ -1,0 +1,131 @@
+# Documentation guardrails for the root *.md files.
+#
+# Four independent checks, each cheap enough to finish in seconds:
+#   markdownlint  style and structure
+#   lychee        every link resolves, internal links are authoritative
+#   env-drift     a CAD_* variable in a compose file is documented in the env
+#                 reference (.github/scripts/check-env-docs.sh)
+#   assets        screenshots exist, are non-empty, and are referenced
+#
+# .claude/ is local-only and is never linted. `"on"` is quoted on purpose: YAML
+# 1.1 parsers (Ruby's Psych included) read a bare `on:` key as the boolean
+# `true`, which hides the trigger list from any program that inspects this file.
+
+name: Docs
+
+"on":
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+# Every job only reads the repository.
+permissions:
+  contents: read
+
+# A newer commit on the same branch/PR makes the older run's verdict irrelevant.
+concurrency:
+  group: docs-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  markdownlint:
+    name: Markdown style
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Lint the root documentation
+        # The version is pinned so a new upstream release cannot change the
+        # verdict under an unrelated pull request. .markdownlint.yml supplies
+        # the rule set. AGENTS.md is git-ignored internal policy, so it is
+        # absent from a CI checkout and explicitly skipped for a local run.
+        run: npx --yes markdownlint-cli2@0.24.1 "*.md" "!AGENTS.md"
+
+  links:
+    name: Links
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Check every link
+        # A relative link to a missing file fails the job: internal links are
+        # the ones this workflow exists to protect. Externals that are rate
+        # limited from a shared CI IP are excluded; the rest must answer.
+        #
+        # Also excluded: localhost URLs (a link checker cannot reach the
+        # reader's machine) and this repository's own actions/packages pages,
+        # which answer 404 until the workflow or package exists on the default
+        # branch. Those are GitHub state, not documentation.
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          args: >-
+            --no-progress
+            --exclude '^https://example\.com'
+            --exclude '^https://img\.shields\.io'
+            --exclude '^https://api\.github\.com'
+            --exclude '^http://localhost'
+            --exclude '^https://github\.com/vyynl/cadence/(actions|pkgs)/'
+            '*.md'
+          fail: true
+
+  env-drift:
+    name: Env reference
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Every compose variable is documented
+        run: bash .github/scripts/check-env-docs.sh
+
+  assets:
+    name: Screenshots
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Every screenshot exists and is referenced
+        # A committed but unreferenced image is dead weight, and a README link
+        # to a renamed file renders as a broken image. Both fail here.
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          assets=(.github/assets/*.png .github/assets/*.gif)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "::error::.github/assets holds no .png or .gif files" >&2
+            exit 1
+          fi
+
+          for asset in "${assets[@]}"; do
+            [ -s "$asset" ] || { echo "::error::$asset is empty" >&2; exit 1; }
+            grep -qF "($asset)" README.md \
+              || { echo "::error::$asset is not referenced by README.md" >&2; exit 1; }
+          done
+
+          for ref in $(grep -oE '\]\(\.github/assets/[^)]+\)' README.md \
+            | sed -e 's/^](//' -e 's/)$//'); do
+            [ -f "$ref" ] || { echo "::error::README.md links a missing asset: $ref" >&2; exit 1; }
+          done
+
+          echo "checked ${#assets[@]} screenshots"

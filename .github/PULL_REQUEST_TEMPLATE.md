@@ -32,10 +32,11 @@
 
 <!-- If you skipped a step, say why. -->
 
-## Spec / docs updated
+## Docs updated
 
-- [ ] `docs/spec.md` (section: )
-- [ ] `docs/release-notes.md`
+- [ ] `CHANGELOG.md`
+- [ ] `ARCHITECTURE.md` (if the DAG, sync, or auth model changed)
+- [ ] `README.md` / `DEPLOY.md` / `DAEMON.md` (if user-facing behavior changed)
 - [ ] Not needed — no behavior or configuration change
 
 ## Checklist

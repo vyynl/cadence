@@ -1,3 +1,7 @@
+# Only apps/ and config/ are COPYed into the build stages; everything else is
+# excluded to keep the build context small and to guarantee a secret or a local
+# env file can never land in an image layer.
+
 _build
 deps
 .git
@@ -6,18 +10,32 @@ deps
 .opencode
 .elixir_ls
 node_modules
-docs
+coverage
+cover
+
+# Docs and packaging are not build inputs.
 *.md
-Dockerfile*
 docker
 docker-compose.yml
-docker-compose.prod.yml
-docker-compose.portainer.yml
-.dockerignore
-.env
-erl_crash.dump
+docker-compose.demo.yml
+docker-compose.daemon.yml
+.github
+examples
+scripts
 cadence.nvim
 lua
 plugin
-scripts
+
+# Build/CI descriptors, not sources.
+Dockerfile*
+.dockerignore
+
+# Never ship secrets or local state.
+.env
+.env.*
+*.env
+*.db
+*.db-shm
+*.db-wal
+erl_crash.dump
 tmp

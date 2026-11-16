@@ -1,0 +1,22 @@
+# markdownlint configuration for the root documentation set.
+#
+# The published documentation surface is the root *.md files plus examples/;
+# .claude/ is local-only and is never linted.
+
+default: true
+
+# Prose is hard-wrapped by hand at about 80 columns. Enforcing a length would
+# fight that wrapping and produce churn for no reader benefit.
+line_length: false
+
+# One H1 per file. Duplicate headings are only an error between siblings, so
+# repeated subsections such as "Added" in separate releases stay legal.
+no-duplicate-heading:
+  siblings_only: true
+
+no-trailing-spaces: true
+fenced-code-language: true
+
+# Tables in this repository use the compact `|---|---|` separator. This rule
+# only enforces padding inside cells, which the existing docs do not follow.
+table-column-style: false

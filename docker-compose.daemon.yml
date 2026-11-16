@@ -1,0 +1,56 @@
+# Zero-install Cadence daemon: the published image instead of a local release.
+#
+#   cp .env.daemon.example .env.daemon    # set CAD_SERVER_URL and CAD_AUTH_TOKEN
+#   docker compose -f docker-compose.daemon.yml up -d
+#
+# The daemon publishes no port: it dials out to CAD_SERVER_URL and serves only
+# its Unix socket. Reach a process inside the container with
+# `docker compose -f docker-compose.daemon.yml exec daemon ...`.
+#
+# `CAD_DAEMON_IMAGE` comes from the shell or `.env`, not from `.env.daemon`
+# (that file is the container environment, so it cannot change the image).
+#
+# `required: false` on env_file (Docker Compose 2.24+) keeps `docker compose
+# config` and a first `up` valid before `.env.daemon` exists; the daemon then
+# starts in offline mode.
+
+name: cadence-daemon
+
+services:
+  daemon:
+    image: ${CAD_DAEMON_IMAGE:-ghcr.io/vyynl/cadence-daemon:latest}
+    restart: unless-stopped
+    # Environment only. The daemon reads no config file of its own.
+    env_file:
+      - path: .env.daemon
+        required: false
+    volumes:
+      # SQLite database, per-project Git stores, and daemon.sock. The image
+      # defaults CAD_STATE_DIR to /data/state, so this volume is the state.
+      - daemon-state:/data/state
+
+      # PROJECT DIRECTORIES — mount each one at its REAL host path:
+      #
+      #   - /home/you/code/my-project:/home/you/code/my-project
+      #
+      # Registration stores the absolute work_dir and the daemon watches that
+      # path inside the container. A different target (for example
+      # /projects/my-project) registers a directory that does not exist here,
+      # so the project never gets a node.
+      #
+      # Doc sync writes into the tree: give uid 10000 (the image user) write
+      # access to the mounted project dirs.
+      #
+      # To drive the Neovim plugin from the host, the socket must also be on the
+      # host. Replace the named volume above with a host bind:
+      #
+      #   - ${HOME}/.local/state/cadence:/data/state
+      #
+      # and add one line under `daemon:`, next to `image:`, so the daemon owns
+      # that directory and can chmod it:
+      #
+      #   user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+
+volumes:
+  daemon-state:
+    name: cadence-daemon-state
