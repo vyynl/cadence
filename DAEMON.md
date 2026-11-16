@@ -12,19 +12,25 @@ is the annotated reference. No variable is repeated here.
 ### One command (pull and run)
 
 ```bash
+mkdir -p "${CAD_STATE_DIR:-$HOME/.local/state/cadence}"
 docker run -d --name cadence-daemon --restart unless-stopped \
-  -v cadence-daemon-state:/data/state \
+  --user "$(id -u):$(id -g)" \
+  -v "${CAD_STATE_DIR:-$HOME/.local/state/cadence}:/data/state" \
   -e CAD_SERVER_URL=https://cadence.example.com \
   -e CAD_AUTH_TOKEN=cad_replace_with_a_minted_token \
   --entrypoint /bin/sh ghcr.io/vyynl/cadence-daemon:latest \
   -c 'bin/cadence_daemon eval "Cadence.Daemon.Release.migrate()" && exec bin/cadence_daemon start'
 ```
 
-The image pulls on first run, migrates the fresh state volume, then boots the
-daemon. Drop the two `-e` lines to run offline. Add one
-`-v /host/path:/same/host/path` per project, mounted at its real host path.
-To upgrade: `docker pull`, `docker rm -f cadence-daemon`, re-run the same
-command — the state volume survives and the migration step becomes a no-op.
+The image pulls on first run, migrates the state directory, then boots the
+daemon. Binding `~/.local/state/cadence` and running as your own uid puts
+`daemon.sock` where the plugin already looks, so Neovim needs no extra
+configuration. Drop `--user` and swap in `-v cadence-daemon-state:/data/state`
+when you want sync only and no local socket. Drop the two `-e` lines to run
+offline. Add one `-v /host/path:/same/host/path` per project, mounted at its
+real host path. To upgrade: `docker pull`, `docker rm -f cadence-daemon`,
+re-run the same command — the state directory survives and the migration
+becomes a no-op.
 
 ### Compose (declarative, many projects)
 
