@@ -82,6 +82,11 @@ LABEL org.opencontainers.image.source="https://github.com/vyynl/cadence" \
 
 COPY --from=build /app/_build/prod/rel/cadence_daemon ./
 
+# Interactive `setup` writes the server URL and API token into the state volume,
+# and `start` loads that file before booting. The wrapper is the only part of
+# the image that is not the release itself.
+COPY --chmod=0755 docker/daemon-entrypoint.sh /app/bin/entrypoint
+
 # CAD_STATE_DIR holds the SQLite database, the per-project Git stores, and
 # `daemon.sock`; it must be a volume, not image state.
 RUN mkdir -p /app/tmp /data/state \
@@ -89,6 +94,7 @@ RUN mkdir -p /app/tmp /data/state \
 
 USER cadence
 
-# Migration is explicit in the release (`bin/cadence_daemon eval
-# "Cadence.Daemon.Release.migrate()"`); a plain boot never migrates.
-CMD ["/app/bin/cadence_daemon", "start"]
+# `setup` for the first run, nothing for a normal start. Both configure the
+# daemon through /data/state/daemon.env, so no secret has to be passed with -e.
+ENTRYPOINT ["/app/bin/entrypoint"]
+CMD ["start"]

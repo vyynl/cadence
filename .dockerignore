@@ -16,6 +16,8 @@ cover
 # Docs and packaging are not build inputs.
 *.md
 docker
+# …except the daemon entrypoint, which the runtime stage COPYs.
+!docker/daemon-entrypoint.sh
 docker-compose.yml
 docker-compose.demo.yml
 docker-compose.daemon.yml
