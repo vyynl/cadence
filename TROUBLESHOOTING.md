@@ -52,15 +52,33 @@ fails the boot, so read `logs cadence` before the browser console.
 
 ## Daemon cannot reach the server
 
-**Symptom:** the daemon reports timeouts and stays in offline mode.
-**Cause:** the daemon dials `CAD_SERVER_URL` from the developer machine, a
-different path from the browser's. A URL that resolves only inside the LAN, a
-closed port, or a proxy with the app unpublished all look alike from there.
-**Fix:** on the daemon machine, `curl -fsS https://<host>/health`. If that fails,
-allow 443 (or `CAD_HTTP_PORT`) through the firewall and publish the app port
-where the proxy can reach it. `CAD_PUBLIC_URL` is what the server prints in links
-and what passkeys compare — it is not the daemon's connection target, and the
-server derives its own host from it.
+**Symptom:** the daemon logs `Req.TransportError{reason: :timeout}` (or
+`econnrefused`) and stays in offline mode; commits pile up locally.
+**Cause:** `CAD_SERVER_URL` must resolve *from the daemon's network namespace*,
+and the stack publishes the app on loopback by default. A container daemon
+cannot reach `http://localhost:4000` — that is the daemon container itself — and
+`host.docker.internal` does not help either, because `CAD_HTTP_BIND` is
+`127.0.0.1`. A LAN name, a closed port, and a proxy that does not publish the app
+all look the same from there.
+**Fix:** put the daemon on the server's network and dial the service name:
+
+```bash
+docker run … --network cadence-prod_default -e CAD_SERVER_URL=http://cadence:4000 …
+```
+
+or set `CAD_HTTP_BIND=0.0.0.0` on the server and firewall the port. Prove it
+from inside the network before blaming the daemon:
+
+```bash
+docker run --rm --network cadence-prod_default curlimages/curl -fsS http://cadence:4000/health
+```
+
+Two path traps come with the container form. Mount the state directory at the
+**same absolute path** inside and outside, and set `CAD_STATE_DIR` to that path:
+the SQLite database stores absolute `git_dir` and `work_dir` values, so a
+different mount target leaves every registered project pointing at a directory
+that does not exist (`eacces` on boot, `project not found` on sync). Project
+directories must be mounted at their real paths for the same reason.
 
 ## Migrations pending, app never starts
 

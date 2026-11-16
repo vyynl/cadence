@@ -79,6 +79,13 @@ Without a URL and token the daemon runs offline: commits, spawns, and switches
 work locally and nothing syncs. A server is a prerequisite — see
 [`DEPLOY.md`](DEPLOY.md).
 
+If the server runs on this same machine, `CAD_SERVER_URL` still has to be
+reachable from the daemon's network namespace: a container daemon cannot use
+`localhost:4000`. Join the server's network and use `http://cadence:4000`, and
+mount the state directory at the same absolute path so stored paths stay valid.
+Both traps are covered in
+[`TROUBLESHOOTING.md`](TROUBLESHOOTING.md#daemon-cannot-reach-the-server).
+
 ## Register a project
 
 The daemon must be running, and `WORK_DIR` must be an absolute path that exists
