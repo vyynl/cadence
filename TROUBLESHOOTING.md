@@ -4,6 +4,31 @@ Start with `docker compose ps` and
 `docker compose logs migrate bootstrap cadence`. Variables are described in
 [`.env.example`](.env.example).
 
+## `docker compose up -d` fails with `unauthorized`
+
+**Symptom:** `Error response from daemon: error from registry: unauthorized`,
+before any container starts.
+**Cause:** the image lives in a private GHCR package and this machine has no
+registry credentials, so `docker pull` cannot see it. `docker compose ps` shows
+nothing because nothing was created.
+**Fix:** log in once with a token that has `read:packages`:
+
+```bash
+echo "$GHCR_PAT" | docker login ghcr.io -u <github-user> --password-stdin
+```
+
+Or make the package public: GitHub → Packages → `cadence` → Package settings →
+Change visibility. Public is the right choice for a self-hosted product, because
+it removes this step for every operator.
+
+With no registry access at all, build from a checkout instead — the compose file
+runs whatever `CAD_SERVER_IMAGE` names:
+
+```bash
+docker build -f docker/Dockerfile -t ghcr.io/vyynl/cadence:latest .
+docker compose up -d
+```
+
 ## `/health` returns 502
 
 **Symptom:** the proxy answers, the app page does not.

@@ -29,8 +29,9 @@ docker compose up -d
 
 You get the server, PostgreSQL, and a one-shot migration and first-admin
 bootstrap; `docker compose logs secrets` prints the generated admin password
-once. Add `--profile tls` for bundled Caddy. Layouts, backups, and upgrades are
-in [DEPLOY.md](DEPLOY.md); paste-ready variants live in
+once. If the image's GHCR package is private, run `docker login ghcr.io` first
+(token with `read:packages`). Add `--profile tls` for bundled Caddy. Layouts,
+backups, and upgrades are in [DEPLOY.md](DEPLOY.md); paste-ready variants live in
 [`examples/`](examples/).
 
 ## Connect a daemon
