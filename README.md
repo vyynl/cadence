@@ -20,30 +20,49 @@ moves their own pointer through it.
 - **Editor-native.** The Neovim picker renders the DAG and switches, spawns, or
   submits a meld without leaving the editor, over the daemon's Unix socket.
 
-## Deploy in 60 seconds
+## Run the server
+
+No clone. These two files are the whole stack — keep them as your base:
 
 ```bash
-cp .env.example .env    # set CAD_PUBLIC_URL and CAD_ADMIN_EMAIL
+curl -fsSLO https://raw.githubusercontent.com/vyynl/cadence/master/docker-compose.yml
+curl -fsSLO https://raw.githubusercontent.com/vyynl/cadence/master/.env.example
+mv .env.example .env     # set CAD_PUBLIC_URL and CAD_ADMIN_EMAIL
 docker compose up -d
+docker compose logs secrets     # first-admin password, printed once
 ```
 
-You get the server, PostgreSQL, and a one-shot migration and first-admin
-bootstrap; `docker compose logs secrets` prints the generated admin password
-once. If the image's GHCR package is private, run `docker login ghcr.io` first
-(token with `read:packages`). Add `--profile tls` for bundled Caddy. Layouts,
-backups, and upgrades are in [DEPLOY.md](DEPLOY.md); paste-ready variants live in
-[`examples/`](examples/).
+Open the URL and sign in with `CAD_ADMIN_EMAIL` and that password. If the GHCR
+package is private, `docker login ghcr.io` first (token with `read:packages`).
+Add `--profile tls` for bundled Caddy. [DEPLOY.md](DEPLOY.md) covers layouts,
+backups, and upgrades.
 
-## Connect a daemon
+## Run the daemon
 
-The daemon ships as a published image, so there is no toolchain to install. One
-command pulls it, migrates its state directory, and starts it with the socket at
-`~/.local/state/cadence/daemon.sock` — where the Neovim plugin looks by default.
-Copy it from
-[DAEMON.md → One command](DAEMON.md#one-command-pull-and-run); that page also
-covers the token, project registration, and the compose variant.
+Mint a token at `/auth/tokens/new` on the server, then:
 
-Then open a registered project in Neovim and run `:CadOpen`.
+```bash
+token=cad_paste_the_token_here
+STATE="$HOME/.local/state/cadence"
+docker run -d --name cadence-daemon --restart unless-stopped \
+  --user "$(id -u):$(id -g)" --network cadence-prod_default \
+  -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
+  -v /path/to/project:/path/to/project \
+  -e CAD_SERVER_URL=http://cadence:4000 -e CAD_AUTH_TOKEN="$token" \
+  --entrypoint /bin/sh ghcr.io/vyynl/cadence-daemon:latest \
+  -c 'bin/cadence_daemon eval "Cadence.Daemon.Release.migrate()" && exec bin/cadence_daemon start'
+
+docker exec cadence-daemon bin/cadence_daemon eval \
+  'IO.inspect(Cadence.Daemon.Release.register("My Project", "my-project", "/path/to/project"))'
+```
+
+Edit a file in that directory and the project appears at `/p/my-project` within
+about 20 seconds. `:CadOpen` in Neovim reads the same DAG: the socket is at
+`~/.local/state/cadence/daemon.sock`, where the plugin looks by default.
+
+Remote server instead of a local one? Drop `--network` and set `CAD_SERVER_URL`
+to its public origin. Mount project directories at their **real** paths, and
+give each project a second `-v` line.
 
 ## Demo
 
