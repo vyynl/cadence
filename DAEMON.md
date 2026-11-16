@@ -9,7 +9,24 @@ is the annotated reference. No variable is repeated here.
 
 ## Install
 
-### Container (no local toolchain)
+### One command (pull and run)
+
+```bash
+docker run -d --name cadence-daemon --restart unless-stopped \
+  -v cadence-daemon-state:/data/state \
+  -e CAD_SERVER_URL=https://cadence.example.com \
+  -e CAD_AUTH_TOKEN=cad_replace_with_a_minted_token \
+  --entrypoint /bin/sh ghcr.io/vyynl/cadence-daemon:latest \
+  -c 'bin/cadence_daemon eval "Cadence.Daemon.Release.migrate()" && exec bin/cadence_daemon start'
+```
+
+The image pulls on first run, migrates the fresh state volume, then boots the
+daemon. Drop the two `-e` lines to run offline. Add one
+`-v /host/path:/same/host/path` per project, mounted at its real host path.
+To upgrade: `docker pull`, `docker rm -f cadence-daemon`, re-run the same
+command — the state volume survives and the migration step becomes a no-op.
+
+### Compose (declarative, many projects)
 
 ```bash
 docker compose -f docker-compose.daemon.yml run --rm daemon \
