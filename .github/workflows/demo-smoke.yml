@@ -1,7 +1,7 @@
 # Demo smoke test: build docker-compose.demo.yml, boot it, and wait for a
 # healthy server.
 #
-# The demo needs no .env and no secrets — the compose file carries its own
+# The demo needs no .env and no secrets: the compose file carries its own
 # dev-mode configuration. A cold run compiles the whole umbrella inside the
 # image, so the health-check budget is generous.
 #

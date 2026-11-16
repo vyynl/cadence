@@ -68,5 +68,5 @@ OAuth and passkeys are optional additions, not the primary path.
 
 ## See also
 
-- [README.md](README.md) — what Cadence is and how to run it.
-- [DEVELOPMENT.md](DEVELOPMENT.md) — toolchain and tests.
+- [README.md](README.md): what Cadence is and how to run it.
+- [DEVELOPMENT.md](DEVELOPMENT.md): toolchain and tests.

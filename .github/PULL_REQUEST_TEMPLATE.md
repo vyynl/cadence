@@ -28,7 +28,7 @@
 - [ ] `MIX_ENV=prod mix compile --warnings-as-errors`
 - [ ] `mix test`
 - [ ] `mix test --cover` (80% floor per app)
-- [ ] Plugin checks (`luac -p`, `nvim --headless -l spec/*_spec.lua`) — only if `cadence.nvim` changed
+- [ ] Plugin checks (`luac -p`, `nvim --headless -l spec/*_spec.lua`) if `cadence.nvim` changed
 
 <!-- If you skipped a step, say why. -->
 
@@ -37,7 +37,7 @@
 - [ ] `CHANGELOG.md`
 - [ ] `ARCHITECTURE.md` (if the DAG, sync, or auth model changed)
 - [ ] `README.md` / `DEPLOY.md` / `DAEMON.md` (if user-facing behavior changed)
-- [ ] Not needed — no behavior or configuration change
+- [ ] Not needed: no behavior or configuration change
 
 ## Checklist
 
@@ -47,7 +47,7 @@
 - [ ] New public functions have tests.
 - [ ] Coverage floor holds (`mix test --cover` exits 0).
 - [ ] No hardcoded configuration values were introduced (`CAD_*` env vars, spec §12.6).
-- [ ] No dependency was added outside spec §11 — or the spec table was updated with approval.
+- [ ] No dependency was added outside spec §11, or the spec table was updated with approval.
 - [ ] The change aligns with the relevant spec section, or the spec was updated.
 - [ ] No secrets, tokens, or personal data are included in the diff or this description.
 - [ ] If this touches auth, sessions, tokens, or the sync protocol, the security impact is described above.

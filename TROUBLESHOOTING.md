@@ -23,7 +23,7 @@ Or make the package public: GitHub → Packages → `cadence` → Package settin
 Change visibility. Public is the right choice for a self-hosted product, because
 it removes this step for every operator.
 
-With no registry access at all, build from a checkout instead — the compose file
+With no registry access at all, build from a checkout instead. The compose file
 runs whatever `CAD_SERVER_IMAGE` names:
 
 ```bash
@@ -58,7 +58,7 @@ fails the boot, so read `logs cadence` before the browser console.
 `econnrefused`) and stays in offline mode; commits pile up locally.
 **Cause:** `CAD_SERVER_URL` must resolve *from the daemon's network namespace*,
 and the stack publishes the app on loopback by default. A container daemon
-cannot reach `http://localhost:4000` — that is the daemon container itself — and
+cannot reach `http://localhost:4000` (that is the daemon container itself), and
 `host.docker.internal` does not help either, because `CAD_HTTP_BIND` is
 `127.0.0.1`. A LAN name, a closed port, and a proxy that does not publish the app
 all look the same from there.
@@ -96,5 +96,5 @@ initialized with the old password: point the stack back at the original
 
 ## See also
 
-- [DEPLOY.md](DEPLOY.md) — layouts, backup/restore, upgrades.
-- [README.md](README.md) — project overview and local demo.
+- [DEPLOY.md](DEPLOY.md): layouts, backup/restore, upgrades.
+- [README.md](README.md): project overview and local demo.

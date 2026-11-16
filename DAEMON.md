@@ -28,7 +28,7 @@ docker run -d --name cadence-daemon --restart unless-stopped \
 writes both to `$STATE/daemon.env` (mode 0600, inside the volume) and migrates
 the database. No secret appears in a `docker run -e` flag, in shell history, or
 in `docker inspect`. The second command reads that file, migrates if needed and
-starts the daemon, with the socket at `$STATE/daemon.sock` — where the plugin
+starts the daemon, with the socket at `$STATE/daemon.sock`, which is where the plugin
 already looks.
 
 Mount the state directory at the **same path** on both sides: the database
@@ -80,7 +80,7 @@ set -a; . ./.env.daemon; set +a                            # host release only
 
 The token is minted in the server UI at `/auth/tokens/new` and shown once.
 Without a URL and token the daemon runs offline: commits, spawns, and switches
-work locally and nothing syncs. A server is a prerequisite — see
+work locally and nothing syncs. A server is a prerequisite; see
 [`DEPLOY.md`](DEPLOY.md).
 
 If the server runs on this same machine, `CAD_SERVER_URL` still has to be
@@ -138,5 +138,5 @@ reachable on the host (a host release, or the bind-mount variant commented in
 
 ## See also
 
-- [`DEPLOY.md`](DEPLOY.md) — the server the daemon syncs to.
-- [`README.md`](README.md) — what Cadence is and how the pieces fit.
+- [`DEPLOY.md`](DEPLOY.md): the server the daemon syncs to.
+- [`README.md`](README.md): what Cadence is and how the pieces fit.

@@ -1,6 +1,6 @@
 # Deploying Cadence
 
-One Compose file runs the published image — no local build, no host scripting,
+One Compose file runs the published image: no local build, no host scripting,
 no `openssl`; secrets are generated in a volume on first start. Configuration is
 [`.env.example`](.env.example).
 
@@ -46,5 +46,5 @@ backup, and never point two running stacks at one database.
 
 ## See also
 
-- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — first boot, `/health` 502, passkeys.
-- [README.md](README.md) — what Cadence is and how to run it locally.
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md): first boot, `/health` 502, passkeys.
+- [README.md](README.md): what Cadence is and how to run it locally.

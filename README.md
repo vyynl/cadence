@@ -1,7 +1,7 @@
 # Cadence
 
 Cadence is a local-first, self-hosted source control system. Its history is a
-DAG of immutable snapshots — one node per commit, no branches — and each user
+DAG of immutable snapshots (one node per commit, no branches), and each user
 moves their own pointer through it.
 
 [![CI](https://github.com/vyynl/cadence/actions/workflows/ci.yml/badge.svg)](https://github.com/vyynl/cadence/actions/workflows/ci.yml)
@@ -23,7 +23,7 @@ moves their own pointer through it.
 ## Run the server
 
 Paste this as your stack. It is [`examples/minimal.yaml`](examples/minimal.yaml),
-verbatim — set `CAD_PUBLIC_URL` and `CAD_ADMIN_EMAIL`, and pin the image by
+verbatim. Set `CAD_PUBLIC_URL` and `CAD_ADMIN_EMAIL`, and pin the image by
 replacing `:latest` with a release tag or `@sha256:…`.
 
 <details>
@@ -157,8 +157,8 @@ docker exec cadence-daemon bin/cadence_daemon eval \
 ```
 
 `setup` prompts for the server URL and the API token you minted at
-`/auth/tokens/new`, then stores both in the state volume with mode `0600` — no
-secret on the command line or in shell history. The register call is the only
+`/auth/tokens/new`, then stores both in the state volume with mode `0600`, so no
+secret appears on the command line or in shell history. The register call is the only
 step that needs the project path twice.
 
 Edit a file in that directory and the project appears at `/p/my-project` within
@@ -202,5 +202,5 @@ and never go in a public issue.
 
 ## See also
 
-- [DEPLOY.md](DEPLOY.md) — run the server.
-- [ARCHITECTURE.md](ARCHITECTURE.md) — how the pieces fit together.
+- [DEPLOY.md](DEPLOY.md): run the server.
+- [ARCHITECTURE.md](ARCHITECTURE.md): how the pieces fit together.

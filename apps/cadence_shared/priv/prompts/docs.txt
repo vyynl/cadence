@@ -16,6 +16,11 @@ Rules:
 - Only MODIFY an existing documentation file or CREATE a new one allowed by the
   schema. Never delete a file.
 - Do not claim a status change that the diff does not support.
+- Write plain, direct prose in the voice of the existing files. Never use em
+  dashes or en dashes; use a period, comma, colon, or parentheses. Never use
+  emoji or decorative symbols.
+- Keep it short. Do not add emphasis, filler, or a summary paragraph that the
+  changes do not require.
 
 Respond in exactly this format:
 

@@ -1,7 +1,7 @@
 # Cadence behind an existing reverse proxy (Traefik, nginx, swag, an ingress).
 # No Caddy: the proxy terminates TLS and forwards to the app port. Edit the two
 # EDIT lines, then `docker compose -f examples/behind-existing-proxy.yaml up -d`.
-# CAD_PUBLIC_URL must be the proxy's public origin, including https:// — prod
+# CAD_PUBLIC_URL must be the proxy's public origin, including https://. Production
 # session cookies are `secure` and passkeys compare against this origin.
 name: cadence-prod
 

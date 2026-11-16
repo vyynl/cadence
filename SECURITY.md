@@ -27,7 +27,7 @@ Report privately through GitHub Security Advisories:
 3. Describe the issue in the advisory form.
 
 No security email address is published for this project. Do not send reports to
-addresses found in commit metadata — the default Git identity is the placeholder
+addresses found in commit metadata: the default Git identity is the placeholder
 `cadence@local`, and personal addresses are not a supported security channel.
 
 If the advisory form is not available yet (private reporting has not been
@@ -44,7 +44,7 @@ in it.
   a source checkout, a daemon release, the `docker compose` demo stack, or the
   production compose stack.
 - **Relevant configuration:** the `CAD_*` variables involved, with secrets
-  removed — in particular whether the server is publicly reachable, whether
+  removed, in particular whether the server is publicly reachable, whether
   actions are enabled (`CAD_ACTIONS_ENABLED`), and whether sync is configured.
 - **A minimal reproduction:** the request/response, socket call, repository
   shape, node or proposal token, or command sequence that triggers the issue.
@@ -72,7 +72,7 @@ In scope:
 - **Neovim plugin** (`cadence.nvim`): command handling and the socket client.
 - **Object store** (`Cadence.Shared.GitStore`, plus the server's
   `Cadence.Server.Storage`): loose and pack v2/idx v2 parsing and writing, delta
-  application, pack indexes, the object cache, and the repacker — including any
+  application, pack indexes, the object cache, and the repacker, including any
   path that reads outside the store, exhausts memory, or corrupts objects from a
   crafted repository.
 - **Sync protocol:** project provisioning, push and pull, the existence
@@ -90,7 +90,7 @@ Out of scope:
   Cadence's usage: no SOCKS5 proxy, custom CA, user-supplied query string, or
   Apple OAuth strategy is configured.
 - Known limitations that are already documented as deployment prerequisites
-  rather than defects — for example, action containers share the host user
+  rather than defects, for example action containers share the host user
   namespace and `/out` has no quota. See `CHANGELOG.md` (Known limitations).
 - Reports that consist only of scanner output with no demonstrated impact.
 - Content a user deliberately commits to their own repository. Cadence is a
@@ -107,5 +107,5 @@ mitigation.
 
 ## See also
 
-- [README.md](README.md) — what Cadence is and how to run it.
-- [CHANGELOG.md](CHANGELOG.md) — known limitations that are prerequisites, not defects.
+- [README.md](README.md): what Cadence is and how to run it.
+- [CHANGELOG.md](CHANGELOG.md): known limitations that are prerequisites, not defects.

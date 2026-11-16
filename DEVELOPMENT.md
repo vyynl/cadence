@@ -2,7 +2,7 @@
 
 ## Toolchain
 
-Elixir `~> 1.20` on OTP 29 — the pair CI and `docker/Dockerfile` use. Docker is
+Elixir `~> 1.20` on OTP 29, the pair CI and `docker/Dockerfile` use. Docker is
 needed for the test database and the demo stack; `mix deps.get` fetches from the
 umbrella root.
 
@@ -44,7 +44,7 @@ docker compose -f docker-compose.demo.yml up --build
 Sign in as `owner@demo.local` / `cadence-demo`; [DEMO.md](DEMO.md) has the TOTP
 command and the tour.
 
-A daemon against that server — [DAEMON.md](DAEMON.md) covers project
+A daemon against that server: [DAEMON.md](DAEMON.md) covers project
 registration and token minting:
 
 ```bash
@@ -55,5 +55,5 @@ docker compose -f docker-compose.daemon.yml up -d
 
 ## See also
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) — the system the tests exercise.
-- [README.md](README.md) — project overview.
+- [ARCHITECTURE.md](ARCHITECTURE.md): the system the tests exercise.
+- [README.md](README.md): project overview.

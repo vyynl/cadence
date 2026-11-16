@@ -38,7 +38,7 @@ On `master`, waiting for the 1.1.0 cut; `mix.exs` stays at 1.0.0 until then.
 - `bcrypt_elixir` is no longer a direct dependency; Argon2id is the password
   hash.
 
-## [1.0.0] — 2026-11-11
+## [1.0.0] - 2026-11-11
 
 The planned build order (spec Phases 1–8) is complete. This is the first
 release whose contract is considered stable; remaining items are optional and
@@ -46,26 +46,26 @@ listed under Known limitations.
 
 ### Added
 
-- **Daemon** — per-OS watcher backends with debounced auto-commits and a
+- **Daemon**: per-OS watcher backends with debounced auto-commits and a
   serialized queue per project; a Git object store with pack v2 reads and
   writes; optional AI commit messages and doc automation with rate limits and
   background retries; a Unix-socket API for the DAG, spawn/switch, unions, and
   docs; background sync with parent-first pushes and an existence handshake;
   `mix cad.*` tasks and a `cadence_daemon` release with ERTS bundled and Erlang
   distribution off.
-- **Server** — Phoenix 1.8 / LiveView portfolio, full DAG, repository browser,
+- **Server**: Phoenix 1.8 / LiveView portfolio, full DAG, repository browser,
   and sanitized README rendering; proposals and incidents with integrity
   checks, quarantine, and verify-before-resolve; the meld pipeline
   (deterministic union, conflict-only model calls, strict parsing, materialized
   result, pending proposal); sandboxed Docker actions through an allowlisted
   socket proxy; pack-aware storage with a verified background repacker.
-- **Neovim plugin** — `:CadOpen`, `:CadSpawn`, `:CadSwitch`, `:CadUnion`,
+- **Neovim plugin**: `:CadOpen`, `:CadSpawn`, `:CadSwitch`, `:CadUnion`,
   `:CadProposals`, `:CadDocSync`, `:CadDocDiff`, the DAG picker, and hover
   diffs.
-- **Demo stack** — one command gives a seeded, browsable dev-mode server.
-- **Editor independence** — nodes come from the daemon's watcher, so any
+- **Demo stack**: one command gives a seeded, browsable dev-mode server.
+- **Editor independence**: nodes come from the daemon's watcher, so any
   process writing inside a registered directory produces history.
-- **CI** — one merge gate: format, dev and prod compiles, tests, the 80%
+- **CI**: one merge gate: format, dev and prod compiles, tests, the 80%
   per-app coverage floor, Hex retirement and unused-lock checks, Sobelow,
   dependency CVEs, and a fail-closed advisory-database check.
 
@@ -100,5 +100,5 @@ listed under Known limitations.
 
 ## See also
 
-- [README.md](README.md) — what Cadence is.
-- [SECURITY.md](SECURITY.md) — supported versions.
+- [README.md](README.md): what Cadence is.
+- [SECURITY.md](SECURITY.md): supported versions.

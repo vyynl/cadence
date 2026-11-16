@@ -10,7 +10,7 @@ socket and provides the DAG picker plus convenience commands: `:CadOpen`,
 - Neovim 0.9+
 - [plenary.nvim](https://github.com/nvim-lua/plenary.nvim)
 - `curl` on `PATH`
-- A running Cadence daemon — see [daemon setup](../DAEMON.md) for the
+- A running Cadence daemon; see [daemon setup](../DAEMON.md) for the
   token, migration, boot command, and project registration
 
 ## Install
@@ -88,7 +88,7 @@ The socket path is resolved as: `setup({socket_path})` →
 | `:CadOpen` | Open the DAG picker for the current project. |
 | `:CadSwitch` | Open the same picker; `<CR>` moves the session pointer to the node. |
 | `:CadSpawn [name]` | Spawn a `sandbox` child from the current node (prompts if no name). |
-| `:CadUnion` | Open the picker in union mode (`<CR>` toggles `✓`; submission needs the server). |
+| `:CadUnion` | Open the picker in union mode (`<CR>` toggles the selection; submission needs the server). |
 | `:CadProposals` | List recent union proposals and copy the chosen public URL (or token when the server URL is unset). |
 | `:CadDocSync [node]` | Trigger documentation automation for the current or named node. |
 | `:CadDocDiff [node]` | Show the documentation diff attached to the current or named node. |
@@ -132,18 +132,18 @@ require("cadence").setup({
 ## Manual smoke test
 
 ```bash
-# terminal A — daemon (see ../DAEMON.md for token and migration)
+# terminal A: daemon (see ../DAEMON.md for token and migration)
 mix run --no-start --no-halt -e 'Application.ensure_all_started(:cadence_daemon)'
 
-# terminal B — register a project (work_dir must be an existing directory)
+# terminal B: register a project (work_dir must be an existing directory)
 mix cad.register MyProject my-project ~/code/my-project
 
-# terminal C — in ~/code/my-project
+# terminal C: in ~/code/my-project
 nvim
 #   :CadOpen       -> DAG rail; hover shows metadata/message; <CR> switches
 #   :CadSpawn      -> spawns a sandbox child, then :CadOpen shows it branched
 #   :CadSwitch     -> same picker, titled "switch"
-#   :CadUnion      -> picker in union mode (<CR> toggles ✓)
+#   :CadUnion      -> picker in union mode (<CR> toggles the selection)
 #   :CadProposals  -> list recent unions; choose one to copy its public URL
 #   :CadDocSync    -> queue documentation for the current node
 #   :CadDocDiff    -> show the documentation diff, if one exists
@@ -164,7 +164,7 @@ acts on the new head immediately after a commit.
 
 ## Related docs
 
-- [Daemon setup](../DAEMON.md) — install, token, environment, and
+- [Daemon setup](../DAEMON.md): install, token, environment, and
   troubleshooting.
-- [Architecture](../ARCHITECTURE.md) — DAG, plugin commands, and the sync
+- [Architecture](../ARCHITECTURE.md): DAG, plugin commands, and the sync
   contract.

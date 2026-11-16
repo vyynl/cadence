@@ -4,7 +4,7 @@
 
 A seeded, development-mode Cadence on <http://localhost:4000>: PostgreSQL plus a
 `MIX_ENV=dev` server that migrates and seeds itself on boot. It is not a
-deployment — the production stack is `docker-compose.yml`.
+deployment; the production stack is `docker-compose.yml`.
 
 ```bash
 docker compose -f docker-compose.demo.yml up -d --build
@@ -26,5 +26,5 @@ Git store. CI boots this stack on pull requests and pushes to `master`:
 
 ## See also
 
-- [DEPLOY.md](DEPLOY.md) — the production stack.
-- [README.md](README.md) — what Cadence is.
+- [DEPLOY.md](DEPLOY.md): the production stack.
+- [README.md](README.md): what Cadence is.
