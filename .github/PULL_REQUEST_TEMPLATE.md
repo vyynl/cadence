@@ -21,7 +21,7 @@
 
 ## Tests run
 
-<!-- Check what you actually ran locally and paste the result line. -->
+<!-- Check what you ran locally and paste the result line. -->
 
 - [ ] `mix format --check-formatted`
 - [ ] `mix compile --warnings-as-errors`

@@ -19,7 +19,7 @@ Then sign in as `CAD_ADMIN_EMAIL`, enroll TOTP, and delete `CAD_ADMIN_PASSWORD`.
 | A DNS name and ports 80/443 free | `docker compose --profile tls up -d` |
 | TrueNAS SCALE or Portainer, paste-a-stack | [`examples/truenas.yaml`](examples/truenas.yaml) |
 | An existing reverse proxy | [`examples/behind-existing-proxy.yaml`](examples/behind-existing-proxy.yaml) |
-| One machine, just evaluating | [`examples/localhost.yaml`](examples/localhost.yaml) |
+| One machine, evaluation only | [`examples/localhost.yaml`](examples/localhost.yaml) |
 
 ## Backup and restore
 

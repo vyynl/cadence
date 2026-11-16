@@ -44,7 +44,7 @@ The daemon dials out; the server never connects to a working tree. Push sends
 the nodes the daemon committed, parents first and idempotently by node UUID,
 after an optional existence handshake that omits objects the server already
 holds. Pull returns nodes newer than the server's `nodes.seq` cursor, so a
-pushed node whose parent already has a child simply becomes a sibling.
+pushed node whose parent already has a child becomes a sibling.
 Preferences use last-write-wins on `preferences_updated_at`; `pinned` is
 server-authoritative and redelivered on the next pull.
 
