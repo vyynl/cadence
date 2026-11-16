@@ -22,47 +22,151 @@ moves their own pointer through it.
 
 ## Run the server
 
-No clone. These two files are the whole stack — keep them as your base:
+Paste this as your stack. It is [`examples/minimal.yaml`](examples/minimal.yaml),
+verbatim — set `CAD_PUBLIC_URL` and `CAD_ADMIN_EMAIL`, and pin the image by
+replacing `:latest` with a release tag or `@sha256:…`.
 
-```bash
-curl -fsSLO https://raw.githubusercontent.com/vyynl/cadence/master/docker-compose.yml
-curl -fsSLO https://raw.githubusercontent.com/vyynl/cadence/master/.env.example
-mv .env.example .env     # set CAD_PUBLIC_URL and CAD_ADMIN_EMAIL
-docker compose up -d
-docker compose logs secrets     # first-admin password, printed once
+<details>
+<summary><b>docker-compose YAML</b></summary>
+
+```yaml
+# Minimal single-host Cadence stack. Paste into a Portainer / TrueNAS stack
+# editor, or save as compose.yaml and run `docker compose up -d`.
+#
+# Set CAD_PUBLIC_URL and CAD_ADMIN_EMAIL (in the stack environment or in .env);
+# everything else is generated into a volume on first start. Pin the image by
+# replacing :latest with a release tag or a @sha256:… digest.
+# For bundled TLS, Docker actions, and a socket proxy see docker-compose.yml.
+name: cadence
+
+x-env: &env
+  CAD_PUBLIC_URL: ${CAD_PUBLIC_URL:-http://localhost:4000}
+  CAD_GIT_STORE_PATH: /data/git
+  CAD_ARTIFACT_PATH: /data/artifacts
+  CAD_ACTIONS_ENABLED: "false"
+
+services:
+  secrets:
+    image: alpine:3
+    restart: "no"
+    volumes:
+      - cadence-secrets:/secrets
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        d=/secrets
+        gen() { head -c "$$1" /dev/urandom | od -An -tx1 | tr -d ' \n'; }
+        [ -s "$$d/skb" ] || gen 64 > "$$d/skb"
+        [ -s "$$d/dbp" ] || gen 24 > "$$d/dbp"
+        [ -s "$$d/adm" ] || { gen 16 > "$$d/adm"; echo "First-admin password: $$(cat $$d/adm)"; }
+        printf 'CAD_SECRET_KEY_BASE=%s\nCAD_DATABASE_URL=ecto://cadence:%s@postgres:5432/cadence\nCAD_ADMIN_PASSWORD=%s\n' \
+          "$$(cat "$$d/skb")" "$$(cat "$$d/dbp")" "$$(cat "$$d/adm")" > "$$d/app.env"
+        chmod 644 "$$d"/*
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cadence
+      POSTGRES_DB: cadence
+      POSTGRES_PASSWORD_FILE: /secrets/dbp
+    volumes:
+      - cadence-pg:/var/lib/postgresql/data
+      - cadence-secrets:/secrets:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cadence -d cadence"]
+      interval: 5s
+      retries: 12
+
+  migrate:
+    image: ghcr.io/vyynl/cadence:latest
+    restart: "no"
+    environment: *env
+    volumes: [cadence-secrets:/secrets:ro]
+    command:
+      - /bin/sh
+      - -c
+      - set -a; . /secrets/app.env; set +a; exec /app/bin/cadence eval "Cadence.Server.Release.migrate()"
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  bootstrap:
+    image: ghcr.io/vyynl/cadence:latest
+    restart: "no"
+    environment:
+      <<: *env
+      CAD_ADMIN_EMAIL: ${CAD_ADMIN_EMAIL:-}
+    volumes: [cadence-secrets:/secrets:ro]
+    command:
+      - /bin/sh
+      - -c
+      - set -a; . /secrets/app.env; set +a; exec /app/bin/cadence eval "Cadence.Server.Release.bootstrap_admin()"
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+
+  cadence:
+    image: ghcr.io/vyynl/cadence:latest
+    restart: unless-stopped
+    environment: *env
+    # The key base and database URL live in the secrets volume, so source them
+    # before exec'ing the release; the image CMD alone has no database URL.
+    command:
+      - /bin/sh
+      - -c
+      - set -a; . /secrets/app.env; set +a; exec /app/bin/cadence start
+    ports:
+      - "127.0.0.1:${CAD_HTTP_PORT:-4000}:4000"
+    volumes:
+      - cadence-secrets:/secrets:ro
+      - cadence-data:/data
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      bootstrap: {condition: service_completed_successfully}
+
+volumes:
+  cadence-secrets:
+  cadence-pg:
+  cadence-data:
 ```
 
-Open the URL and sign in with `CAD_ADMIN_EMAIL` and that password. If the GHCR
-package is private, `docker login ghcr.io` first (token with `read:packages`).
-Add `--profile tls` for bundled Caddy. [DEPLOY.md](DEPLOY.md) covers layouts,
-backups, and upgrades.
+</details>
+
+The first-admin password is printed once by the `secrets` service:
+`docker compose logs secrets`. In a stack editor it is in that container's logs.
+Bundled TLS, Docker actions, and the socket proxy live in
+[`docker-compose.yml`](docker-compose.yml); [DEPLOY.md](DEPLOY.md) covers
+layouts, backups, and upgrades.
 
 ## Run the daemon
 
-Mint a token at `/auth/tokens/new` on the server, then:
-
 ```bash
-token=cad_paste_the_token_here
 STATE="$HOME/.local/state/cadence"
+docker run --rm -it -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
+  ghcr.io/vyynl/cadence-daemon:latest setup
+
 docker run -d --name cadence-daemon --restart unless-stopped \
   --user "$(id -u):$(id -g)" --network cadence-prod_default \
   -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
   -v /path/to/project:/path/to/project \
-  -e CAD_SERVER_URL=http://cadence:4000 -e CAD_AUTH_TOKEN="$token" \
-  --entrypoint /bin/sh ghcr.io/vyynl/cadence-daemon:latest \
-  -c 'bin/cadence_daemon eval "Cadence.Daemon.Release.migrate()" && exec bin/cadence_daemon start'
+  ghcr.io/vyynl/cadence-daemon:latest
 
 docker exec cadence-daemon bin/cadence_daemon eval \
   'IO.inspect(Cadence.Daemon.Release.register("My Project", "my-project", "/path/to/project"))'
 ```
 
+`setup` prompts for the server URL and the API token you minted at
+`/auth/tokens/new`, then stores both in the state volume with mode `0600` — no
+secret on the command line or in shell history. The register call is the only
+step that needs the project path twice.
+
 Edit a file in that directory and the project appears at `/p/my-project` within
 about 20 seconds. `:CadOpen` in Neovim reads the same DAG: the socket is at
 `~/.local/state/cadence/daemon.sock`, where the plugin looks by default.
 
-Remote server instead of a local one? Drop `--network` and set `CAD_SERVER_URL`
-to its public origin. Mount project directories at their **real** paths, and
-give each project a second `-v` line.
+Remote server instead of a local one? Drop `--network` and give `setup` its
+public origin. [DAEMON.md](DAEMON.md) covers the compose and release forms.
 
 ## Demo
 

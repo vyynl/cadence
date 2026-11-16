@@ -20,3 +20,8 @@ fenced-code-language: true
 # Tables in this repository use the compact `|---|---|` separator. This rule
 # only enforces padding inside cells, which the existing docs do not follow.
 table-column-style: false
+
+# <details>/<summary> keep the README scannable while a long, copyable YAML block
+# stays in the file. GitHub renders both.
+no-inline-html:
+  allowed_elements: [details, summary, b]

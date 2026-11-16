@@ -1,0 +1,99 @@
+# Minimal single-host Cadence stack. Paste into a Portainer / TrueNAS stack
+# editor, or save as compose.yaml and run `docker compose up -d`.
+#
+# Set CAD_PUBLIC_URL and CAD_ADMIN_EMAIL (in the stack environment or in .env);
+# everything else is generated into a volume on first start. Pin the image by
+# replacing :latest with a release tag or a @sha256:… digest.
+# For bundled TLS, Docker actions, and a socket proxy see docker-compose.yml.
+name: cadence
+
+x-env: &env
+  CAD_PUBLIC_URL: ${CAD_PUBLIC_URL:-http://localhost:4000}
+  CAD_GIT_STORE_PATH: /data/git
+  CAD_ARTIFACT_PATH: /data/artifacts
+  CAD_ACTIONS_ENABLED: "false"
+
+services:
+  secrets:
+    image: alpine:3
+    restart: "no"
+    volumes:
+      - cadence-secrets:/secrets
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        d=/secrets
+        gen() { head -c "$$1" /dev/urandom | od -An -tx1 | tr -d ' \n'; }
+        [ -s "$$d/skb" ] || gen 64 > "$$d/skb"
+        [ -s "$$d/dbp" ] || gen 24 > "$$d/dbp"
+        [ -s "$$d/adm" ] || { gen 16 > "$$d/adm"; echo "First-admin password: $$(cat $$d/adm)"; }
+        printf 'CAD_SECRET_KEY_BASE=%s\nCAD_DATABASE_URL=ecto://cadence:%s@postgres:5432/cadence\nCAD_ADMIN_PASSWORD=%s\n' \
+          "$$(cat "$$d/skb")" "$$(cat "$$d/dbp")" "$$(cat "$$d/adm")" > "$$d/app.env"
+        chmod 644 "$$d"/*
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cadence
+      POSTGRES_DB: cadence
+      POSTGRES_PASSWORD_FILE: /secrets/dbp
+    volumes:
+      - cadence-pg:/var/lib/postgresql/data
+      - cadence-secrets:/secrets:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cadence -d cadence"]
+      interval: 5s
+      retries: 12
+
+  migrate:
+    image: ghcr.io/vyynl/cadence:latest
+    restart: "no"
+    environment: *env
+    volumes: [cadence-secrets:/secrets:ro]
+    command:
+      - /bin/sh
+      - -c
+      - set -a; . /secrets/app.env; set +a; exec /app/bin/cadence eval "Cadence.Server.Release.migrate()"
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  bootstrap:
+    image: ghcr.io/vyynl/cadence:latest
+    restart: "no"
+    environment:
+      <<: *env
+      CAD_ADMIN_EMAIL: ${CAD_ADMIN_EMAIL:-}
+    volumes: [cadence-secrets:/secrets:ro]
+    command:
+      - /bin/sh
+      - -c
+      - set -a; . /secrets/app.env; set +a; exec /app/bin/cadence eval "Cadence.Server.Release.bootstrap_admin()"
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+
+  cadence:
+    image: ghcr.io/vyynl/cadence:latest
+    restart: unless-stopped
+    environment: *env
+    # The key base and database URL live in the secrets volume, so source them
+    # before exec'ing the release; the image CMD alone has no database URL.
+    command:
+      - /bin/sh
+      - -c
+      - set -a; . /secrets/app.env; set +a; exec /app/bin/cadence start
+    ports:
+      - "127.0.0.1:${CAD_HTTP_PORT:-4000}:4000"
+    volumes:
+      - cadence-secrets:/secrets:ro
+      - cadence-data:/data
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      bootstrap: {condition: service_completed_successfully}
+
+volumes:
+  cadence-secrets:
+  cadence-pg:
+  cadence-data:

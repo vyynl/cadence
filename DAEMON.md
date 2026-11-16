@@ -4,33 +4,37 @@ The daemon is the local half of Cadence. It watches registered project
 directories, commits debounced snapshots to a local Git store, serves the
 Neovim plugin over a Unix socket, and pushes those nodes to a Cadence server.
 
-Configuration is environment variables only: [`.env.daemon.example`](.env.daemon.example)
-is the annotated reference. No variable is repeated here.
+The container form stores its settings with the `setup` command (below); the
+compose and release forms read environment variables, annotated in
+[`.env.daemon.example`](.env.daemon.example). No variable is repeated here.
 
 ## Install
 
-### One command (pull and run)
+### Container (setup command)
 
 ```bash
-mkdir -p "${CAD_STATE_DIR:-$HOME/.local/state/cadence}"
+STATE="$HOME/.local/state/cadence"
+docker run --rm -it -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
+  ghcr.io/vyynl/cadence-daemon:latest setup
+
 docker run -d --name cadence-daemon --restart unless-stopped \
-  --user "$(id -u):$(id -g)" \
-  -v "${CAD_STATE_DIR:-$HOME/.local/state/cadence}:/data/state" \
-  -e CAD_SERVER_URL=https://cadence.example.com \
-  -e CAD_AUTH_TOKEN=cad_replace_with_a_minted_token \
-  --entrypoint /bin/sh ghcr.io/vyynl/cadence-daemon:latest \
-  -c 'bin/cadence_daemon eval "Cadence.Daemon.Release.migrate()" && exec bin/cadence_daemon start'
+  --user "$(id -u):$(id -g)" --network cadence-prod_default \
+  -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
+  -v /path/to/project:/path/to/project \
+  ghcr.io/vyynl/cadence-daemon:latest
 ```
 
-The image pulls on first run, migrates the state directory, then boots the
-daemon. Binding `~/.local/state/cadence` and running as your own uid puts
-`daemon.sock` where the plugin already looks, so Neovim needs no extra
-configuration. Drop `--user` and swap in `-v cadence-daemon-state:/data/state`
-when you want sync only and no local socket. Drop the two `-e` lines to run
-offline. Add one `-v /host/path:/same/host/path` per project, mounted at its
-real host path. To upgrade: `docker pull`, `docker rm -f cadence-daemon`,
-re-run the same command — the state directory survives and the migration
-becomes a no-op.
+`setup` asks for the server URL and the API token from `/auth/tokens/new`,
+writes both to `$STATE/daemon.env` (mode 0600, inside the volume) and migrates
+the database. No secret appears in a `docker run -e` flag, in shell history, or
+in `docker inspect`. The second command reads that file, migrates if needed and
+starts the daemon, with the socket at `$STATE/daemon.sock` — where the plugin
+already looks.
+
+Mount the state directory at the **same path** on both sides: the database
+stores absolute paths. Add one `-v /host/path:/same/host/path` per project.
+Drop `--network` for a remote server. To upgrade: `docker pull`,
+`docker rm -f cadence-daemon`, re-run the second command.
 
 ### Compose (declarative, many projects)
 
