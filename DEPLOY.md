@@ -4,16 +4,6 @@ One Compose file runs the published image — no local build, no host scripting,
 no `openssl`; secrets are generated in a volume on first start. Configuration is
 [`.env.example`](.env.example).
 
-If the GHCR package is private — a setting independent of the repository's own
-visibility — log in once or the pull fails with `unauthorized`:
-
-```bash
-echo "$GHCR_PAT" | docker login ghcr.io -u <github-user> --password-stdin
-```
-
-That token needs `read:packages` and nothing else. Making the package public in
-its GitHub settings removes this step for every operator.
-
 ```bash
 cp .env.example .env         # set CAD_PUBLIC_URL and CAD_ADMIN_EMAIL
 docker compose up -d
