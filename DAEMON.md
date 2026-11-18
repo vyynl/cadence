@@ -26,8 +26,8 @@ scripts/cadence-up.sh ~/code/api --slug api --name "API"
 `--host` uses a release binary instead of a container, and
 `--require-connection` makes a failed server connection fatal. Exit 0 means the
 project is registered; the connection is reported on its own line because a
-registered project still commits and serves the DAG offline. The manual steps
-below are what it runs.
+registered project still commits and serves the DAG offline. The container
+steps below keep the daemon generic, so one run can hold many projects.
 
 ### Container (setup command)
 
@@ -41,7 +41,7 @@ docker run --rm -it --user "$(id -u):$(id -g)" \
 docker run -d --name cadence-daemon --restart unless-stopped \
   --user "$(id -u):$(id -g)" --network cadence-prod_default \
   -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
-  -v /home/you/code/my-project:/home/you/code/my-project \
+  -v "$HOME:$HOME" \
   ghcr.io/vyynl/cadence-daemon:latest
 ```
 
@@ -62,10 +62,12 @@ the server stack's network (`cadence-prod_default` for `docker-compose.yml`,
 `cadence_default` for the README's minimal stack). For a remote server, drop
 `--network` and enter its public origin.
 
-Mount the state directory at the **same path** on both sides: the database
-stores absolute paths. Add one `-v /host/path:/same/host/path` per project.
-Drop `--network` for a remote server. To upgrade: `docker pull`,
-`docker rm -f cadence-daemon`, re-run the second command.
+Mount the parent of the directories you will register at the **same path** on
+both sides: the database stores absolute paths and the daemon watches the
+container path. `$HOME` covers every project under your home directory; use a
+narrower parent if your code lives elsewhere. Drop `--network` for a remote
+server. To upgrade: `docker pull`, `docker rm -f cadence-daemon`, re-run the
+second command.
 
 ### Compose (declarative, many projects)
 
@@ -84,8 +86,8 @@ the server URL and token.
 
 The migration is one-time and after each upgrade; it is safe to repeat and
 prints `Migrations already up` when there is nothing to do. A boot before it is
-safe but idle, so run it first. Each project directory must be mounted at its
-real host path; a different container path is the common failure (see the
+safe but idle, so run it first. Mount the parent of the project directories at
+its real host path; a different container path is the common failure (see the
 commented example in `docker-compose.daemon.yml`).
 
 ### Release artifact (host, no Elixir to run it)
@@ -127,12 +129,25 @@ Both traps are covered in
 ## Register a project
 
 The daemon must be running, and `WORK_DIR` must be an absolute path that exists
-inside the container. A container that was just started migrates before it
-binds its socket, so a call made in the first few seconds after `docker run -d`
-fails with a connection error and only needs a retry.
+inside the daemon's namespace: for a container that means under a mounted
+parent. A container that was just started migrates before it binds its socket,
+so a call made in the first few seconds after `docker run -d` fails with a
+connection error and only needs a retry.
+
+From a source checkout, the command dials the daemon socket directly:
+
+```bash
+mix cad.register "My Project" my-project "$HOME/code/my-project"
+```
+
+Without a checkout, the same call runs inside the container or the release:
 
 ```bash
 # container
+docker exec cadence-daemon bin/cadence_daemon eval \
+  'IO.inspect(Cadence.Daemon.Release.register("My Project", "my-project", "/home/you/code/my-project"))'
+
+# compose
 docker compose -f docker-compose.daemon.yml exec daemon \
   bin/cadence_daemon eval \
   'IO.inspect(Cadence.Daemon.Release.register("My Project", "my-project", "/home/you/code/my-project"))'
@@ -144,8 +159,7 @@ bin/cadence_daemon eval \
 
 Registration starts the watcher; the first node appears after a file change and
 `CAD_WATCH_DEBOUNCE_MS` of quiet. Registering an unchanged tree produces no
-node. From a source checkout the equivalent is `mix cad.register NAME SLUG DIR`;
-the same call is `POST /projects` on the daemon socket.
+node. The same call is `POST /projects` on the daemon socket.
 
 ## Neovim
 

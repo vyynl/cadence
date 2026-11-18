@@ -29,8 +29,10 @@ services:
       # defaults CAD_STATE_DIR to /data/state, so this volume is the state.
       - daemon-state:/data/state
 
-      # PROJECT DIRECTORIES: mount each one at its REAL host path:
+      # PROJECT DIRECTORIES: mount their parent (or each one) at its REAL host
+      # path:
       #
+      #   - /home/you/code:/home/you/code
       #   - /home/you/code/my-project:/home/you/code/my-project
       #
       # Registration stores the absolute work_dir and the daemon watches that

@@ -143,18 +143,15 @@ layouts, backups, and upgrades.
 
 ## Run the daemon
 
-From a checkout, one command does the whole flow (setup, start, register, and
-the project URL): `scripts/cadence-up.sh [DIR]`. The manual steps below are what
-it runs, and [DAEMON.md](DAEMON.md) covers flags, compose, and host releases.
-
 The daemon container joins the server's compose network, so it reaches the app
 by service name. With the stack above (project `cadence`) the URL is
 `http://cadence:4000` and the network is `cadence_default`; the production
 `docker-compose.yml` uses project `cadence-prod` and `cadence-prod_default`.
-For a remote server, drop `--network` and enter its public origin instead.
+
 Create the state directory first and run both commands as yourself: `setup`
 writes `daemon.env` and the database into it, and the daemon must read them
-back with the same uid.
+back with the same uid. The project mount is the parent of the directories you
+will add later, at the same absolute path on both sides.
 
 ```bash
 STATE="$HOME/.local/state/cadence"
@@ -166,23 +163,32 @@ docker run --rm -it --user "$(id -u):$(id -g)" \
 docker run -d --name cadence-daemon --restart unless-stopped \
   --user "$(id -u):$(id -g)" --network cadence_default \
   -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
-  -v /home/you/code/my-project:/home/you/code/my-project \
+  -v "$HOME:$HOME" \
   ghcr.io/vyynl/cadence-daemon:latest
-
-docker exec cadence-daemon bin/cadence_daemon eval \
-  'IO.inspect(Cadence.Daemon.Release.register("My Project", "my-project", "/home/you/code/my-project"))'
 ```
 
 `setup` prompts for the server URL and the API token you minted at
 `/auth/tokens/new` (re-authenticate there if it asks), then stores both in the
 state volume with mode `0600`, so no secret appears on the command line or in
-shell history. The register call is the only step that needs the project path
-twice. Give the container a few seconds after `docker run -d`: it migrates and
-binds its socket first, so a call that lands too early fails with a connection
-error and is worth retrying.
+shell history. `$HOME` keeps the command generic; use a narrower parent in its
+place if your projects live elsewhere.
 
-Edit a file in that directory and the project appears at `/p/my-project` within
-about 20 seconds. `:CadOpen` in Neovim reads the same DAG: the socket is at
+Add any directory under that mount as a project, from a checkout. The path must
+be absolute:
+
+```bash
+mix cad.register "My Project" my-project "$HOME/code/my-project"
+```
+
+Edit a file in it and the project appears at `/p/my-project` within about 20
+seconds. `mix cad.tui` lists the registered projects and drives their DAGs
+without Neovim; [DAEMON.md](DAEMON.md#register-a-project) has the container and
+release forms, and `scripts/cadence-up.sh DIR` does setup, start, register, and
+the project link in one step.
+
+The daemon migrates before it binds its socket, so a register call in the first
+few seconds after `docker run -d` fails with a connection error and only needs a
+retry. `:CadOpen` in Neovim reads the same DAG: the socket is at
 `~/.local/state/cadence/daemon.sock`, where the plugin looks by default.
 
 Remote server instead of a local one? Drop `--network` and give `setup` its
