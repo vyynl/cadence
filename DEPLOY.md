@@ -21,6 +21,17 @@ Then sign in as `CAD_ADMIN_EMAIL`, enroll TOTP, and delete `CAD_ADMIN_PASSWORD`.
 | An existing reverse proxy | [`examples/behind-existing-proxy.yaml`](examples/behind-existing-proxy.yaml) |
 | One machine, evaluation only | [`examples/localhost.yaml`](examples/localhost.yaml) |
 
+## Image sources
+
+GHCR is canonical: `ghcr.io/vyynl/cadence` (server) and
+`ghcr.io/vyynl/cadence-daemon`. The same images are mirrored to Docker Hub
+(`vyynl/cadence`, `vyynl/cadence-daemon`) by
+`.github/workflows/publish-dockerhub.yml`, which needs the repository secrets
+`DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`. Both channels carry the same tags:
+`latest` and `edge` on `master`, `v*` and `latest` on a version tag, and
+`sha-<12>` on every build. Point the stack at the mirror with
+`CAD_SERVER_IMAGE=docker.io/vyynl/cadence:latest`.
+
 ## Backup and restore
 
 ```bash

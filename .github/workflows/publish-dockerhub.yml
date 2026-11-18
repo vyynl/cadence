@@ -1,0 +1,96 @@
+# Mirror the published images to Docker Hub.
+#
+# `docker-compose.yml`, `docker-compose.daemon.yml`, every `examples/*.yaml`,
+# and the README all reference `ghcr.io/vyynl/cadence[-daemon]`; GHCR stays the
+# canonical channel. This workflow publishes the same two images to
+# `docker.io/<DOCKERHUB_USERNAME>/cadence[-daemon]` for hosts that pull from
+# Docker Hub instead.
+#
+# It needs two repository secrets:
+#   DOCKERHUB_USERNAME  the Docker Hub account
+#   DOCKERHUB_TOKEN     an access token with read/write scope
+# Without them the job reports a notice and skips, so forks, the pre-secret
+# state, and pull requests never fail on a missing credential.
+
+name: Publish Docker Hub images
+
+"on":
+  push:
+    branches: [master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-dockerhub-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Build and push ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dockerfile: docker/Dockerfile
+            image: cadence
+          - dockerfile: docker/Dockerfile.daemon
+            image: cadence-daemon
+
+    steps:
+      - name: Check Docker Hub credentials
+        id: creds
+        env:
+          USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [[ -n "${USERNAME}" && -n "${TOKEN}" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::DOCKERHUB_USERNAME/DOCKERHUB_TOKEN are not set; skipping the Docker Hub mirror."
+          fi
+
+      - name: Check out the repository
+        if: steps.creds.outputs.enabled == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Build and push
+        if: steps.creds.outputs.enabled == 'true'
+        env:
+          IMAGE: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # `--password-stdin` keeps the token out of the process table and the
+          # runner's shell history.
+          echo "${TOKEN}" | docker login -u "${USERNAME}" --password-stdin
+
+          # Same tag set as the GHCR workflows: a commit tag always, plus the
+          # release tag and `latest` for a version tag, or `edge` and `latest`
+          # for a branch build.
+          tags=("${IMAGE}:sha-${GITHUB_SHA::12}")
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tags+=("${IMAGE}:${GITHUB_REF_NAME}" "${IMAGE}:latest")
+          else
+            tags+=("${IMAGE}:edge" "${IMAGE}:latest")
+          fi
+
+          build_args=()
+          for tag in "${tags[@]}"; do
+            build_args+=(-t "$tag")
+          done
+
+          docker build -f "${DOCKERFILE}" "${build_args[@]}" .
+          for tag in "${tags[@]}"; do
+            docker push "$tag"
+          done

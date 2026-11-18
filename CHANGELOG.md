@@ -23,6 +23,10 @@ On `master`, waiting for the 1.1.0 cut; `mix.exs` stays at 1.0.0 until then.
   first admin from a one-shot `bootstrap` service, and bundles Caddy under the
   `tls` profile. Root `lua/` and `plugin/` shims make the monorepo installable
   with lazy.nvim, Packer, vim-plug, and mini.deps.
+- Docker Hub mirror: `publish-dockerhub.yml` republishes both images
+  (`vyynl/cadence`, `vyynl/cadence-daemon`) with the GHCR tag set once
+  `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` are configured. GHCR stays
+  canonical, and the job skips with a notice while the secrets are absent.
 
 ### Changed
 
