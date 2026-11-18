@@ -141,6 +141,61 @@ defmodule Cadence.Daemon.Env do
     Application.get_env(:cadence_daemon, :sync_req_options, [])
   end
 
+  @doc """
+  CA bundle trusted for the server connection in place of the system store
+  (`CAD_SYNC_CA_FILE`), or `nil` for the system store.
+
+  Set it when the server's certificate chains to a private CA: the bundled Caddy
+  `internal` profile, a LAN install, or an inspecting proxy whose CA you accept.
+  """
+  @spec sync_ca_file() :: Path.t() | nil
+  def sync_ca_file do
+    Application.get_env(:cadence_daemon, :sync_ca_file)
+  end
+
+  @doc """
+  Whether the daemon verifies the server's certificate (`CAD_SYNC_VERIFY_TLS`,
+  default `true`, spec §12.6).
+
+  `false` disables authentication of the server for both the sync HTTP client and
+  the notification socket. It does not bypass a firewall that blocks the host,
+  and it is logged at boot.
+  """
+  @spec sync_verify_tls?() :: boolean()
+  def sync_verify_tls? do
+    Application.get_env(:cadence_daemon, :sync_verify_tls, true)
+  end
+
+  @doc """
+  TLS transport options for the server connection, shared by `Req` and
+  `Slipstream`.
+
+  Empty with the default configuration, so callers add nothing and the system
+  store applies.
+  """
+  @spec sync_transport_opts() :: keyword()
+  def sync_transport_opts do
+    verify_opts = if sync_verify_tls?(), do: [], else: [verify: :verify_none]
+
+    case sync_ca_file() do
+      nil -> verify_opts
+      path -> Keyword.put(verify_opts, :cacertfile, path)
+    end
+  end
+
+  @doc """
+  `connect_options` for `Req`, built from `sync_transport_opts/0`.
+
+  Returns `[]` with the default configuration when the system store applies.
+  """
+  @spec sync_connect_options() :: keyword()
+  def sync_connect_options do
+    case sync_transport_opts() do
+      [] -> []
+      transport_opts -> [transport_opts: transport_opts]
+    end
+  end
+
   @doc "Whether doc automation is enabled (default `true`, spec §9)."
   @spec docs_enabled?() :: boolean()
   def docs_enabled?, do: Application.get_env(:cadence_daemon, :docs_enabled, true)

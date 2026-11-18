@@ -87,6 +87,21 @@ defmodule Cadence.Daemon.SyncSocketTest do
     assert :ignore = SyncSocket.start_link([])
   end
 
+  test "accepts the TLS trust configuration" do
+    on_exit(fn ->
+      Enum.each([:sync_ca_file, :sync_verify_tls], &Application.delete_env(:cadence_daemon, &1))
+    end)
+
+    Application.put_env(:cadence_daemon, :sync_ca_file, "/etc/corp-ca.pem")
+    Application.put_env(:cadence_daemon, :sync_verify_tls, false)
+
+    put_server_user()
+    client = start_socket()
+
+    accept_connect(client)
+    assert_join(@topic, %{}, :ok)
+  end
+
   defp start_socket(opts \\ []) do
     opts =
       Keyword.merge(
@@ -121,7 +136,15 @@ defmodule Cadence.Daemon.SyncSocketTest do
 
   defp clear_sync_config do
     Enum.each(
-      [:server_url, :auth_token, :sync_enabled, :sync_channel_enabled, :sync_req_options],
+      [
+        :server_url,
+        :auth_token,
+        :sync_enabled,
+        :sync_channel_enabled,
+        :sync_req_options,
+        :sync_ca_file,
+        :sync_verify_tls
+      ],
       &Application.delete_env(:cadence_daemon, &1)
     )
   end

@@ -208,6 +208,7 @@ defmodule Cadence.Daemon.SyncClient do
         ]
         |> Keyword.merge(opts)
         |> Keyword.merge(Env.sync_req_options())
+        |> put_connect_options()
 
       req = Req.new(base_url: String.trim_trailing(server_url, "/"))
 
@@ -226,6 +227,16 @@ defmodule Cadence.Daemon.SyncClient do
 
   defp required_config(value) when is_binary(value) and value != "", do: {:ok, value}
   defp required_config(_value), do: {:error, :not_configured}
+
+  # `CAD_SYNC_CA_FILE` / `CAD_SYNC_VERIFY_TLS` reach Req as `connect_options`.
+  # Req rejects `:finch` alongside `:connect_options`, and the test stubs set
+  # `:plug`, so only add the key when there is something to change.
+  defp put_connect_options(opts) do
+    case Env.sync_connect_options() do
+      [] -> opts
+      connect_options -> Keyword.put(opts, :connect_options, connect_options)
+    end
+  end
 
   defp present?(value), do: is_binary(value) and value != ""
 

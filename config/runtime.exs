@@ -65,6 +65,10 @@ if config_env() != :test do
     auth_token: System.get_env("CAD_AUTH_TOKEN"),
     sync_enabled: System.get_env("CAD_SYNC_ENABLED", "true") == "true",
     sync_channel_enabled: System.get_env("CAD_SYNC_CHANNEL_ENABLED", "true") == "true",
+    # TLS trust for the server connection. A CA file that does not exist is a
+    # boot error: failing at request time only produces retry noise.
+    sync_ca_file: System.get_env("CAD_SYNC_CA_FILE"),
+    sync_verify_tls: System.get_env("CAD_SYNC_VERIFY_TLS", "true") == "true",
     sync_request_timeout_ms:
       String.to_integer(System.get_env("CAD_SYNC_REQUEST_TIMEOUT_MS", "5000")),
     sync_union_timeout_ms:
@@ -94,6 +98,23 @@ if config_env() != :test do
     docs_max_file_bytes: String.to_integer(System.get_env("CAD_DOCS_MAX_FILE_BYTES", "262144")),
     docs_context_bytes: String.to_integer(System.get_env("CAD_DOCS_CONTEXT_BYTES", "65536")),
     docs_diff_max_bytes: String.to_integer(System.get_env("CAD_DOCS_DIFF_MAX_BYTES", "32768"))
+
+  # A CA bundle that is missing or unreadable is a configuration error: failing
+  # here names it once, where a request-time failure would only look like a
+  # network outage every CAD_SYNC_INTERVAL_MS.
+  case System.get_env("CAD_SYNC_CA_FILE") do
+    nil ->
+      :ok
+
+    "" ->
+      :ok
+
+    path ->
+      unless File.regular?(path) do
+        raise "CAD_SYNC_CA_FILE=#{path} is not a readable file; " <>
+                "sync would fail its TLS handshake"
+      end
+  end
 end
 
 # -- Server -----------------------------------------------------------------

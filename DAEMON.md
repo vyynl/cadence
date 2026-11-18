@@ -10,6 +10,25 @@ compose and release forms read environment variables, annotated in
 
 ## Install
 
+### From a checkout (one command)
+
+`scripts/cadence-up.sh` is the short path for the container flow: it configures
+the daemon if needed, starts or reuses the container, waits for the socket,
+registers the directory, reports whether sync reaches the server, and prints the
+project page as a clickable link. It is idempotent.
+
+```bash
+scripts/cadence-up.sh                              # current directory
+scripts/cadence-up.sh ~/code/my-project            # explicit
+scripts/cadence-up.sh ~/code/api --slug api --name "API"
+```
+
+`--host` uses a release binary instead of a container, and
+`--require-connection` makes a failed server connection fatal. Exit 0 means the
+project is registered; the connection is reported on its own line because a
+registered project still commits and serves the DAG offline. The manual steps
+below are what it runs.
+
 ### Container (setup command)
 
 ```bash
@@ -190,7 +209,8 @@ the daemon at least as new as the TUI.
 - **Daemon not syncing.** Check `CAD_SERVER_URL` reachability from the daemon's
   network namespace and that `CAD_SYNC_ENABLED` is not false.
 - **`Unknown CA` in the daemon log.** The network is intercepting the server's
-  TLS; see
+  TLS, or the server's certificate chains to a private CA. Point
+  `CAD_SYNC_CA_FILE` at that CA, or see
   [TROUBLESHOOTING.md](TROUBLESHOOTING.md#daemon-logs-unknown-ca-or-gets-a-403).
 - **Auth fails.** Mint a new token at `/auth/tokens/new`, put it in
   `CAD_AUTH_TOKEN`, and restart the daemon. Tokens are shown once and the server

@@ -6,6 +6,27 @@ Notable changes to Cadence. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/cadence-up.sh`: one command for the container flow. It runs `setup`
+  when there is no `daemon.env`, starts or reuses the container (refusing when
+  an existing one does not mount the project at its real path), retries
+  registration across the boot window, reports the server connection separately,
+  and prints the project URL as a clickable link. Idempotent; `--host` and
+  `--require-connection` cover the release and strict cases.
+- Daemon TLS trust for the server connection: `CAD_SYNC_CA_FILE` trusts a
+  private CA bundle (a `CAD_TLS_MODE=internal` server, a LAN install, or an
+  accepted inspecting proxy) and `CAD_SYNC_VERIFY_TLS=false` disables
+  verification, for both the sync client and the notification socket. A CA path
+  that is not a readable file stops the daemon at boot, and disabling
+  verification logs a warning.
+
+### Changed
+
+- The daemon image's `setup` and start output is colour-coded (bold headings,
+  dim hints, red errors) on a terminal, and plain when piped, when `NO_COLOR` is
+  set, or when `TERM=dumb`.
+
 ### Fixed
 
 - Daemon helpers name the socket instead of crashing when it is missing or has

@@ -35,6 +35,41 @@ defmodule Cadence.Daemon.EnvTest do
     refute Env.sync_channel_enabled?()
   end
 
+  test "TLS trust defaults to the system store" do
+    assert Env.sync_ca_file() == nil
+    assert Env.sync_verify_tls?()
+    assert Env.sync_transport_opts() == []
+    assert Env.sync_connect_options() == []
+  end
+
+  test "a CA file becomes transport options for both clients" do
+    on_exit(fn -> Application.delete_env(:cadence_daemon, :sync_ca_file) end)
+
+    Application.put_env(:cadence_daemon, :sync_ca_file, "/etc/corp-ca.pem")
+
+    assert Env.sync_ca_file() == "/etc/corp-ca.pem"
+    assert Env.sync_transport_opts() == [cacertfile: "/etc/corp-ca.pem"]
+    assert Env.sync_connect_options() == [transport_opts: [cacertfile: "/etc/corp-ca.pem"]]
+  end
+
+  test "verification can be disabled and combines with a CA file" do
+    on_exit(fn ->
+      Enum.each([:sync_ca_file, :sync_verify_tls], &Application.delete_env(:cadence_daemon, &1))
+    end)
+
+    Application.put_env(:cadence_daemon, :sync_verify_tls, false)
+
+    refute Env.sync_verify_tls?()
+    assert Env.sync_transport_opts() == [verify: :verify_none]
+
+    Application.put_env(:cadence_daemon, :sync_ca_file, "/etc/corp-ca.pem")
+
+    assert Env.sync_transport_opts() == [
+             cacertfile: "/etc/corp-ca.pem",
+             verify: :verify_none
+           ]
+  end
+
   test "doc automation defaults match the env contract" do
     assert Env.docs_enabled?()
     assert Env.docs_timeout_ms() == 30_000

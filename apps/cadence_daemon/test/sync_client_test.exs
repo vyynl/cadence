@@ -15,7 +15,9 @@ defmodule Cadence.Daemon.SyncClientTest do
           :auth_token,
           :sync_request_timeout_ms,
           :sync_union_timeout_ms,
-          :sync_req_options
+          :sync_req_options,
+          :sync_ca_file,
+          :sync_verify_tls
         ],
         &Application.delete_env(:cadence_daemon, &1)
       )
@@ -283,6 +285,20 @@ defmodule Cadence.Daemon.SyncClientTest do
 
     assert SyncClient.objects_exist(Ecto.UUID.generate(), [sha]) ==
              {:error, {:invalid_response, %{"present" => [1]}}}
+  end
+
+  # The Req.Test adapter ignores `connect_options`, so this only guards the
+  # wiring (a CA file must not turn every request into an error). The option
+  # values themselves are asserted in `EnvTest`.
+  test "a configured CA file does not disturb the test transport" do
+    configure()
+    Application.put_env(:cadence_daemon, :sync_ca_file, "/etc/corp-ca.pem")
+    Application.put_env(:cadence_daemon, :sync_verify_tls, false)
+
+    user_id = Ecto.UUID.generate()
+    Req.Test.stub(__MODULE__, fn conn -> Req.Test.json(conn, %{user_id: user_id}) end)
+
+    assert SyncClient.me() == {:ok, user_id}
   end
 
   defp configure do

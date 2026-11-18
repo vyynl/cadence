@@ -90,13 +90,19 @@ defmodule Cadence.Daemon.SyncSocket do
     headers = opts[:headers] || [{"x-cadence-token", Env.auth_token() || ""}]
 
     config =
-      [uri: uri, headers: headers]
+      [uri: uri, headers: headers, mint_opts: mint_opts()]
       |> maybe_test_mode(opts)
       |> Keyword.merge(
         Keyword.take(opts, [:reconnect_after_msec, :rejoin_after_msec, :heartbeat_interval_msec])
       )
 
     config
+  end
+
+  # Same trust configuration as `SyncClient`: Slipstream hands `mint_opts` to
+  # `Mint.HTTP.connect/4`, where the same `transport_opts` apply.
+  defp mint_opts do
+    [protocols: [:http1], transport_opts: Env.sync_transport_opts()]
   end
 
   defp maybe_test_mode(config, opts) do

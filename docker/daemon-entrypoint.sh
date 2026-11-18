@@ -13,6 +13,28 @@ STATE="${CAD_STATE_DIR:-/data/state}"
 CONF="$STATE/daemon.env"
 RELEASE="$(dirname "$0")/cadence_daemon"
 
+# Colour only for a terminal, and never when plain output was requested. The
+# escape is built with printf so this stays POSIX sh.
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ]; then
+  c_reset=$(printf '\033[0m')
+  c_bold=$(printf '\033[1m')
+  c_dim=$(printf '\033[2m')
+  c_red=$(printf '\033[31m')
+  c_green=$(printf '\033[32m')
+  c_yellow=$(printf '\033[33m')
+else
+  c_reset='' c_bold='' c_dim='' c_red='' c_green='' c_yellow=''
+fi
+
+step() { printf '%s%s%s\n' "$c_bold" "$1" "$c_reset"; }
+hint() { printf '  %s%s%s\n' "$c_dim" "$1" "$c_reset"; }
+ok() { printf '  %sok%s     %s\n' "$c_green" "$c_reset" "$1"; }
+warn() { printf '  %swarn%s   %s\n' "$c_yellow" "$c_reset" "$1" >&2; }
+die() {
+  printf '%serror%s   %s\n' "$c_red" "$c_reset" "$1" >&2
+  exit 1
+}
+
 mask() {
   # Print the config with the token redacted.
   sed -e 's/^\(CAD_AUTH_TOKEN=\).*/\1<hidden>/' "$CONF"
@@ -20,25 +42,30 @@ mask() {
 
 setup() {
   if ! mkdir -p "$STATE" 2>/dev/null || [ ! -w "$STATE" ]; then
-    echo "error: $STATE is not writable by uid $(id -u)." >&2
-    echo "Create it on the host and run with --user $(id -u):$(id -g)." >&2
-    exit 1
+    die "$STATE is not writable by uid $(id -u). Create it on the host and run with --user $(id -u):$(id -g)."
   fi
 
+  step 'Cadence daemon setup'
+  hint 'Writes the server URL and an API token into the state volume.'
+  printf '\n'
+
   if [ -f "$CONF" ]; then
-    echo "Existing configuration in $CONF:"
+    printf 'Existing configuration in %s:\n' "$CONF"
     mask
     printf '\nReplace it? [y/N] '
     read -r answer
     case "$answer" in
-      y | Y) ;;
-      *) echo "keeping the existing configuration"; exit 0 ;;
+      y | Y) printf '\n' ;;
+      *)
+        ok 'keeping the existing configuration'
+        exit 0
+        ;;
     esac
   fi
 
-  printf 'Server URL (for example https://cadence.example.com): '
+  printf '%sServer URL%s (for example https://cadence.example.com): ' "$c_bold" "$c_reset"
   read -r server_url
-  printf 'API token (mint it at /auth/tokens/new on the server): '
+  printf '%sAPI token%s (mint it at /auth/tokens/new on the server): ' "$c_bold" "$c_reset"
 
   # Hide the token while it is typed. `stty` only works on a terminal, so a
   # piped setup (for example in a script) keeps the value on stdin.
@@ -57,8 +84,7 @@ setup() {
   fi
 
   if [ -z "$server_url" ] || [ -z "$token" ]; then
-    echo "both values are required; nothing written" >&2
-    exit 1
+    die 'both values are required; nothing written'
   fi
 
   umask 077
@@ -67,16 +93,21 @@ setup() {
 
   # Create the database now so the first start is quick and quiet.
   "$RELEASE" eval "Cadence.Daemon.Release.migrate()" >/dev/null
-  echo "Wrote $CONF"
-  echo "Start the daemon with: docker run -d --name cadence-daemon … <image>"
+
+  printf '\n'
+  ok "wrote $CONF"
+  hint 'mode 0600, inside the state volume; revoke the token from /account if it leaks'
+
+  printf '\n'
+  step 'Start the daemon'
+  hint "docker run -d --name cadence-daemon --restart unless-stopped --user $(id -u):$(id -g) … <image>"
+  hint 'or run scripts/cadence-up.sh from a checkout: it configures, starts, registers and prints the project URL'
 }
 
 start() {
   if [ -f "$CONF" ]; then
     if [ ! -r "$CONF" ]; then
-      echo "error: cannot read $CONF as uid $(id -u)." >&2
-      echo "Run setup and the daemon with the same --user." >&2
-      exit 1
+      die "cannot read $CONF as uid $(id -u). Run setup and the daemon with the same --user."
     fi
 
     set -a
@@ -84,12 +115,15 @@ start() {
     . "$CONF"
     set +a
   else
-    echo "no $CONF: running offline (no server sync). Run '<image> setup' to configure." >&2
+    warn "no $CONF: running offline (no server sync)"
+    hint "run '<image> setup' to configure, then restart"
   fi
 
   # Idempotent; keeps a fresh volume usable without a separate migrate step.
   "$RELEASE" eval "Cadence.Daemon.Release.migrate()" >/dev/null 2>&1 || true
 
+  step 'Cadence daemon'
+  hint "socket $STATE/daemon.sock"
   exec "$RELEASE" start
 }
 

@@ -1,9 +1,12 @@
 defmodule Cadence.Daemon.Application do
   use Application
 
+  require Logger
+
   @impl true
   def start(_type, _args) do
     ensure_repo_dir!()
+    warn_insecure_tls()
 
     children =
       [
@@ -40,6 +43,17 @@ defmodule Cadence.Daemon.Application do
     if Cadence.Daemon.Env.sync_enabled?() and Cadence.Daemon.SyncClient.configured?() do
       Cadence.Daemon.SyncLedger.rehydrate()
       Cadence.Daemon.SyncWorker.wake_all()
+    end
+  end
+
+  # Disabling verification sends the token over an unauthenticated channel, so
+  # say so once at boot rather than leaving it to be discovered in review.
+  defp warn_insecure_tls do
+    unless Cadence.Daemon.Env.sync_verify_tls?() do
+      Logger.warning(
+        "CAD_SYNC_VERIFY_TLS=false: the server's certificate is not verified " <>
+          "for sync or the notification socket"
+      )
     end
   end
 

@@ -143,6 +143,10 @@ layouts, backups, and upgrades.
 
 ## Run the daemon
 
+From a checkout, one command does the whole flow (setup, start, register, and
+the project URL): `scripts/cadence-up.sh [DIR]`. The manual steps below are what
+it runs, and [DAEMON.md](DAEMON.md) covers flags, compose, and host releases.
+
 The daemon container joins the server's compose network, so it reaches the app
 by service name. With the stack above (project `cadence`) the URL is
 `http://cadence:4000` and the network is `cadence_default`; the production

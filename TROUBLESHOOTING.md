@@ -96,10 +96,13 @@ chain does not end at a CA in the image. The same request with verification off
 usually returns the appliance's block page (for example
 `403 Web Filter Block Override`).
 **Fix:** check from the host with `curl -v https://cadence.example.com/health`.
-If the chain shows an appliance issuer instead of the server's real one, sync
-from a network that does not intercept the domain, or add that appliance's CA to
-the daemon's trust store (`/etc/ssl/certs` in the image). Cadence cannot tunnel
-through the filter.
+If the chain shows an appliance issuer instead of the server's real one, set
+`CAD_SYNC_CA_FILE` to that CA (or, for a server you control and trust the path
+to, `CAD_SYNC_VERIFY_TLS=false`; both are described in
+[`.env.daemon.example`](.env.daemon.example)), or sync from a network that does
+not intercept the domain. A block page is an HTTP response, so no TLS setting
+gets past it: an answer like `403 Web Filter Block Override` needs the firewall
+changed, not the daemon.
 
 ## Migrations pending, app never starts
 
