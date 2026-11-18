@@ -162,18 +162,20 @@ docker run --rm -it --user "$(id -u):$(id -g)" \
 docker run -d --name cadence-daemon --restart unless-stopped \
   --user "$(id -u):$(id -g)" --network cadence_default \
   -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
-  -v /path/to/project:/path/to/project \
+  -v /home/you/code/my-project:/home/you/code/my-project \
   ghcr.io/vyynl/cadence-daemon:latest
 
 docker exec cadence-daemon bin/cadence_daemon eval \
-  'IO.inspect(Cadence.Daemon.Release.register("My Project", "my-project", "/path/to/project"))'
+  'IO.inspect(Cadence.Daemon.Release.register("My Project", "my-project", "/home/you/code/my-project"))'
 ```
 
 `setup` prompts for the server URL and the API token you minted at
 `/auth/tokens/new` (re-authenticate there if it asks), then stores both in the
 state volume with mode `0600`, so no secret appears on the command line or in
 shell history. The register call is the only step that needs the project path
-twice.
+twice. Give the container a few seconds after `docker run -d`: it migrates and
+binds its socket first, so a call that lands too early fails with a connection
+error and is worth retrying.
 
 Edit a file in that directory and the project appears at `/p/my-project` within
 about 20 seconds. `:CadOpen` in Neovim reads the same DAG: the socket is at

@@ -22,7 +22,7 @@ docker run --rm -it --user "$(id -u):$(id -g)" \
 docker run -d --name cadence-daemon --restart unless-stopped \
   --user "$(id -u):$(id -g)" --network cadence-prod_default \
   -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
-  -v /path/to/project:/path/to/project \
+  -v /home/you/code/my-project:/home/you/code/my-project \
   ghcr.io/vyynl/cadence-daemon:latest
 ```
 
@@ -108,7 +108,9 @@ Both traps are covered in
 ## Register a project
 
 The daemon must be running, and `WORK_DIR` must be an absolute path that exists
-inside the container.
+inside the container. A container that was just started migrates before it
+binds its socket, so a call made in the first few seconds after `docker run -d`
+fails with a connection error and only needs a retry.
 
 ```bash
 # container
@@ -187,6 +189,9 @@ the daemon at least as new as the TUI.
 
 - **Daemon not syncing.** Check `CAD_SERVER_URL` reachability from the daemon's
   network namespace and that `CAD_SYNC_ENABLED` is not false.
+- **`Unknown CA` in the daemon log.** The network is intercepting the server's
+  TLS; see
+  [TROUBLESHOOTING.md](TROUBLESHOOTING.md#daemon-logs-unknown-ca-or-gets-a-403).
 - **Auth fails.** Mint a new token at `/auth/tokens/new`, put it in
   `CAD_AUTH_TOKEN`, and restart the daemon. Tokens are shown once and the server
   stores only a hash. A new token replaces the old one for the daemon; revoke

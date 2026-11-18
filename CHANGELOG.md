@@ -6,6 +6,14 @@ Notable changes to Cadence. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Daemon helpers name the socket instead of crashing when it is missing or has
+  no listener: `Release.register/4`, `Release.import/2`, and every `mix cad.*`
+  task now report `cadence daemon unreachable at <path>: :econnrefused` (or
+  `:enoent`) instead of a bare `MatchError`, so a `docker run -d` that has not
+  finished binding its socket reads as "retry" rather than as a crash.
+
 ## [1.1.0] - 2026-11-18
 
 Turnkey self-hosting, operator-created accounts with mandatory TOTP, passkeys,

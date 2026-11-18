@@ -7,6 +7,12 @@ defmodule Cadence.Daemon.Client do
   the server closes the socket. `request/5` accepts a per-read timeout
   (default `:infinity`); the TUI passes one so a wedged daemon cannot leak a
   task and socket on every refresh.
+
+  A socket that is missing or has no listener raises `RuntimeError` naming the
+  path and the reason. That is the normal state for the first few seconds after
+  `docker run -d` (the entrypoint migrates before the daemon binds), and an
+  earlier run leaves the socket file behind, so the connect fails with
+  `:econnrefused` rather than `:enoent`.
   """
 
   def request(
@@ -21,13 +27,27 @@ defmodule Cadence.Daemon.Client do
     payload = body && Jason.encode!(body)
     req = build_request(method, path, payload)
 
-    {:ok, sock} =
-      :gen_tcp.connect({:local, socket_path}, 0, [:binary, active: false], 5000)
+    sock = connect!(socket_path)
 
     :ok = :gen_tcp.send(sock, req)
     response = read_all(sock, <<>>, timeout)
     :gen_tcp.close(sock)
     parse_response(response)
+  end
+
+  # Raises instead of matching on the connect result: the bare `MatchError` this
+  # replaces named neither the socket nor the reason, which is useless when the
+  # fix is "the daemon is still starting, retry".
+  defp connect!(socket_path) do
+    case :gen_tcp.connect({:local, socket_path}, 0, [:binary, active: false], 5000) do
+      {:ok, sock} ->
+        sock
+
+      {:error, reason} ->
+        raise "cadence daemon unreachable at #{socket_path}: #{inspect(reason)}. " <>
+                "Is the daemon running? A fresh `docker run -d` needs a few seconds " <>
+                "to bind the socket, so retry."
+    end
   end
 
   @doc """

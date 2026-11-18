@@ -84,6 +84,23 @@ different mount target leaves every registered project pointing at a directory
 that does not exist (`eacces` on boot, `project not found` on sync). Project
 directories must be mounted at their real paths for the same reason.
 
+## Daemon logs `Unknown CA` or gets a `403`
+
+**Symptom:** the daemon logs
+`TLS :client: In state :wait_cert_cr … Fatal - Unknown CA` every few seconds
+(the sync channel retries on a 5 s timer) and nothing syncs, although the URL
+opens in a browser.
+**Cause:** the network is intercepting TLS for the server's hostname. A firewall
+with content filtering re-signs the connection with its own certificate, so the
+chain does not end at a CA in the image. The same request with verification off
+usually returns the appliance's block page (for example
+`403 Web Filter Block Override`).
+**Fix:** check from the host with `curl -v https://cadence.example.com/health`.
+If the chain shows an appliance issuer instead of the server's real one, sync
+from a network that does not intercept the domain, or add that appliance's CA to
+the daemon's trust store (`/etc/ssl/certs` in the image). Cadence cannot tunnel
+through the filter.
+
 ## Migrations pending, app never starts
 
 **Symptom:** `cadence` stays stopped and `/health` never answers.

@@ -122,9 +122,8 @@ defmodule Cadence.Daemon.TUI.Client do
           {:error, %{status: status, message: message(decoded)}}
       end
     rescue
-      # The socket client matches on connect success and decodes with `!`, so a
-      # down daemon or a truncated reply surfaces here. Map both to one shape
-      # instead of crashing the renderer.
+      # Decoding uses `!`, so a truncated or garbled reply surfaces here. The
+      # connect step raises a RuntimeError with the socket path instead.
       e in MatchError ->
         {:error,
          %{
