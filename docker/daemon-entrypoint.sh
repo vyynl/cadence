@@ -19,7 +19,11 @@ mask() {
 }
 
 setup() {
-  mkdir -p "$STATE"
+  if ! mkdir -p "$STATE" 2>/dev/null || [ ! -w "$STATE" ]; then
+    echo "error: $STATE is not writable by uid $(id -u)." >&2
+    echo "Create it on the host and run with --user $(id -u):$(id -g)." >&2
+    exit 1
+  fi
 
   if [ -f "$CONF" ]; then
     echo "Existing configuration in $CONF:"
@@ -35,7 +39,22 @@ setup() {
   printf 'Server URL (for example https://cadence.example.com): '
   read -r server_url
   printf 'API token (mint it at /auth/tokens/new on the server): '
+
+  # Hide the token while it is typed. `stty` only works on a terminal, so a
+  # piped setup (for example in a script) keeps the value on stdin.
+  hide=0
+  if [ -t 0 ] && stty -echo 2>/dev/null; then
+    hide=1
+    trap 'stty echo 2>/dev/null || true' 0
+  fi
+
   read -r token
+
+  if [ "$hide" = 1 ]; then
+    stty echo 2>/dev/null || true
+    trap - 0
+    printf '\n'
+  fi
 
   if [ -z "$server_url" ] || [ -z "$token" ]; then
     echo "both values are required; nothing written" >&2
@@ -54,6 +73,12 @@ setup() {
 
 start() {
   if [ -f "$CONF" ]; then
+    if [ ! -r "$CONF" ]; then
+      echo "error: cannot read $CONF as uid $(id -u)." >&2
+      echo "Run setup and the daemon with the same --user." >&2
+      exit 1
+    fi
+
     set -a
     # shellcheck disable=SC1090
     . "$CONF"

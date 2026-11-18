@@ -62,7 +62,9 @@ cannot reach `http://localhost:4000` (that is the daemon container itself), and
 `host.docker.internal` does not help either, because `CAD_HTTP_BIND` is
 `127.0.0.1`. A LAN name, a closed port, and a proxy that does not publish the app
 all look the same from there.
-**Fix:** put the daemon on the server's network and dial the service name:
+**Fix:** put the daemon on the server's network and dial the service name. The
+network is `<compose-project>_default` (`cadence_default` for the README's
+minimal stack, `cadence-prod_default` for `docker-compose.yml`):
 
 ```bash
 docker run … --network cadence-prod_default -e CAD_SERVER_URL=http://cadence:4000 …

@@ -143,13 +143,24 @@ layouts, backups, and upgrades.
 
 ## Run the daemon
 
+The daemon container joins the server's compose network, so it reaches the app
+by service name. With the stack above (project `cadence`) the URL is
+`http://cadence:4000` and the network is `cadence_default`; the production
+`docker-compose.yml` uses project `cadence-prod` and `cadence-prod_default`.
+For a remote server, drop `--network` and enter its public origin instead.
+Create the state directory first and run both commands as yourself: `setup`
+writes `daemon.env` and the database into it, and the daemon must read them
+back with the same uid.
+
 ```bash
 STATE="$HOME/.local/state/cadence"
-docker run --rm -it -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
+mkdir -p "$STATE"
+docker run --rm -it --user "$(id -u):$(id -g)" \
+  -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
   ghcr.io/vyynl/cadence-daemon:latest setup
 
 docker run -d --name cadence-daemon --restart unless-stopped \
-  --user "$(id -u):$(id -g)" --network cadence-prod_default \
+  --user "$(id -u):$(id -g)" --network cadence_default \
   -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
   -v /path/to/project:/path/to/project \
   ghcr.io/vyynl/cadence-daemon:latest

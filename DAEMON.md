@@ -14,7 +14,9 @@ compose and release forms read environment variables, annotated in
 
 ```bash
 STATE="$HOME/.local/state/cadence"
-docker run --rm -it -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
+mkdir -p "$STATE"
+docker run --rm -it --user "$(id -u):$(id -g)" \
+  -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
   ghcr.io/vyynl/cadence-daemon:latest setup
 
 docker run -d --name cadence-daemon --restart unless-stopped \
@@ -31,12 +33,24 @@ in `docker inspect`. The second command reads that file, migrates if needed and
 starts the daemon, with the socket at `$STATE/daemon.sock`, which is where the plugin
 already looks.
 
+Create `$STATE` on the host first and pass the same `--user` to both commands.
+Docker creates a missing bind-mount directory as `root`, and a setup run as the
+image's uid 10000 would leave files the `--user` daemon cannot read.
+
+Reach a local server by service name, not `localhost`: `http://cadence:4000` on
+the server stack's network (`cadence-prod_default` for `docker-compose.yml`,
+`cadence_default` for the README's minimal stack). For a remote server, drop
+`--network` and enter its public origin.
+
 Mount the state directory at the **same path** on both sides: the database
 stores absolute paths. Add one `-v /host/path:/same/host/path` per project.
 Drop `--network` for a remote server. To upgrade: `docker pull`,
 `docker rm -f cadence-daemon`, re-run the second command.
 
 ### Compose (declarative, many projects)
+
+`docker-compose.daemon.yml` uses `env_file: required: false`, so it needs
+**Docker Compose 2.24 or newer**; older releases reject that key.
 
 ```bash
 docker compose -f docker-compose.daemon.yml run --rm daemon \
@@ -161,7 +175,8 @@ TTY attached:
 
 ```bash
 bin/cadence_daemon eval 'Cadence.Daemon.TUI.main()'
-docker compose exec daemon /app/bin/cadence_daemon eval 'Cadence.Daemon.TUI.main()'
+docker compose -f docker-compose.daemon.yml exec daemon \
+  /app/bin/cadence_daemon eval 'Cadence.Daemon.TUI.main()'
 ```
 
 The TUI only speaks endpoints that exist on the daemon it connects to, so keep
@@ -171,8 +186,10 @@ the daemon at least as new as the TUI.
 
 - **Daemon not syncing.** Check `CAD_SERVER_URL` reachability from the daemon's
   network namespace and that `CAD_SYNC_ENABLED` is not false.
-- **Auth fails.** Re-issue the token at `/auth/tokens/new` and restart; tokens
-  are shown once and revoked tokens fail every request.
+- **Auth fails.** Mint a new token at `/auth/tokens/new`, put it in
+  `CAD_AUTH_TOKEN`, and restart the daemon. Tokens are shown once and the server
+  stores only a hash; a new token replaces the old one for the daemon, but the
+  old row must be removed at the database level until a revoke control ships.
 - **Watcher missing deps.** `fs_inotify` needs `inotifywait` (`inotify-tools`);
   the image ships it, host installs may not. On any platform set
   `CAD_WATCH_BACKEND=fs_poll`.
