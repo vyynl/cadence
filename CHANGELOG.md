@@ -27,6 +27,10 @@ On `master`, waiting for the 1.1.0 cut; `mix.exs` stays at 1.0.0 until then.
   (`vyynl/cadence`, `vyynl/cadence-daemon`) with the GHCR tag set once
   `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` are configured. GHCR stays
   canonical, and the job skips with a notice while the secrets are absent.
+- Terminal UI: `mix cad.tui` (and `Cadence.Daemon.TUI.main/1` from a release)
+  drives the daemon over its Unix socket with DAG navigation, switch, spawn,
+  union, proposals with OSC 52 URL copy, node/docs diffs, and docs sync. It is a
+  pure socket client, so it works over SSH and needs no Neovim.
 
 ### Changed
 

@@ -40,7 +40,8 @@ defmodule Cadence.Daemon.MixProject do
       {:plug, "~> 1.20"},
       {:hammer, "~> 7.5"},
       {:jason, "~> 1.4"},
-      {:slipstream, "~> 1.2"}
+      {:slipstream, "~> 1.2"},
+      {:ex_ratatui, "~> 0.21"}
     ]
   end
 

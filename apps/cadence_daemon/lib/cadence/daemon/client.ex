@@ -4,12 +4,20 @@ defmodule Cadence.Daemon.Client do
 
   Used by the `mix cad.*` tasks and the daemon integration tests. Speaks raw
   HTTP over `:gen_tcp` with `Connection: close`, so responses are read until
-  the server closes the socket.
+  the server closes the socket. `request/5` accepts a per-read timeout
+  (default `:infinity`); the TUI passes one so a wedged daemon cannot leak a
+  task and socket on every refresh.
   """
 
-  def request(method, path, body \\ nil, socket_path \\ Cadence.Daemon.API.socket_path())
+  def request(
+        method,
+        path,
+        body \\ nil,
+        socket_path \\ Cadence.Daemon.API.socket_path(),
+        timeout \\ :infinity
+      )
 
-  def request(method, path, body, socket_path) do
+  def request(method, path, body, socket_path, timeout) do
     payload = body && Jason.encode!(body)
     req = build_request(method, path, payload)
 
@@ -17,7 +25,7 @@ defmodule Cadence.Daemon.Client do
       :gen_tcp.connect({:local, socket_path}, 0, [:binary, active: false], 5000)
 
     :ok = :gen_tcp.send(sock, req)
-    response = read_all(sock, <<>>)
+    response = read_all(sock, <<>>, timeout)
     :gen_tcp.close(sock)
     parse_response(response)
   end
@@ -73,10 +81,11 @@ defmodule Cadence.Daemon.Client do
     IO.iodata_to_binary([headers, "\r\n", payload || ""])
   end
 
-  defp read_all(sock, acc) do
-    case :gen_tcp.recv(sock, 0) do
-      {:ok, data} -> read_all(sock, <<acc::binary, data::binary>>)
+  defp read_all(sock, acc, timeout) do
+    case :gen_tcp.recv(sock, 0, timeout) do
+      {:ok, data} -> read_all(sock, <<acc::binary, data::binary>>, timeout)
       {:error, :closed} -> acc
+      {:error, :timeout} -> raise "cadence daemon request timed out after #{timeout} ms"
     end
   end
 

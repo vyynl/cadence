@@ -126,6 +126,47 @@ reachable on the host (a host release, or the bind-mount variant commented in
 }
 ```
 
+## Terminal UI
+
+`mix cad.tui` is a keyboard-driven frontend over the same daemon socket, so it
+works from a shell without Neovim and over SSH. It is a pure socket client: it
+never starts the daemon, opens the database, or reads the Git store, so the
+daemon must already be running and its `daemon.sock` must be reachable.
+
+```bash
+mix cad.tui                        # --project, then cwd match, then a picker
+mix cad.tui --project my-project   # slug or id
+mix cad.tui --socket /run/cadence/daemon.sock --refresh 2000
+```
+
+| Key | Action |
+|---|---|
+| `h` `j` `k` `l` / arrows | move through the DAG |
+| `Enter` | switch the session pointer to the selected node |
+| `s` | spawn a session from the current node |
+| `u` | union mode: `Enter` toggles a parent, `S` submits, `Esc` cancels |
+| `p` | proposals: `j`/`k` selects, `y` copies the URL (OSC 52) |
+| `d` / `D` | node diff / docs diff for the selected node |
+| `J` / `K` | scroll the diff |
+| `g` | queue docs sync for the selected node |
+| `r` | refresh the graph and project list |
+| `?` | help |
+| `q` / `Esc` | quit (`Esc` closes an overlay first) |
+
+Copying a proposal URL uses OSC 52, so it reaches the terminal you are typing
+in, including through SSH.
+
+From a release install the same UI starts through the release binary, with a
+TTY attached:
+
+```bash
+bin/cadence_daemon eval 'Cadence.Daemon.TUI.main()'
+docker compose exec daemon /app/bin/cadence_daemon eval 'Cadence.Daemon.TUI.main()'
+```
+
+The TUI only speaks endpoints that exist on the daemon it connects to, so keep
+the daemon at least as new as the TUI.
+
 ## Troubleshooting
 
 - **Daemon not syncing.** Check `CAD_SERVER_URL` reachability from the daemon's

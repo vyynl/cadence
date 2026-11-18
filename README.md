@@ -18,7 +18,9 @@ moves their own pointer through it.
   debounced snapshots to a local Git store, and syncs when the server is
   reachable. Commits, spawns, and switches work with no network.
 - **Editor-native.** The Neovim picker renders the DAG and switches, spawns, or
-  submits a meld without leaving the editor, over the daemon's Unix socket.
+  submits a meld without leaving the editor, over the daemon's Unix socket. A
+  terminal UI (`mix cad.tui`) offers the same actions without Neovim, including
+  over SSH.
 
 ## Run the server
 
