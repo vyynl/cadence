@@ -34,7 +34,7 @@ steps below keep the daemon generic, so one run can hold many projects.
 ```bash
 STATE="$HOME/.local/state/cadence"
 mkdir -p "$STATE"
-docker run --rm -it --user "$(id -u):$(id -g)" \
+docker run --rm -it --user "$(id -u):$(id -g)" --network cadence-prod_default \
   -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
   ghcr.io/vyynl/cadence-daemon:latest setup
 
@@ -48,10 +48,15 @@ docker run -d --name cadence-daemon --restart unless-stopped \
 `setup` asks for the server URL and the API token from `/auth/tokens/new`
 (sign in first; the page asks for your password and TOTP code again if the sudo
 window has expired), writes both to `$STATE/daemon.env` (mode 0600, inside the
-volume) and migrates the database. No secret appears in a `docker run -e` flag,
-in shell history, or in `docker inspect`. The second command reads that file,
-migrates if needed and starts the daemon, with the socket at `$STATE/daemon.sock`,
-which is where the plugin already looks.
+volume) and migrates the database. It then **verifies the token with a request**
+and prints `server authenticated`, or the reason it failed: `401` (mint a new
+token), `certificate is not trusted` (set `CAD_SYNC_CA_FILE`), or
+`cannot reach ... from this container` (the network flag is missing, or the URL
+is not reachable by service name). That is why both commands carry `--network`.
+No secret appears in a `docker run -e` flag, in shell history, or in
+`docker inspect`. The second command reads that file, migrates if needed and
+starts the daemon, with the socket at `$STATE/daemon.sock`, which is where the
+plugin already looks.
 
 Create `$STATE` on the host first and pass the same `--user` to both commands.
 Docker creates a missing bind-mount directory as `root`, and a setup run as the
@@ -142,7 +147,8 @@ parent. A container that was just started migrates before it binds its socket,
 so a call made in the first few seconds after `docker run -d` fails with a
 connection error and only needs a retry.
 
-From a source checkout, the command dials the daemon socket directly:
+From a source checkout, the command dials the daemon socket directly. A fresh
+clone needs `mix deps.get && mix compile` once first:
 
 ```bash
 mix cad.register "My Project" my-project "$HOME/code/my-project"

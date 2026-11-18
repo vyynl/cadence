@@ -156,7 +156,7 @@ will add later, at the same absolute path on both sides.
 ```bash
 STATE="$HOME/.local/state/cadence"
 mkdir -p "$STATE"
-docker run --rm -it --user "$(id -u):$(id -g)" \
+docker run --rm -it --user "$(id -u):$(id -g)" --network cadence_default \
   -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
   ghcr.io/vyynl/cadence-daemon:latest setup
 
@@ -170,21 +170,28 @@ docker run -d --name cadence-daemon --restart unless-stopped \
 `setup` prompts for the server URL and the API token you minted at
 `/auth/tokens/new` (re-authenticate there if it asks), then stores both in the
 state volume with mode `0600`, so no secret appears on the command line or in
-shell history. `$HOME` keeps the command generic; use a narrower parent in its
-place if your projects live elsewhere.
+shell history. It finishes by calling the server: you should see
+`server authenticated`. A `401` means the token is wrong, and
+`cannot reach ... from this container` means the network flag is missing (a
+local server is `cadence`, never `localhost`). `$HOME` keeps the command
+generic; use a narrower parent in its place if your projects live elsewhere.
 
-Add any directory under that mount as a project, from a checkout. The path must
-be absolute:
+Add any directory under that mount as a project. The path must be absolute. From
+a checkout, `mix deps.get && mix compile` once (a fresh clone has neither), then:
 
 ```bash
 mix cad.register "My Project" my-project "$HOME/code/my-project"
 ```
 
+No Elixir toolchain? The container can register the directory itself; the form
+is in [DAEMON.md](DAEMON.md#register-a-project), and
+`scripts/cadence-up.sh <dir>` needs only Docker and does setup, start, and
+register in one step.
+
 Edit a file in it and the project appears at `/p/my-project` within about 20
 seconds. `mix cad.tui` lists the registered projects and drives their DAGs
 without Neovim; [DAEMON.md](DAEMON.md#register-a-project) has the container and
-release forms, and `scripts/cadence-up.sh DIR` does setup, start, register, and
-the project link in one step.
+release forms.
 
 The daemon migrates before it binds its socket, so a register call in the first
 few seconds after `docker run -d` fails with a connection error and only needs a

@@ -56,6 +56,60 @@ defmodule Cadence.Daemon.Release do
   end
 
   @doc """
+  Verifies that the configured server accepts the token.
+
+  `setup` in the daemon image calls this so a wrong URL, a reject 401, or a
+  missing network is reported while the operator still has the prompt in front
+  of them, instead of failing silently on the first sync pass. Reasons:
+
+    * `:not_configured` — no `CAD_SERVER_URL` or `CAD_AUTH_TOKEN`
+    * `:unauthorized` — the server answered 401
+    * `:certificate` — the TLS chain is not trusted (`CAD_SYNC_CA_FILE`)
+    * `:unreachable` — DNS, connect, or timeout failure
+    * `{:http, status}` — any other non-success response
+    * `:unknown` — anything else; the caller prints the raw reason
+  """
+  @spec check_connection() ::
+          :ok
+          | {:error,
+             :not_configured
+             | :unauthorized
+             | :certificate
+             | :unreachable
+             | :unknown
+             | {:http, pos_integer()}}
+  def check_connection do
+    if Cadence.Daemon.SyncClient.configured?() do
+      Application.ensure_all_started(:req)
+
+      case Cadence.Daemon.SyncClient.me() do
+        {:ok, _user_id} -> :ok
+        {:error, reason} -> {:error, connection_error(reason)}
+      end
+    else
+      {:error, :not_configured}
+    end
+  end
+
+  defp connection_error({:http, 401, _body}), do: :unauthorized
+  defp connection_error({:http, status, _body}) when is_integer(status), do: {:http, status}
+  defp connection_error(%{reason: reason}), do: transport_error(reason)
+  defp connection_error(_other), do: :unknown
+
+  defp transport_error(reason) do
+    if certificate_error?(reason), do: :certificate, else: :unreachable
+  end
+
+  defp certificate_error?({:tls_alert, _alert}), do: true
+  defp certificate_error?(:unknown_ca), do: true
+
+  defp certificate_error?(reason) do
+    reason
+    |> inspect()
+    |> String.contains?(["unknown_ca", "certificate", "tls_alert"])
+  end
+
+  @doc """
   Registers a project with a running daemon and returns the decoded response.
 
   Equivalent to `mix cad.register` and `POST /projects` on the daemon socket.

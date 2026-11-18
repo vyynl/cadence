@@ -161,9 +161,12 @@ if [[ ! -f "$conf" ]] && [[ -z "$(env_value CAD_AUTH_TOKEN)" ]]; then
   fi
 
   info 'no daemon.env yet: setup asks for the server URL and an API token'
-  docker run --rm -it --user "$(id -u):$(id -g)" \
-    -v "$state:$state" -e CAD_STATE_DIR="$state" \
-    "$image" setup
+  # Same network as the container that follows, so setup can verify the
+  # connection instead of only recording the values.
+  setup_args=(run --rm -it --user "$(id -u):$(id -g)")
+  [[ -n "${CAD_NETWORK:-}" ]] && setup_args+=(--network "$CAD_NETWORK")
+  setup_args+=(-v "$state:$state" -e "CAD_STATE_DIR=$state" "$image" setup)
+  docker "${setup_args[@]}"
 fi
 
 # -- start the daemon --------------------------------------------------------
@@ -283,12 +286,8 @@ ok "project registered at $project"
 # -- server connection -------------------------------------------------------
 
 connection=0
-connection_expression='if Cadence.Daemon.SyncClient.configured?() do
-  {:ok, _} = Application.ensure_all_started(:req)
-  IO.inspect(Cadence.Daemon.SyncClient.me())
-else
-  IO.inspect({:error, :not_configured})
-end'
+# One implementation, shared with the image's `setup` (Release.check_connection).
+connection_expression='IO.inspect(Cadence.Daemon.Release.check_connection())'
 
 connection_output="$(eval_daemon "$connection_expression" 2>&1 || true)"
 
@@ -303,7 +302,7 @@ summary="$(
 )"
 
 case "$connection_output" in
-  *'{:ok,'*)
+  *':ok'*)
     ok "server authenticated (${server_url:-CAD_SERVER_URL})"
     connection=1
     ;;
@@ -311,20 +310,29 @@ case "$connection_output" in
     warn 'no server configured: commits stay local'
     info "fill CAD_SERVER_URL and CAD_AUTH_TOKEN in $conf to enable sync"
     ;;
-  *unknown_ca* | *'Unknown CA'*)
+  *'{:error, :unauthorized}'*)
+    warn 'the server rejected the token (401)'
+    info 'mint a new token at /auth/tokens/new and re-run the daemon setup'
+    ;;
+  *'{:error, :certificate}'*)
     warn 'sync cannot reach the server: its certificate is not trusted'
     info 'set CAD_SYNC_CA_FILE to the issuing CA (DAEMON.md#configure)'
     info 'TROUBLESHOOTING.md#daemon-logs-unknown-ca-or-gets-a-403'
     ;;
-  *'{:http, 403,'*)
+  *'{:error, {:http, 403}'*)
     warn 'sync cannot reach the server: HTTP 403'
     info 'a firewall or proxy is blocking the host, which no TLS setting changes'
     info 'TROUBLESHOOTING.md#daemon-logs-unknown-ca-or-gets-a-403'
     ;;
+  *'{:error, :unreachable}'*)
+    warn 'sync cannot reach the server: no connection'
+    info 'a local server is reachable by service name, not localhost (CAD_NETWORK)'
+    info 'TROUBLESHOOTING.md#daemon-cannot-reach-the-server'
+    ;;
   *)
     warn 'sync cannot reach the server'
     info "$summary"
-    info 'TROUBLESHOOTING.md#daemon-logs-unknown-ca-or-gets-a-403'
+    info 'TROUBLESHOOTING.md#daemon-cannot-reach-the-server'
     ;;
 esac
 

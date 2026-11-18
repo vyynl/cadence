@@ -98,6 +98,49 @@ setup() {
   ok "wrote $CONF"
   hint 'mode 0600, inside the state volume; revoke the token from /account if it leaks'
 
+  # Verify the configuration now. A wrong URL, a rejected token, or a missing
+  # network flag is otherwise invisible until the first sync pass. Best-effort:
+  # the file is written and a registered project keeps committing offline, so a
+  # failure is a warning, never an abort.
+  printf '\n'
+  step 'Server connection'
+  set -a
+  # shellcheck disable=SC1090
+  . "$CONF"
+  set +a
+
+  check_output=$("$RELEASE" eval 'IO.inspect(Cadence.Daemon.Release.check_connection())' 2>&1 || true)
+
+  case "$check_output" in
+    *'{:error, :unauthorized}'*)
+      warn 'the server rejected the token (401)'
+      hint 'mint a new one at /auth/tokens/new, then re-run setup'
+      ;;
+    *'{:error, :certificate}'*)
+      warn 'the server certificate is not trusted'
+      hint 'set CAD_SYNC_CA_FILE to the issuing CA (DAEMON.md)'
+      ;;
+    *'{:error, :unreachable}'*)
+      warn "cannot reach $CAD_SERVER_URL from this container"
+      hint 'a local server is reachable by service name, not localhost:'
+      hint 're-run setup with --network cadence_default (or your stack network)'
+      ;;
+    *'{:error, {:http,'*)
+      warn "the server answered $(printf '%s' "$check_output" | grep -o '{:error, {:http, [0-9]*}' | tail -n 1)"
+      hint 'check the server logs for that request, then re-run setup'
+      ;;
+    *':ok'*)
+      ok "server authenticated ($CAD_SERVER_URL)"
+      ;;
+    *':not_configured'*)
+      warn 'no server URL or token: the daemon will run offline'
+      ;;
+    *)
+      warn 'connection not verified'
+      hint "$(printf '%s\n' "$check_output" | grep -v 'TLS :client' | tr -s '[:space:]' ' ' | sed -e 's/^ //' -e 's/ $//' | cut -c1-160)"
+      ;;
+  esac
+
   printf '\n'
   step 'Start the daemon'
   hint "docker run -d --name cadence-daemon --restart unless-stopped --user $(id -u):$(id -g) … <image>"

@@ -8,6 +8,12 @@ Notable changes to Cadence. The format follows
 
 ### Added
 
+- The daemon image's `setup` now verifies the configuration while the operator
+  is still at the prompt: it writes `daemon.env`, migrates, then calls the
+  server and reports `server authenticated`, a rejected token (`401`), an
+  untrusted certificate, or an unreachable URL (usually the missing `--network`).
+  Backed by `Cadence.Daemon.Release.check_connection/0`, which
+  `scripts/cadence-up.sh` uses too, so the mapping lives in one place.
 - `CAD_SESSION_COOKIE_SECURE` (`public` by default, or `always` / `never`): the
   session and remember-me cookies are marked `Secure` only on the
   `CAD_PUBLIC_URL` host, and only when that origin is HTTPS. A deployment can now
@@ -28,6 +34,9 @@ Notable changes to Cadence. The format follows
 
 ### Changed
 
+- The daemon quickstart passes its `--network` to the `setup` run, so the new
+  connection check is meaningful, and states that registering from a fresh clone
+  needs `mix deps.get && mix compile` first (`README.md`, `DAEMON.md`).
 - `DEPLOY.md` has a "Public domain with private access" section: the public
   origin builds the links, `CAD_SERVER_URL` may be a LAN or Tailscale address,
   and `CAD_SESSION_COOKIE_SECURE` decides where the cookie is hardened.
