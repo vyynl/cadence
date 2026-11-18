@@ -54,6 +54,23 @@ defmodule Cadence.ServerWeb.AuthRouterTest do
     assert json_response(conn, 401) == %{"error" => "unauthorized"}
   end
 
+  test "GET /sync/me rejects a key revoked through the account API", %{
+    conn: conn,
+    user: user,
+    api_key: api_key,
+    plaintext: plaintext
+  } do
+    assert :ok = Accounts.revoke_api_key(user, api_key.id)
+
+    conn =
+      conn
+      |> put_req_header("authorization", "Bearer #{plaintext}")
+      |> get("/sync/me")
+
+    assert json_response(conn, 401) == %{"error" => "unauthorized"}
+    assert {:error, :invalid_api_key} = Accounts.authenticate_api_key(plaintext)
+  end
+
   test "GET /sync/me accepts a valid key", %{
     conn: conn,
     user: user,

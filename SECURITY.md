@@ -55,7 +55,10 @@ in it.
 - **Credit and follow-up:** whether you want credit in the advisory, and
   whether you can test a fix.
 
-Do not include live credentials. Rotate any token you suspect has leaked.
+Do not include live credentials. Rotate any token you suspect has leaked. A
+minted daemon token is revoked from the **Daemon tokens** section on `/account`
+(sign in, then Account), which takes effect on that daemon's next sync request;
+an open notification socket re-authenticates when it reconnects.
 
 ## Scope
 

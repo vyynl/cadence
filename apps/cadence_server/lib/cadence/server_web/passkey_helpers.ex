@@ -21,6 +21,7 @@ defmodule Cadence.ServerWeb.PasskeyHelpers do
   alias Cadence.Server.Accounts.User
   alias Cadence.Server.Passkeys.Config
   alias Cadence.ServerWeb.JSON
+  alias Cadence.ServerWeb.SudoGate
 
   @doc "Halts with a `404` page when passkeys are disabled."
   @spec ensure_enabled(Plug.Conn.t()) :: {:ok, Plug.Conn.t()} | {:halt, Plug.Conn.t()}
@@ -66,18 +67,16 @@ defmodule Cadence.ServerWeb.PasskeyHelpers do
   Runs `fun` only when the current session is inside the sudo window.
 
   Required for credential changes (add, rename, remove a security key), so a
-  long-lived session alone cannot alter the account's second factors.
+  long-lived session alone cannot alter the account's second factors. Delegates
+  to `Cadence.ServerWeb.SudoGate`, the shared controller guard.
   """
   @spec with_sudo(Plug.Conn.t(), (Plug.Conn.t() -> Plug.Conn.t())) :: Plug.Conn.t()
   def with_sudo(conn, fun) do
-    if Cadence.ServerWeb.UserAuth.sudo_mode?(conn.assigns[:current_session]) do
-      fun.(conn)
-    else
-      conn
-      |> put_flash(:error, "Re-authenticate to manage security keys.")
-      |> redirect(to: "/sign-in?sudo=1&return_to=/account/security")
-      |> halt()
-    end
+    SudoGate.with_sudo(
+      conn,
+      [return_to: "/account/security", message: "Re-authenticate to manage security keys."],
+      fun
+    )
   end
 
   @doc """

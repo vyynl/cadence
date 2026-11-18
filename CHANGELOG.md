@@ -10,6 +10,11 @@ On `master`, waiting for the 1.1.0 cut; `mix.exs` stays at 1.0.0 until then.
 
 ### Added
 
+- Daemon token management: `/account` lists the signed-in account's personal
+  access tokens (name, created, expiry) and revokes one on confirmation. A
+  revoked key is rejected by `/sync/*` on its next request and by the
+  notification socket on its next connection, so no SQL is needed to retire a
+  leaked token.
 - Git repository import: `mix cad.import` preserves original commit SHAs,
   parents (including merges), author timestamps, tags, and provenance, and
   pushes the imported DAG through the normal node API. Owner-only multi-parent
@@ -34,6 +39,9 @@ On `master`, waiting for the 1.1.0 cut; `mix.exs` stays at 1.0.0 until then.
 
 ### Changed
 
+- Minting a daemon token at `/auth/tokens/new` now requires the sudo window,
+  like other credential changes: a minted token outlives browser sessions and
+  password resets, so a stale session re-authenticates first.
 - `CAD_DEMO_AUTH` and the compile-gated demo password strategy are retired.
   Password login is part of every build.
 - A successful OAuth callback returns to the stored local `return_to` or `/`,

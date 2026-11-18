@@ -188,8 +188,9 @@ the daemon at least as new as the TUI.
   network namespace and that `CAD_SYNC_ENABLED` is not false.
 - **Auth fails.** Mint a new token at `/auth/tokens/new`, put it in
   `CAD_AUTH_TOKEN`, and restart the daemon. Tokens are shown once and the server
-  stores only a hash; a new token replaces the old one for the daemon, but the
-  old row must be removed at the database level until a revoke control ships.
+  stores only a hash. A new token replaces the old one for the daemon; revoke
+  the leaked one from the **Daemon tokens** section of `/account` and it is
+  rejected on the next request.
 - **Watcher missing deps.** `fs_inotify` needs `inotifywait` (`inotify-tools`);
   the image ships it, host installs may not. On any platform set
   `CAD_WATCH_BACKEND=fs_poll`.

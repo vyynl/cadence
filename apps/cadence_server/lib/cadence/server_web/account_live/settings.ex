@@ -1,7 +1,7 @@
 defmodule Cadence.ServerWeb.AccountLive.Settings do
   @moduledoc """
   Account settings (spec §7.4): email, local password, mandatory TOTP
-  management, recovery codes, and session revocation.
+  management, recovery codes, daemon token revocation, and session revocation.
 
   The route is behind `:require_sudo_mode`, and every event re-checks the sudo
   window before touching credentials. TOTP and recovery-code submissions also
@@ -10,10 +10,12 @@ defmodule Cadence.ServerWeb.AccountLive.Settings do
 
   use Cadence.ServerWeb, :live_view
 
+  alias Cadence.Server.Accounts
   alias Cadence.Server.Accounts.LocalAuth
   alias Cadence.Server.Accounts.TOTP
   alias Cadence.Server.AuthRateLimit
   alias Cadence.Server.Passkeys.Config
+  alias Cadence.ServerWeb.Presentation
   alias Cadence.ServerWeb.UserAuth
 
   @impl true
@@ -163,6 +165,36 @@ defmodule Cadence.ServerWeb.AccountLive.Settings do
        socket
        |> put_flash(:info, "Signed out of every session.")
        |> push_navigate(to: "/sign-in")}
+    end)
+  end
+
+  def handle_event("revoke_token", %{"id" => token_id}, socket) do
+    with_sudo(socket, fn socket, user ->
+      case Accounts.revoke_api_key(user, token_id) do
+        :ok ->
+          {:noreply,
+           socket
+           |> put_flash(
+             :info,
+             "Daemon token revoked. Any daemon using it gets 401 until it is configured with a new token."
+           )
+           |> refresh_tokens()}
+
+        {:error, :not_found} ->
+          {:noreply,
+           socket
+           |> put_flash(:error, "That daemon token could not be found.")
+           |> refresh_tokens()}
+
+        {:error, _reason} ->
+          {:noreply, put_flash(socket, :error, "Could not revoke that token. Try again.")}
+      end
+    end)
+  end
+
+  def handle_event("revoke_token", _params, socket) do
+    with_sudo(socket, fn socket, _user ->
+      {:noreply, put_flash(socket, :error, "That daemon token could not be found.")}
     end)
   end
 
@@ -317,7 +349,56 @@ defmodule Cadence.ServerWeb.AccountLive.Settings do
         <p :if={!Config.enabled?()} class="auth-note">
           Passkeys are disabled on this deployment.
         </p>
-        <p class="account-value"><a class="button-link" href="/auth/tokens/new">Create a daemon token</a></p>
+      </section>
+
+      <section class="account-card">
+        <h2>Daemon tokens</h2>
+
+        <%= cond do %>
+          <% @api_keys.loading -> %>
+            <p class="auth-note">Loading…</p>
+          <% @api_keys.failed -> %>
+            <p class="auth-error" role="alert">Could not load your daemon tokens.</p>
+            <button class="admin-button" phx-click="reload_account">Try again</button>
+          <% @api_keys.result == [] -> %>
+            <p class="auth-note">No daemon tokens yet.</p>
+          <% true -> %>
+            <ul class="credential-list" aria-label="Your daemon tokens">
+              <li :for={token <- @api_keys.result} class="credential-card">
+                <div class="credential-main">
+                  <h3>{token_name(token)}</h3>
+                  <p class="note">
+                    created {Presentation.format_time(token.inserted_at)}
+                    <span aria-hidden="true">·</span>
+                    {token_expiry(token)}
+                  </p>
+                </div>
+
+                <div class="credential-actions">
+                  <button
+                    type="button"
+                    class="admin-button button-danger"
+                    phx-click="revoke_token"
+                    phx-value-id={token.id}
+                    phx-disable-with="Revoking…"
+                    aria-label={"Revoke #{token_name(token)}"}
+                    data-confirm={
+                      "Revoke #{token_name(token)}? Any daemon using it stops syncing until a new token is configured."
+                    }
+                  >
+                    Revoke
+                  </button>
+                </div>
+              </li>
+            </ul>
+        <% end %>
+
+        <p class="account-value">
+          <a class="button-link" href="/auth/tokens/new">Create a daemon token</a>
+        </p>
+        <p class="auth-note">
+          Daemons authenticate with these tokens. Revoking one takes effect on the next request.
+        </p>
       </section>
 
       <section class="account-card">
@@ -345,10 +426,44 @@ defmodule Cadence.ServerWeb.AccountLive.Settings do
   defp refresh_account(socket) do
     user = socket.assigns.current_user
 
-    assign_async(socket, [:recovery_count], fn ->
+    socket
+    |> assign_async([:recovery_count], fn ->
       {:ok, %{recovery_count: TOTP.count_unused(user)}}
     end)
+    |> refresh_tokens()
   end
+
+  # A separate async op from the account state: a token read failure must not
+  # blank the TOTP section.
+  defp refresh_tokens(socket) do
+    user = socket.assigns.current_user
+
+    assign_async(socket, :api_keys, fn ->
+      case Accounts.list_api_keys(user) do
+        {:ok, api_keys} -> {:ok, %{api_keys: api_keys}}
+        {:error, _reason} -> {:error, :storage_error}
+      end
+    end)
+  end
+
+  defp token_name(%{name: name}) when is_binary(name) do
+    case String.trim(name) do
+      "" -> "Unnamed token"
+      trimmed -> trimmed
+    end
+  end
+
+  defp token_name(_token), do: "Unnamed token"
+
+  defp token_expiry(%{expires_at: %DateTime{} = expires_at}) do
+    if DateTime.compare(expires_at, DateTime.utc_now()) == :lt do
+      "expired #{Presentation.format_time(expires_at)}"
+    else
+      "expires #{Presentation.format_time(expires_at)}"
+    end
+  end
+
+  defp token_expiry(_token), do: "no expiry"
 
   defp put_enrollment_error(socket, user, message) do
     socket

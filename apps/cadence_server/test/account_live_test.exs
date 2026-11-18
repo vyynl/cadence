@@ -41,6 +41,112 @@ defmodule Cadence.ServerWeb.AccountLiveTest do
     assert html =~ "Two-factor authentication"
     assert html =~ "/account/security"
     assert html =~ "/auth/tokens/new"
+    assert html =~ "Daemon tokens"
+    assert html =~ "No daemon tokens yet."
+  end
+
+  test "lists the account's daemon tokens and hides other accounts' tokens", %{
+    conn: conn,
+    user: user
+  } do
+    assert {:ok, _} = Accounts.create_api_key(user, "laptop-token")
+
+    {:ok, other} =
+      LocalAuth.create_user(%{
+        email: "other-#{System.unique_integer([:positive])}@example.com",
+        password: @password
+      })
+
+    assert {:ok, _} = Accounts.create_api_key(other, "not-yours-token")
+
+    {:ok, view, _html} = conn |> H.signed_conn(user) |> live("/account")
+    html = render_async(view)
+
+    assert html =~ "laptop-token"
+    refute html =~ "not-yours-token"
+    assert html =~ "no expiry"
+  end
+
+  test "an expired or unnamed token still lists with an honest label", %{
+    conn: conn,
+    user: user
+  } do
+    expires_at = DateTime.add(DateTime.utc_now(), -60, :second)
+
+    assert {:ok, expired} =
+             Ash.create(
+               Cadence.Server.Accounts.ApiKey,
+               %{user_id: user.id, name: "old-laptop", expires_at: expires_at},
+               action: :create
+             )
+
+    assert {:ok, unnamed} = Accounts.create_api_key(user, "   ")
+
+    {:ok, view, _html} = conn |> H.signed_conn(user) |> live("/account")
+    html = render_async(view)
+
+    assert html =~ "old-laptop"
+    assert html =~ "expired "
+    assert html =~ "phx-value-id=\"#{expired.id}\""
+    assert html =~ "Unnamed token"
+    assert html =~ "phx-value-id=\"#{unnamed.id}\""
+    assert html =~ "no expiry"
+  end
+
+  test "revoking a token deletes it, clears the row, and rejects the key", %{
+    conn: conn,
+    user: user
+  } do
+    assert {:ok, api_key} = Accounts.create_api_key(user, "revoke-me")
+    plaintext = api_key.__metadata__.plaintext_api_key
+
+    {:ok, view, _html} = conn |> H.signed_conn(user) |> live("/account")
+    assert render_async(view) =~ "revoke-me"
+
+    view
+    |> element("button[phx-click=\"revoke_token\"][phx-value-id=\"#{api_key.id}\"]")
+    |> render_click()
+
+    html = render_async(view)
+    refute html =~ "revoke-me"
+    assert html =~ "Daemon token revoked"
+    assert html =~ "No daemon tokens yet."
+
+    refute_api_key(api_key.id)
+    assert {:error, :invalid_api_key} = Accounts.authenticate_api_key(plaintext)
+  end
+
+  test "revoking another account's token is refused and changes nothing", %{
+    conn: conn,
+    user: user
+  } do
+    {:ok, other} =
+      LocalAuth.create_user(%{
+        email: "foreign-#{System.unique_integer([:positive])}@example.com",
+        password: @password
+      })
+
+    assert {:ok, foreign} = Accounts.create_api_key(other, "foreign-token")
+
+    {:ok, view, _html} = conn |> H.signed_conn(user) |> live("/account")
+    render_async(view)
+
+    html = render_click(view, "revoke_token", %{"id" => foreign.id})
+
+    assert html =~ "That daemon token could not be found."
+    refute html =~ "foreign-token"
+
+    assert {:ok, %Cadence.Server.Accounts.ApiKey{}} =
+             Ash.get(Cadence.Server.Accounts.ApiKey, foreign.id, domain: Accounts)
+  end
+
+  test "a malformed revoke event flashes without crashing", %{conn: conn, user: user} do
+    {:ok, view, _html} = conn |> H.signed_conn(user) |> live("/account")
+    render_async(view)
+
+    html = render_click(view, "revoke_token", %{})
+
+    assert html =~ "That daemon token could not be found."
   end
 
   test "a stale session is redirected to sudo re-authentication", %{conn: conn, user: user} do
@@ -164,6 +270,13 @@ defmodule Cadence.ServerWeb.AccountLiveTest do
 
     assert_redirect(view, "/sign-in")
     assert Repo.aggregate(from(s in UserSession, where: s.user_id == ^user.id), :count) == 0
+  end
+
+  # `Ash.get/3` reports a missing row as a NotFound error tuple; pin the exact
+  # shape so a storage failure cannot pass for a successful revoke.
+  defp refute_api_key(id) do
+    assert {:error, %Ash.Error.Invalid{errors: [%Ash.Error.Query.NotFound{}]}} =
+             Ash.get(Cadence.Server.Accounts.ApiKey, id, domain: Accounts)
   end
 
   defp enrolled_user(user) do

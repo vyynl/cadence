@@ -99,4 +99,62 @@ defmodule Cadence.Server.Accounts do
       actor: user
     )
   end
+
+  @doc """
+  Lists one account's daemon tokens, oldest first.
+
+  Scoping **is** the authorization boundary: this domain installs no Ash
+  authorizer, so a read without the `user_id` filter would return every
+  account's rows. Expired tokens are included so they can still be revoked
+  (they are already rejected at authentication time).
+  """
+  @spec list_api_keys(Cadence.Server.Accounts.User.t()) ::
+          {:ok, [Cadence.Server.Accounts.ApiKey.t()]} | {:error, :storage_error}
+  def list_api_keys(%Cadence.Server.Accounts.User{id: user_id}) do
+    Cadence.Server.Accounts.ApiKey
+    |> Ash.Query.filter(user_id == ^user_id)
+    |> Ash.Query.sort(inserted_at: :asc, id: :asc)
+    |> Ash.read(domain: __MODULE__)
+    |> case do
+      {:ok, api_keys} -> {:ok, api_keys}
+      {:error, _error} -> {:error, :storage_error}
+    end
+  end
+
+  @doc """
+  Revokes (deletes) one daemon token owned by `user`.
+
+  The lookup is scoped to the account, so a malformed id, an unknown id, or
+  another account's token is `:not_found` and changes nothing. The row is
+  deleted rather than marked: the hash is the credential, and the
+  AshAuthentication API-key strategy already treats a missing row as invalid.
+  """
+  @spec revoke_api_key(Cadence.Server.Accounts.User.t(), term()) ::
+          :ok | {:error, :not_found | :storage_error}
+  def revoke_api_key(%Cadence.Server.Accounts.User{} = user, id) do
+    with {:ok, api_key} <- fetch_api_key(user, id) do
+      case Ash.destroy(api_key, domain: __MODULE__) do
+        :ok -> :ok
+        {:ok, _api_key} -> :ok
+        {:error, _error} -> {:error, :storage_error}
+      end
+    end
+  end
+
+  defp fetch_api_key(%Cadence.Server.Accounts.User{id: user_id}, id) when is_binary(id) do
+    with {:ok, uuid} <- Ecto.UUID.cast(id) do
+      Cadence.Server.Accounts.ApiKey
+      |> Ash.Query.filter(id == ^uuid and user_id == ^user_id)
+      |> Ash.read_one(domain: __MODULE__)
+      |> case do
+        {:ok, %Cadence.Server.Accounts.ApiKey{} = api_key} -> {:ok, api_key}
+        {:ok, nil} -> {:error, :not_found}
+        {:error, _error} -> {:error, :storage_error}
+      end
+    else
+      :error -> {:error, :not_found}
+    end
+  end
+
+  defp fetch_api_key(_user, _id), do: {:error, :not_found}
 end

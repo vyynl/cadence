@@ -178,6 +178,66 @@ defmodule Cadence.Server.AccountsTest do
     end
   end
 
+  describe "list_api_keys/1 and revoke_api_key/2" do
+    test "lists only the account's tokens, oldest first" do
+      owner = Ash.Seed.seed!(User, %{email: "tokens-owner@example.com"})
+      other = Ash.Seed.seed!(User, %{email: "tokens-other@example.com"})
+
+      assert {:ok, first} = Accounts.create_api_key(owner, "laptop")
+      assert {:ok, second} = Accounts.create_api_key(owner, "desktop")
+      assert {:ok, _foreign} = Accounts.create_api_key(other, "someone-else")
+
+      assert {:ok, tokens} = Accounts.list_api_keys(owner)
+      assert Enum.map(tokens, & &1.id) == [first.id, second.id]
+      assert Enum.all?(tokens, &(&1.user_id == owner.id))
+    end
+
+    test "lists an account with no tokens as an empty list" do
+      user = Ash.Seed.seed!(User, %{email: "no-tokens@example.com"})
+
+      assert {:ok, []} = Accounts.list_api_keys(user)
+    end
+
+    test "revoking deletes the token and rejects its plaintext afterwards" do
+      user = Ash.Seed.seed!(User, %{email: "revoke@example.com"})
+      assert {:ok, api_key} = Accounts.create_api_key(user, "daemon")
+      plaintext = api_key.__metadata__.plaintext_api_key
+
+      assert {:ok, authenticated} = Accounts.authenticate_api_key(plaintext)
+      assert authenticated.id == user.id
+
+      assert :ok = Accounts.revoke_api_key(user, api_key.id)
+
+      refute_api_key(api_key.id)
+      assert {:ok, []} = Accounts.list_api_keys(user)
+      assert {:error, :invalid_api_key} = Accounts.authenticate_api_key(plaintext)
+      assert {:error, :not_found} = Accounts.revoke_api_key(user, api_key.id)
+    end
+
+    test "another account's token id is not found and the row survives" do
+      owner = Ash.Seed.seed!(User, %{email: "token-owner@example.com"})
+      intruder = Ash.Seed.seed!(User, %{email: "token-intruder@example.com"})
+      assert {:ok, api_key} = Accounts.create_api_key(owner, "owner-daemon")
+
+      assert {:error, :not_found} = Accounts.revoke_api_key(intruder, api_key.id)
+      assert {:ok, %ApiKey{}} = Ash.get(ApiKey, api_key.id, domain: Accounts)
+    end
+
+    test "a malformed token id is not found" do
+      user = Ash.Seed.seed!(User, %{email: "bad-id@example.com"})
+
+      assert {:error, :not_found} = Accounts.revoke_api_key(user, "not-a-uuid")
+      assert {:error, :not_found} = Accounts.revoke_api_key(user, nil)
+    end
+  end
+
+  # `Ash.get/3` reports a missing row as a NotFound error tuple (unlike
+  # `Ash.read_one/2`); pin the exact shape so a storage failure cannot pass.
+  defp refute_api_key(id) do
+    assert {:error, %Ash.Error.Invalid{errors: [%Ash.Error.Query.NotFound{}]}} =
+             Ash.get(ApiKey, id, domain: Accounts)
+  end
+
   # Counts statements issued against the `users` table (both reads and the seeds
   # above), so AshPostgres introspection (`pg_catalog`) and sandbox bookkeeping
   # never inflate the count. Ecto derives the prefix from the repo module name
