@@ -47,9 +47,13 @@ untar the archive, `up -d`.
 ## Upgrade
 
 ```bash
-CAD_SERVER_IMAGE=ghcr.io/vyynl/cadence:1.2.3 docker compose pull
-CAD_SERVER_IMAGE=ghcr.io/vyynl/cadence:1.2.3 docker compose up -d
+CAD_SERVER_IMAGE=ghcr.io/vyynl/cadence:v1.1.0 docker compose pull
+CAD_SERVER_IMAGE=ghcr.io/vyynl/cadence:v1.1.0 docker compose up -d
 ```
+
+Tag names keep the `v` (the workflow publishes the tag exactly as pushed), so
+`:v1.1.0` is a release; `:latest` moves on every `master` build and every
+version tag. A digest (`@sha256:…`) is the immutable choice.
 
 `migrate` and `bootstrap` run on every `up` and are idempotent, so the app never
 starts against an unmigrated database. Rollback is not automated: restore a

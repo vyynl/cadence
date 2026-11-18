@@ -170,9 +170,10 @@ docker exec cadence-daemon bin/cadence_daemon eval \
 ```
 
 `setup` prompts for the server URL and the API token you minted at
-`/auth/tokens/new`, then stores both in the state volume with mode `0600`, so no
-secret appears on the command line or in shell history. The register call is the only
-step that needs the project path twice.
+`/auth/tokens/new` (re-authenticate there if it asks), then stores both in the
+state volume with mode `0600`, so no secret appears on the command line or in
+shell history. The register call is the only step that needs the project path
+twice.
 
 Edit a file in that directory and the project appears at `/p/my-project` within
 about 20 seconds. `:CadOpen` in Neovim reads the same DAG: the socket is at

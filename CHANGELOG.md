@@ -6,7 +6,11 @@ Notable changes to Cadence. The format follows
 
 ## [Unreleased]
 
-On `master`, waiting for the 1.1.0 cut; `mix.exs` stays at 1.0.0 until then.
+## [1.1.0] - 2026-11-18
+
+Turnkey self-hosting, operator-created accounts with mandatory TOTP, passkeys,
+Git import, a daemon terminal UI, and daemon-token management. Upgrade the
+server image and the daemon together, and run the daemon migration once.
 
 ### Added
 
@@ -53,6 +57,34 @@ On `master`, waiting for the 1.1.0 cut; `mix.exs` stays at 1.0.0 until then.
 
 - `bcrypt_elixir` is no longer a direct dependency; Argon2id is the password
   hash.
+
+### Upgrade notes
+
+- Pull the new server image and rebuild or pull the daemon release on each
+  machine. The sync protocol is unchanged, so a 1.0.0 daemon keeps syncing to a
+  1.1.0 server; the one ordering rule is that a TUI must not be newer than the
+  daemon it connects to ([DAEMON.md](DAEMON.md)).
+- Run the daemon migration once after upgrading
+  (`bin/cadence_daemon eval "Cadence.Daemon.Release.migrate()"`, or
+  `mix ecto.migrate -r Cadence.Daemon.Repo` from a checkout). It is safe to
+  repeat.
+- Re-run the demo stack with `--build`; the removed `CAD_DEMO_AUTH` variable is
+  now ignored, so an old value is harmless but no longer needed.
+- There is no destructive schema change in this release, but back up
+  `CAD_STATE_DIR` and the Postgres volume before any upgrade.
+
+### Known limitations
+
+- Conflict-bearing melds and doc generation have not been smoke-tested live
+  against a real `CAD_LLM_API_KEY`; conflict-free unions skip the model.
+- Web review of generated docs is still deferred; the web UI shows a read-only
+  docs badge.
+- Action logs are captured after the container exits; there is no live stream.
+- Each repack run adds a pack; there is no multi-pack index or consolidation.
+- Docker Hub mirrors need `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`. GHCR is
+  canonical, and CI publishes on `master` and `v*` tags.
+- There is no WAF or bot protection in the app, and no `burrito` single-file
+  daemon artifact. Image publishing remains operator-side for forks.
 
 ## [1.0.0] - 2026-11-11
 

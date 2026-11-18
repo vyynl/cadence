@@ -9,7 +9,7 @@ and are handled privately.
 
 | Version | Supported |
 |---|---|
-| 1.x (current release: 1.0.0; 1.1.0 is unreleased on `master`) | Yes |
+| 1.x (current release: 1.1.0) | Yes |
 | < 1.0 | No |
 
 Fixes land on the latest 1.x release and on `master`. There are no maintained

@@ -26,12 +26,13 @@ docker run -d --name cadence-daemon --restart unless-stopped \
   ghcr.io/vyynl/cadence-daemon:latest
 ```
 
-`setup` asks for the server URL and the API token from `/auth/tokens/new`,
-writes both to `$STATE/daemon.env` (mode 0600, inside the volume) and migrates
-the database. No secret appears in a `docker run -e` flag, in shell history, or
-in `docker inspect`. The second command reads that file, migrates if needed and
-starts the daemon, with the socket at `$STATE/daemon.sock`, which is where the plugin
-already looks.
+`setup` asks for the server URL and the API token from `/auth/tokens/new`
+(sign in first; the page asks for your password and TOTP code again if the sudo
+window has expired), writes both to `$STATE/daemon.env` (mode 0600, inside the
+volume) and migrates the database. No secret appears in a `docker run -e` flag,
+in shell history, or in `docker inspect`. The second command reads that file,
+migrates if needed and starts the daemon, with the socket at `$STATE/daemon.sock`,
+which is where the plugin already looks.
 
 Create `$STATE` on the host first and pass the same `--user` to both commands.
 Docker creates a missing bind-mount directory as `root`, and a setup run as the
@@ -92,10 +93,10 @@ docker compose -f docker-compose.daemon.yml up -d          # container re-reads 
 set -a; . ./.env.daemon; set +a                            # host release only
 ```
 
-The token is minted in the server UI at `/auth/tokens/new` and shown once.
-Without a URL and token the daemon runs offline: commits, spawns, and switches
-work locally and nothing syncs. A server is a prerequisite; see
-[`DEPLOY.md`](DEPLOY.md).
+The token is minted in the server UI at `/auth/tokens/new` and shown once. That
+page requires the sudo window, so sign in again if it asks. Without a URL and
+token the daemon runs offline: commits, spawns, and switches work locally and
+nothing syncs. A server is a prerequisite; see [`DEPLOY.md`](DEPLOY.md).
 
 If the server runs on this same machine, `CAD_SERVER_URL` still has to be
 reachable from the daemon's network namespace: a container daemon cannot use

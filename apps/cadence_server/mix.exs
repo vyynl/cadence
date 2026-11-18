@@ -4,7 +4,7 @@ defmodule Cadence.Server.MixProject do
   def project do
     [
       app: :cadence_server,
-      version: "1.0.0",
+      version: "1.1.0",
       elixir: "~> 1.20",
       build_path: "../../_build",
       config_path: "../../config/config.exs",

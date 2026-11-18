@@ -31,7 +31,7 @@ body:
     attributes:
       label: Version or commit
       description: The release version, or the commit SHA you built from.
-      placeholder: "1.0.0"
+      placeholder: "1.1.0"
     validations:
       required: true
 

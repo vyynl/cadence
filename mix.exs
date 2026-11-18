@@ -4,7 +4,7 @@ defmodule Cadence.MixProject do
   def project do
     [
       apps_path: "apps",
-      version: "1.0.0",
+      version: "1.1.0",
       start_permanent: Mix.env() == :prod,
       elixir: "~> 1.20",
       # Coverage floor for `mix test.coverage`, which aggregates from the
