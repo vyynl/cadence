@@ -104,6 +104,42 @@ not intercept the domain. A block page is an HTTP response, so no TLS setting
 gets past it: an answer like `403 Web Filter Block Override` needs the firewall
 changed, not the daemon.
 
+## A page loads, but every panel says `Loading…`
+
+**Symptom:** `/account`, `/p/:slug` or a review page renders its header and
+forms, but the async panels stay on "Loading…" forever and no button does
+anything.
+**Cause:** that is LiveView's static render. The HTTP request succeeded and the
+WebSocket never connected, so no panel ever receives its data. Nothing is wrong
+with the database.
+**Fix:** find the layer that breaks the upgrade.
+
+1. DevTools → Network → WS, then reload. A `websocket?vsn=2.0.0` entry stuck
+   pending (or red) confirms it. If it shows `101`, the socket is healthy and
+   the panel itself is erroring; check the console instead.
+2. Probe it from a machine that reaches the host. Force HTTP/1.1: curl negotiates
+   HTTP/2 over HTTPS, and HTTP/2 cannot carry an upgrade, so a default probe
+   always answers `400`.
+
+   ```bash
+   curl --http1.1 -sS -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+     -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+     'https://cadence.example.com/live/websocket?vsn=2.0.0' | head -5
+   ```
+
+   `101` is healthy. `400` means the request reached Phoenix without the
+   upgrade, so a proxy stripped it. A timeout means the tunnel never completed
+   the origin leg.
+3. A reverse proxy has to forward the upgrade (nginx: `proxy_http_version 1.1`
+   plus the `Upgrade` and `Connection` headers). Caddy, Cloudflare Tunnel, and
+   `tailscale serve` do it by default; a transparent firewall or content filter
+   in front of the browser may not.
+4. If you sign in over a private IP or a Tailscale address, the session cookie
+   must be allowed to be non-`Secure` there. That is the default
+   (`CAD_SESSION_COOKIE_SECURE=public`); with `always`, sign-in appears to
+   succeed and then bounces back to `/sign-in`. See
+   [DEPLOY.md](DEPLOY.md#public-domain-with-private-access).
+
 ## Migrations pending, app never starts
 
 **Symptom:** `cadence` stays stopped and `/health` never answers.

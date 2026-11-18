@@ -63,7 +63,7 @@ setup() {
     esac
   fi
 
-  printf '%sServer URL%s (for example https://cadence.example.com): ' "$c_bold" "$c_reset"
+  printf '%sServer URL%s (the public origin or a LAN/Tailscale address): ' "$c_bold" "$c_reset"
   read -r server_url
   printf '%sAPI token%s (mint it at /auth/tokens/new on the server): ' "$c_bold" "$c_reset"
 

@@ -7,6 +7,9 @@ name: cadence-prod
 
 x-cadence-env: &cadence-env
   CAD_PUBLIC_URL: "https://cadence.example.com" # EDIT: public origin, scheme included
+  # Secure session cookie only on the public host, so signing in over a LAN or
+  # Tailscale address works. See DEPLOY.md if everything stays on "Loading…".
+  CAD_SESSION_COOKIE_SECURE: "public"
   CAD_ADMIN_EMAIL: "admin@example.com" # EDIT: first admin account
   CAD_DB_POOL_SIZE: "10"
   CAD_GIT_STORE_PATH: "/data/git"

@@ -147,6 +147,28 @@ if config_env() != :test and server_artifact? do
   public_uri = URI.parse(public_url)
   phx_host = System.get_env("CAD_PHX_HOST") || public_uri.host
 
+  # Which hosts get the `Secure` session cookie (spec §12.9). `public` keeps the
+  # hardening on the published HTTPS origin and lets a LAN/Tailscale address
+  # sign in over plain HTTP; `always` is the HTTPS-only deployment; `never` is a
+  # deliberate opt-out. An unknown value aborts the boot rather than silently
+  # choosing one, which is the TLS-knob convention (§12.6).
+  session_cookie_secure =
+    case System.get_env("CAD_SESSION_COOKIE_SECURE", "public") do
+      value when value in ["", "public"] ->
+        :public
+
+      "always" ->
+        :always
+
+      "never" ->
+        :never
+
+      other ->
+        raise """
+        CAD_SESSION_COOKIE_SECURE must be public, always, or never, got: #{inspect(other)}
+        """
+    end
+
   config :cadence_server, Cadence.Server.Repo,
     url: database_url,
     pool_size: String.to_integer(System.get_env("CAD_DB_POOL_SIZE", "10"))
@@ -224,7 +246,8 @@ if config_env() != :test and server_artifact? do
     auth_totp_rate_scale: String.to_integer(System.get_env("CAD_AUTH_TOTP_RATE_SCALE", "300000")),
     session_ttl_days: String.to_integer(System.get_env("CAD_SESSION_TTL_DAYS", "14")),
     session_reissue_days: String.to_integer(System.get_env("CAD_SESSION_REISSUE_DAYS", "7")),
-    session_secure: config_env() == :prod,
+    # Parsed above: which request hosts get the `Secure` cookie (spec §12.9).
+    session_cookie_secure: session_cookie_secure,
     git_store_path: git_store_path,
     sync_pull_limit: String.to_integer(System.get_env("CAD_SYNC_PULL_LIMIT", "100")),
     sync_exists_limit: String.to_integer(System.get_env("CAD_SYNC_EXISTS_LIMIT", "5000")),

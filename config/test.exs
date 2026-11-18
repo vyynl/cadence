@@ -53,7 +53,8 @@ config :cadence_server,
   auth_totp_rate_scale: 300_000,
   session_ttl_days: 14,
   session_reissue_days: 7,
-  session_secure: false,
+  # The suite runs over http://localhost, so no cookie is Secure (spec §12.9).
+  session_cookie_secure: :never,
   public_url: "http://localhost:4000",
   webauthn: [
     enabled: true,

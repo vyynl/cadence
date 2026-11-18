@@ -21,6 +21,7 @@ defmodule Cadence.ServerWeb.UserAuth do
   alias Cadence.Server.Accounts.User
   alias Cadence.Server.Accounts.UserSession
   alias Cadence.Server.Repo
+  alias Cadence.ServerWeb.SessionOptions
 
   @remember_me_cookie "_cadence_remember_me"
   @token_bytes 32
@@ -88,7 +89,7 @@ defmodule Cadence.ServerWeb.UserAuth do
     conn
     |> Plug.Conn.configure_session(renew: true)
     |> Plug.Conn.clear_session()
-    |> Plug.Conn.delete_resp_cookie(@remember_me_cookie, remember_me_cookie_options())
+    |> Plug.Conn.delete_resp_cookie(@remember_me_cookie, remember_me_cookie_options(conn))
   end
 
   @doc "Revokes one session by its raw token (idempotent)."
@@ -196,13 +197,13 @@ defmodule Cadence.ServerWeb.UserAuth do
   @doc "Writes the signed remember-me cookie for a token."
   @spec put_remember_me_cookie(Plug.Conn.t(), String.t()) :: Plug.Conn.t()
   def put_remember_me_cookie(conn, token) do
-    Plug.Conn.put_resp_cookie(conn, @remember_me_cookie, token, remember_me_cookie_options())
+    Plug.Conn.put_resp_cookie(conn, @remember_me_cookie, token, remember_me_cookie_options(conn))
   end
 
   @doc "Removes the remember-me cookie."
   @spec delete_remember_me_cookie(Plug.Conn.t()) :: Plug.Conn.t()
   def delete_remember_me_cookie(conn) do
-    Plug.Conn.delete_resp_cookie(conn, @remember_me_cookie, remember_me_cookie_options())
+    Plug.Conn.delete_resp_cookie(conn, @remember_me_cookie, remember_me_cookie_options(conn))
   end
 
   @doc "Clears only the session-token state (pending TOTP keys survive)."
@@ -387,13 +388,15 @@ defmodule Cadence.ServerWeb.UserAuth do
     _error -> :ok
   end
 
-  defp remember_me_cookie_options do
+  # Same host rule as the session cookie: remember-me on a private address
+  # must not be born `Secure` (spec §12.9).
+  defp remember_me_cookie_options(conn) do
     [
       sign: true,
       max_age: ttl_days() * 86_400,
       same_site: "Lax",
       http_only: true,
-      secure: Application.get_env(:cadence_server, :session_secure, false)
+      secure: SessionOptions.secure?(conn.host)
     ]
   end
 

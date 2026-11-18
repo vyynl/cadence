@@ -18,6 +18,10 @@ x-cadence-env: &cadence-env
   # Required in practice: the release refuses to boot without it. The default
   # exists only so `docker compose config` validates without a .env.
   CAD_PUBLIC_URL: "${CAD_PUBLIC_URL:-http://localhost:4000}"
+  # Which hosts get the Secure session cookie (spec §12.9). `public` keeps the
+  # hardening on CAD_PUBLIC_URL and lets a LAN or Tailscale address sign in over
+  # plain HTTP; DEPLOY.md has the private-access layouts.
+  CAD_SESSION_COOKIE_SECURE: "${CAD_SESSION_COOKIE_SECURE:-public}"
   CAD_DB_POOL_SIZE: "${CAD_DB_POOL_SIZE:-10}"
   CAD_GIT_STORE_PATH: "/data/git"
   CAD_ARTIFACT_PATH: "/data/artifacts"
@@ -187,7 +191,8 @@ services:
     # The app always listens on 4000 inside the container; CAD_HTTP_PORT is the
     # host publish port only and is deliberately not passed inward.
     # Loopback by default: the bundled Caddy profile or a same-host proxy
-    # reaches it there. Use 0.0.0.0 only for a proxy on another host.
+    # reaches it there. 0.0.0.0 is for a proxy on another host, or for signing
+    # in over a LAN/Tailscale address (DEPLOY.md, private access).
     ports:
       - "${CAD_HTTP_BIND:-127.0.0.1}:${CAD_HTTP_PORT:-4000}:4000"
     volumes:

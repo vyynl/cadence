@@ -8,6 +8,11 @@ Notable changes to Cadence. The format follows
 
 ### Added
 
+- `CAD_SESSION_COOKIE_SECURE` (`public` by default, or `always` / `never`): the
+  session and remember-me cookies are marked `Secure` only on the
+  `CAD_PUBLIC_URL` host, and only when that origin is HTTPS. A deployment can now
+  publish through a public domain and sign in over a LAN or Tailscale address
+  without a TLS terminator in front of the private leg.
 - `scripts/cadence-up.sh`: one command for the container flow. It runs `setup`
   when there is no `daemon.env`, starts or reuses the container (refusing when
   an existing one does not mount the project at its real path), retries
@@ -23,6 +28,12 @@ Notable changes to Cadence. The format follows
 
 ### Changed
 
+- `DEPLOY.md` has a "Public domain with private access" section: the public
+  origin builds the links, `CAD_SERVER_URL` may be a LAN or Tailscale address,
+  and `CAD_SESSION_COOKIE_SECURE` decides where the cookie is hardened.
+  `DAEMON.md` and `README.md` follow the same split, the daemon image's `setup`
+  prompt now accepts a private address, and `TROUBLESHOOTING.md` covers a page
+  whose panels stay on "Loading…".
 - The daemon image's `setup` and start output is colour-coded (bold headings,
   dim hints, red errors) on a terminal, and plain when piped, when `NO_COLOR` is
   set, or when `TERM=dumb`.

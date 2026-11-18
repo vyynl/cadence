@@ -192,7 +192,11 @@ retry. `:CadOpen` in Neovim reads the same DAG: the socket is at
 `~/.local/state/cadence/daemon.sock`, where the plugin looks by default.
 
 Remote server instead of a local one? Drop `--network` and give `setup` its
-public origin. [DAEMON.md](DAEMON.md) covers the compose and release forms.
+address. That can be a LAN or Tailscale address: the server's `CAD_PUBLIC_URL`
+still decides the links, so shares stay public while sync stays private.
+[DAEMON.md](DAEMON.md) covers the compose and release forms, and
+[DEPLOY.md](DEPLOY.md#public-domain-with-private-access) covers signing in over
+the private address.
 
 ## Demo
 

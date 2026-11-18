@@ -126,6 +126,14 @@ mount the state directory at the same absolute path so stored paths stay valid.
 Both traps are covered in
 [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md#daemon-cannot-reach-the-server).
 
+`CAD_SERVER_URL` is the **sync** address and does not have to be the server's
+public origin. A LAN address (`http://192.168.1.10:4000`) or a Tailscale address
+(`http://100.107.198.51:4000`) is fine, including over plain HTTP inside the
+tunnel. Links the daemon hands back (proposal URLs in `:CadProposals`) are built
+by the server from its own `CAD_PUBLIC_URL`, so they stay shareable even though
+sync never touches the public domain. [`DEPLOY.md`](DEPLOY.md) covers the
+browser half of that layout.
+
 ## Register a project
 
 The daemon must be running, and `WORK_DIR` must be an absolute path that exists
