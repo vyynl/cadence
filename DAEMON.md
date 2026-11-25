@@ -38,22 +38,21 @@ install does not need a local server, and the container reaches a remote
 `CAD_SERVER_URL` over its default bridge without a network flag.
 
 The directory you start from is the **hub**: every direct child directory is
-registered as a project. Navigate to the hub and run these commands:
+registered as a project. Run these commands from the directory you want the
+daemon to serve:
 
 ```bash
-cd ~/Programming/projects          # the hub: direct children become projects
-HUB="$PWD"
 STATE="$HOME/.local/state/cadence"
 mkdir -p "$STATE"
 docker run --rm -it --user "$(id -u):$(id -g)" \
   -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
-  -v "$HUB:$HUB" -e "CAD_PROJECTS_ROOT=$HUB" \
+  -v "$PWD:$PWD" -e "CAD_PROJECTS_ROOT=$PWD" \
   ghcr.io/vyynl/cadence-daemon:latest setup
 
 docker run -d --name cadence-daemon --restart unless-stopped \
   --user "$(id -u):$(id -g)" \
   -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
-  -v "$HUB:$HUB" \
+  -v "$PWD:$PWD" \
   ghcr.io/vyynl/cadence-daemon:latest
 ```
 

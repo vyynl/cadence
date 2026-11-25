@@ -156,23 +156,21 @@ remote server by default.
 
 The directory you start from is the **hub**: every direct child directory
 becomes a project automatically, so a new folder under it is watched and synced
-without a separate register call. Navigate to the hub you want the daemon to
-serve, then run these commands:
+without a separate register call. Run these commands from the directory you
+want the daemon to serve as the hub:
 
 ```bash
-cd ~/Programming/projects          # the hub: direct children become projects
-HUB="$PWD"
 STATE="$HOME/.local/state/cadence"
 mkdir -p "$STATE"
 docker run --rm -it --user "$(id -u):$(id -g)" \
   -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
-  -v "$HUB:$HUB" -e "CAD_PROJECTS_ROOT=$HUB" \
+  -v "$PWD:$PWD" -e "CAD_PROJECTS_ROOT=$PWD" \
   ghcr.io/vyynl/cadence-daemon:latest setup
 
 docker run -d --name cadence-daemon --restart unless-stopped \
   --user "$(id -u):$(id -g)" \
   -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
-  -v "$HUB:$HUB" \
+  -v "$PWD:$PWD" \
   ghcr.io/vyynl/cadence-daemon:latest
 ```
 
