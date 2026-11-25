@@ -381,10 +381,11 @@ defmodule Cadence.ServerWeb.SyncNodesTest do
              |> json_response(200)
 
     assert_receive {:nodes_pushed, ^project_id, [^cloud_id]}
-    assert_receive {user_id, {:sync_available, ^project_id}}
-    assert user_id == user.id
-    assert_receive {member_id, {:sync_available, ^project_id}}
-    assert member_id == member.id
+    # The fan-out has no ordering guarantee: two members (or two daemons for
+    # one member) can publish in either order. Compare the recipient set.
+    assert_receive {first_id, {:sync_available, ^project_id}}
+    assert_receive {second_id, {:sync_available, ^project_id}}
+    assert MapSet.new([first_id, second_id]) == MapSet.new([user.id, member.id])
     refute_receive {_user_id, {:sync_available, _project_id}}
   end
 
