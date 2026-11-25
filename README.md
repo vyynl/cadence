@@ -143,38 +143,43 @@ layouts, backups, and upgrades.
 
 ## Run the daemon
 
-The daemon container joins the server's compose network, so it reaches the app
-by service name. With the stack above (project `cadence`) the URL is
-`http://cadence:4000` and the network is `cadence_default`; the production
-`docker-compose.yml` uses project `cadence-prod` and `cadence-prod_default`.
+The daemon is the local half: it watches your project directories, commits
+snapshots locally, and syncs them to the Cadence server you already deployed.
+It does not need a server on the same machine, and the commands below target a
+remote server by default.
 
-Create the state directory first and run both commands as yourself: `setup`
-writes `daemon.env` and the database into it, and the daemon must read them
-back with the same uid. The project mount is the parent of the directories you
-will add later, at the same absolute path on both sides.
+Mint a token on the server at `/auth/tokens/new` (sign in first; the page asks
+for your password and TOTP code again if the sudo window has expired). Create
+the state directory first and run both commands as yourself: `setup` writes
+`daemon.env` and the database into it, and the daemon must read them back with
+the same uid. The project mount is the parent of the directories you will add
+later, at the same absolute path on both sides.
 
 ```bash
 STATE="$HOME/.local/state/cadence"
 mkdir -p "$STATE"
-docker run --rm -it --user "$(id -u):$(id -g)" --network cadence_default \
+docker run --rm -it --user "$(id -u):$(id -g)" \
   -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
   ghcr.io/vyynl/cadence-daemon:latest setup
 
 docker run -d --name cadence-daemon --restart unless-stopped \
-  --user "$(id -u):$(id -g)" --network cadence_default \
+  --user "$(id -u):$(id -g)" \
   -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
   -v "$HOME:$HOME" \
   ghcr.io/vyynl/cadence-daemon:latest
 ```
 
-`setup` prompts for the server URL and the API token you minted at
-`/auth/tokens/new` (re-authenticate there if it asks), then stores both in the
-state volume with mode `0600`, so no secret appears on the command line or in
-shell history. It finishes by calling the server: you should see
-`server authenticated`. A `401` means the token is wrong, and
-`cannot reach ... from this container` means the network flag is missing (a
-local server is `cadence`, never `localhost`). `$HOME` keeps the command
-generic; use a narrower parent in its place if your projects live elsewhere.
+`setup` prompts for the server URL and the API token, then stores both in the
+state directory with mode `0600`, so no secret appears on the command line or
+in shell history. Use the origin you reach the server at, for example
+`https://cadence.example.com`, or a LAN or Tailscale address such as
+`http://100.107.198.51:4000`; plain HTTP is fine inside a private network or
+tunnel. `localhost` does not mean the server container, so use a routable
+address unless the daemon runs in the server's network namespace. It finishes
+by calling the server: you should see `server authenticated`. A `401` means the
+token is wrong; `cannot reach ...` means the URL is wrong or unreachable from
+the container. `$HOME` keeps the command generic; use a narrower parent in its
+place if your projects live elsewhere.
 
 Add any directory under that mount as a project. The path must be absolute. From
 a checkout, `mix deps.get && mix compile` once (a fresh clone has neither), then:
@@ -198,10 +203,14 @@ few seconds after `docker run -d` fails with a connection error and only needs a
 retry. `:CadOpen` in Neovim reads the same DAG: the socket is at
 `~/.local/state/cadence/daemon.sock`, where the plugin looks by default.
 
-Remote server instead of a local one? Drop `--network` and give `setup` its
-address. That can be a LAN or Tailscale address: the server's `CAD_PUBLIC_URL`
-still decides the links, so shares stay public while sync stays private.
-[DAEMON.md](DAEMON.md) covers the compose and release forms, and
+**Server on the same machine?** The all-in-one evaluation stack above is the
+only case that needs a Docker network. Add `--network cadence_default` to both
+`docker run` commands and enter `http://cadence:4000` for `setup`;
+`docker-compose.yml` uses `cadence-prod_default` instead. A normal install runs
+the daemon on the machine with your code and omits both. The server's
+`CAD_PUBLIC_URL` still decides the links, so a LAN or Tailscale sync address
+keeps shares public while sync stays private; [DAEMON.md](DAEMON.md) covers the
+compose and release forms, and
 [DEPLOY.md](DEPLOY.md#public-domain-with-private-access) covers signing in over
 the private address.
 

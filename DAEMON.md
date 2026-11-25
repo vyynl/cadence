@@ -24,22 +24,28 @@ scripts/cadence-up.sh ~/code/api --slug api --name "API"
 ```
 
 `--host` uses a release binary instead of a container, and
-`--require-connection` makes a failed server connection fatal. Exit 0 means the
-project is registered; the connection is reported on its own line because a
-registered project still commits and serves the DAG offline. The container
-steps below keep the daemon generic, so one run can hold many projects.
+`--require-connection` makes a failed server connection fatal. `CAD_NETWORK` is
+only for a same-machine server container; leave it unset for a remote server.
+Exit 0 means the project is registered; the connection is reported on its own
+line because a registered project still commits and serves the DAG offline. The
+container steps below keep the daemon generic, so one run can hold many
+projects.
 
 ### Container (setup command)
+
+The daemon runs next to your code and syncs to a server elsewhere. A normal
+install does not need a local server, and the container reaches a remote
+`CAD_SERVER_URL` over its default bridge without a network flag.
 
 ```bash
 STATE="$HOME/.local/state/cadence"
 mkdir -p "$STATE"
-docker run --rm -it --user "$(id -u):$(id -g)" --network cadence-prod_default \
+docker run --rm -it --user "$(id -u):$(id -g)" \
   -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
   ghcr.io/vyynl/cadence-daemon:latest setup
 
 docker run -d --name cadence-daemon --restart unless-stopped \
-  --user "$(id -u):$(id -g)" --network cadence-prod_default \
+  --user "$(id -u):$(id -g)" \
   -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
   -v "$HOME:$HOME" \
   ghcr.io/vyynl/cadence-daemon:latest
@@ -51,28 +57,27 @@ window has expired), writes both to `$STATE/daemon.env` (mode 0600, inside the
 volume) and migrates the database. It then **verifies the token with a request**
 and prints `server authenticated`, or the reason it failed: `401` (mint a new
 token), `certificate is not trusted` (set `CAD_SYNC_CA_FILE`), or
-`cannot reach ... from this container` (the network flag is missing, or the URL
-is not reachable by service name). That is why both commands carry `--network`.
-No secret appears in a `docker run -e` flag, in shell history, or in
-`docker inspect`. The second command reads that file, migrates if needed and
-starts the daemon, with the socket at `$STATE/daemon.sock`, which is where the
-plugin already looks.
+`cannot reach ... from this container` (the URL is wrong or unreachable). A
+public origin or a LAN/Tailscale address works as-is; plain HTTP is fine inside
+a private network or tunnel. No secret appears in a `docker run -e` flag, in
+shell history, or in `docker inspect`. The second command reads that file,
+migrates if needed and starts the daemon, with the socket at
+`$STATE/daemon.sock`, which is where the plugin already looks.
 
 Create `$STATE` on the host first and pass the same `--user` to both commands.
 Docker creates a missing bind-mount directory as `root`, and a setup run as the
 image's uid 10000 would leave files the `--user` daemon cannot read.
 
-Reach a local server by service name, not `localhost`: `http://cadence:4000` on
-the server stack's network (`cadence-prod_default` for `docker-compose.yml`,
-`cadence_default` for the README's minimal stack). For a remote server, drop
-`--network` and enter its public origin.
+**Same-machine server.** A container daemon cannot use `localhost:4000` to
+reach a server in another container. Add `--network cadence-prod_default` to
+both commands and enter `http://cadence:4000`; the README's minimal stack uses
+`cadence_default` instead. That is the only case that needs a network flag.
 
 Mount the parent of the directories you will register at the **same path** on
 both sides: the database stores absolute paths and the daemon watches the
 container path. `$HOME` covers every project under your home directory; use a
-narrower parent if your code lives elsewhere. Drop `--network` for a remote
-server. To upgrade: `docker pull`, `docker rm -f cadence-daemon`, re-run the
-second command.
+narrower parent if your code lives elsewhere. To upgrade: `docker pull`,
+`docker rm -f cadence-daemon`, re-run the second command.
 
 ### Compose (declarative, many projects)
 
@@ -124,11 +129,11 @@ page requires the sudo window, so sign in again if it asks. Without a URL and
 token the daemon runs offline: commits, spawns, and switches work locally and
 nothing syncs. A server is a prerequisite; see [`DEPLOY.md`](DEPLOY.md).
 
-If the server runs on this same machine, `CAD_SERVER_URL` still has to be
-reachable from the daemon's network namespace: a container daemon cannot use
-`localhost:4000`. Join the server's network and use `http://cadence:4000`, and
-mount the state directory at the same absolute path so stored paths stay valid.
-Both traps are covered in
+`CAD_SERVER_URL` must be reachable from the daemon's container, not from your
+shell. A remote origin or a LAN/Tailscale address needs no network flag. Only a
+server in another container on this machine needs its network and service name,
+and the state directory must be mounted at the same absolute path so stored
+paths stay valid. Both traps are covered in
 [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md#daemon-cannot-reach-the-server).
 
 `CAD_SERVER_URL` is the **sync** address and does not have to be the server's

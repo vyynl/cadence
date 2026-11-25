@@ -54,6 +54,12 @@ fails the boot, so read `logs cadence` before the browser console.
 
 ## Daemon cannot reach the server
 
+**Remote server first:** if the server is on another machine, check
+`CAD_SERVER_URL`, the token, and the certificate. No `--network` flag is
+involved; a public origin or a Tailscale/LAN address is reached over the
+default bridge. The network instructions below are for a server in a container
+on the same machine.
+
 **Symptom:** the daemon logs `Req.TransportError{reason: :timeout}` (or
 `econnrefused`) and stays in offline mode; commits pile up locally.
 **Cause:** `CAD_SERVER_URL` must resolve *from the daemon's network namespace*,
@@ -62,9 +68,9 @@ cannot reach `http://localhost:4000` (that is the daemon container itself), and
 `host.docker.internal` does not help either, because `CAD_HTTP_BIND` is
 `127.0.0.1`. A LAN name, a closed port, and a proxy that does not publish the app
 all look the same from there.
-**Fix:** put the daemon on the server's network and dial the service name. The
-network is `<compose-project>_default` (`cadence_default` for the README's
-minimal stack, `cadence-prod_default` for `docker-compose.yml`):
+**Same-machine fix:** put the daemon on the server's network and dial the
+service name. The network is `<compose-project>_default` (`cadence_default` for
+the README's minimal stack, `cadence-prod_default` for `docker-compose.yml`):
 
 ```bash
 docker run … --network cadence-prod_default -e CAD_SERVER_URL=http://cadence:4000 …

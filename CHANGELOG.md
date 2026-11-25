@@ -59,6 +59,12 @@ Notable changes to Cadence. The format follows
   task now report `cadence daemon unreachable at <path>: :econnrefused` (or
   `:enoent`) instead of a bare `MatchError`, so a `docker run -d` that has not
   finished binding its socket reads as "retry" rather than as a crash.
+- The daemon quickstart no longer assumes a local server. The copy-paste
+  `docker run` commands target the remote `CAD_SERVER_URL` entered in `setup`
+  and carry no `--network` flag; the all-in-one evaluation stack's
+  `cadence_default` / `cadence-prod_default` variant is now an explicit
+  same-machine note. `setup`'s unreachable hint no longer claims a network flag
+  is always missing.
 
 ### Security
 

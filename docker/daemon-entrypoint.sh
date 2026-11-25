@@ -122,8 +122,8 @@ setup() {
       ;;
     *'{:error, :unreachable}'*)
       warn "cannot reach $CAD_SERVER_URL from this container"
-      hint 'a local server is reachable by service name, not localhost:'
-      hint 're-run setup with --network cadence_default (or your stack network)'
+      hint 'check the URL and that the server is reachable from this container'
+      hint 'for a server in another local container, join its network and use its service name'
       ;;
     *'{:error, {:http,'*)
       warn "the server answered $(printf '%s' "$check_output" | grep -o '{:error, {:http, [0-9]*}' | tail -n 1)"
