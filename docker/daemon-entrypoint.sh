@@ -1,7 +1,8 @@
 #!/bin/sh
 # Entrypoint for the Cadence daemon image.
 #
-#   docker run … <image> setup     interactive config: server URL + API token
+#   docker run … <image> setup     interactive config: server URL, API token,
+#                                  and optional AI settings
 #   docker run … <image>           load that config, migrate, start the daemon
 #   docker run … <image> <cmd…>    run something else (bin/cadence_daemon eval …)
 #
@@ -36,8 +37,9 @@ die() {
 }
 
 mask() {
-  # Print the config with the token redacted.
-  sed -e 's/^\(CAD_AUTH_TOKEN=\).*/\1<hidden>/' "$CONF"
+  # Print the config with the secrets redacted.
+  sed -e 's/^\(CAD_AUTH_TOKEN=\).*/\1<hidden>/' \
+    -e 's/^\(CAD_LLM_API_KEY=\).*/\1<hidden>/' "$CONF"
 }
 
 setup() {
@@ -46,7 +48,7 @@ setup() {
   fi
 
   step 'Cadence daemon setup'
-  hint 'Writes the server URL and an API token into the state volume.'
+  hint 'Writes the server URL, API token, and optional AI settings into the state volume.'
   printf '\n'
 
   if [ -f "$CONF" ]; then
@@ -63,12 +65,22 @@ setup() {
     esac
   fi
 
+  # Preserve an AI configuration when setup is re-run. The key is a secret, so
+  # it is never echoed: blank keeps it, and the other values become defaults.
+  old_llm_key='' old_llm_provider='' old_llm_model='' old_llm_base=''
+  if [ -f "$CONF" ]; then
+    old_llm_key=$(sed -n 's/^CAD_LLM_API_KEY=//p' "$CONF" | head -n 1 || true)
+    old_llm_provider=$(sed -n 's/^CAD_LLM_PROVIDER=//p' "$CONF" | head -n 1 || true)
+    old_llm_model=$(sed -n 's/^CAD_LLM_MODEL=//p' "$CONF" | head -n 1 || true)
+    old_llm_base=$(sed -n 's/^CAD_LLM_BASE_URL=//p' "$CONF" | head -n 1 || true)
+  fi
+
   printf '%sServer URL%s (the public origin or a LAN/Tailscale address): ' "$c_bold" "$c_reset"
   read -r server_url
   printf '%sAPI token%s (mint it at /auth/tokens/new on the server): ' "$c_bold" "$c_reset"
 
-  # Hide the token while it is typed. `stty` only works on a terminal, so a
-  # piped setup (for example in a script) keeps the value on stdin.
+  # Hide secrets while they are typed. `stty` only works on a terminal, so a
+  # piped setup (for example in a script) keeps the values on stdin.
   hide=0
   if [ -t 0 ] && stty -echo 2>/dev/null; then
     hide=1
@@ -76,6 +88,15 @@ setup() {
   fi
 
   read -r token
+  if [ "$hide" = 1 ]; then printf '\n'; fi
+
+  if [ -n "$old_llm_key" ]; then
+    hint 'An LLM key is already stored; blank keeps it.'
+  else
+    hint 'Blank leaves AI features (commit messages, docs) disabled.'
+  fi
+  printf '%sLLM API key%s (optional): ' "$c_bold" "$c_reset"
+  read -r llm_key || llm_key=''
 
   if [ "$hide" = 1 ]; then
     stty echo 2>/dev/null || true
@@ -84,11 +105,40 @@ setup() {
   fi
 
   if [ -z "$server_url" ] || [ -z "$token" ]; then
-    die 'both values are required; nothing written'
+    die 'server URL and API token are required; nothing written'
+  fi
+
+  if [ -z "$llm_key" ]; then
+    llm_key="$old_llm_key"
+  fi
+
+  llm_provider='' llm_model='' llm_base=''
+  if [ -n "$llm_key" ]; then
+    provider_default="${old_llm_provider:-deepseek}"
+    model_default="${old_llm_model:-deepseek-chat}"
+    base_default="${old_llm_base:-https://api.deepseek.com}"
+
+    printf 'LLM provider [%s]: ' "$provider_default"
+    read -r llm_provider || llm_provider=''
+    llm_provider="${llm_provider:-$provider_default}"
+
+    printf 'LLM model [%s]: ' "$model_default"
+    read -r llm_model || llm_model=''
+    llm_model="${llm_model:-$model_default}"
+
+    printf 'LLM base URL [%s]: ' "$base_default"
+    read -r llm_base || llm_base=''
+    llm_base="${llm_base:-$base_default}"
   fi
 
   umask 077
-  printf 'CAD_SERVER_URL=%s\nCAD_AUTH_TOKEN=%s\n' "$server_url" "$token" >"$CONF"
+  {
+    printf 'CAD_SERVER_URL=%s\nCAD_AUTH_TOKEN=%s\n' "$server_url" "$token"
+    if [ -n "$llm_key" ]; then
+      printf 'CAD_LLM_API_KEY=%s\nCAD_LLM_PROVIDER=%s\nCAD_LLM_MODEL=%s\nCAD_LLM_BASE_URL=%s\n' \
+        "$llm_key" "$llm_provider" "$llm_model" "$llm_base"
+    fi
+  } >"$CONF"
   chmod 600 "$CONF"
 
   # Create the database now so the first start is quick and quiet.
@@ -97,6 +147,12 @@ setup() {
   printf '\n'
   ok "wrote $CONF"
   hint 'mode 0600, inside the state volume; revoke the token from /account if it leaks'
+
+  if [ -n "$llm_key" ]; then
+    ok "AI features enabled ($llm_provider/$llm_model)"
+  else
+    hint 'AI features disabled (no LLM API key)'
+  fi
 
   # Verify the configuration now. A wrong URL, a rejected token, or a missing
   # network flag is otherwise invisible until the first sync pass. Best-effort:

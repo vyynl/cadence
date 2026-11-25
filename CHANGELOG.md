@@ -31,12 +31,22 @@ Notable changes to Cadence. The format follows
   verification, for both the sync client and the notification socket. A CA path
   that is not a readable file stops the daemon at boot, and disabling
   verification logs a warning.
+- The daemon image's `setup` now captures an optional LLM API key plus the
+  provider, model, and base URL, and stores them in `daemon.env` with the server
+  token. AI commit messages and doc automation can be enabled without putting
+  the key in `docker run -e`; leaving it blank keeps them off.
 
 ### Changed
 
-- The daemon quickstart passes its `--network` to the `setup` run, so the new
-  connection check is meaningful, and states that registering from a fresh clone
-  needs `mix deps.get && mix compile` first (`README.md`, `DAEMON.md`).
+- The daemon quickstart is remote-first: the copy-paste `docker run` commands
+  target the server reached through `setup`, with no `--network` flag. The
+  same-machine evaluation stack keeps the `cadence_default` /
+  `cadence-prod_default` variant as an explicit note (`README.md`, `DAEMON.md`,
+  `TROUBLESHOOTING.md`). Registering from a fresh clone still needs
+  `mix deps.get && mix compile` first.
+- `examples/minimal.yaml` exposes the four `CAD_LLM_*` variables like the full
+  compose file, and the README/DEPLOY docs explain that the server needs the
+  key for melds and the daemon for commit messages and docs.
 - `DEPLOY.md` has a "Public domain with private access" section: the public
   origin builds the links, `CAD_SERVER_URL` may be a LAN or Tailscale address,
   and `CAD_SESSION_COOKIE_SECURE` decides where the cookie is hardened.

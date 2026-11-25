@@ -12,6 +12,12 @@ x-env: &env
   CAD_GIT_STORE_PATH: /data/git
   CAD_ARTIFACT_PATH: /data/artifacts
   CAD_ACTIONS_ENABLED: "false"
+  # Optional AI features. A blank key disables them; the full reference is
+  # .env.example. The server uses these for meld conflict resolution.
+  CAD_LLM_PROVIDER: ${CAD_LLM_PROVIDER:-deepseek}
+  CAD_LLM_API_KEY: ${CAD_LLM_API_KEY:-}
+  CAD_LLM_MODEL: ${CAD_LLM_MODEL:-deepseek-chat}
+  CAD_LLM_BASE_URL: ${CAD_LLM_BASE_URL:-https://api.deepseek.com}
 
 services:
   secrets:

@@ -12,6 +12,15 @@ docker compose logs secrets  # first-admin password, printed once
 
 Then sign in as `CAD_ADMIN_EMAIL`, enroll TOTP, and delete `CAD_ADMIN_PASSWORD`.
 
+## AI features (optional)
+
+Generated commit messages, doc automation, and meld conflict resolution use the
+four `CAD_LLM_*` variables in [`.env.example`](.env.example). Set
+`CAD_LLM_API_KEY` on the server (for melds) and on the daemon (for commits and
+docs). A blank key disables them: commits still land, docs are skipped, and a
+conflicting union fails with an incident. `CAD_LLM_BASE_URL` accepts any
+OpenAI-compatible endpoint, including a local model.
+
 ## Layouts
 
 | You have | Run |

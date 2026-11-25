@@ -46,6 +46,12 @@ x-env: &env
   CAD_GIT_STORE_PATH: /data/git
   CAD_ARTIFACT_PATH: /data/artifacts
   CAD_ACTIONS_ENABLED: "false"
+  # Optional AI features. A blank key disables them; the full reference is
+  # .env.example. The server uses these for meld conflict resolution.
+  CAD_LLM_PROVIDER: ${CAD_LLM_PROVIDER:-deepseek}
+  CAD_LLM_API_KEY: ${CAD_LLM_API_KEY:-}
+  CAD_LLM_MODEL: ${CAD_LLM_MODEL:-deepseek-chat}
+  CAD_LLM_BASE_URL: ${CAD_LLM_BASE_URL:-https://api.deepseek.com}
 
 services:
   secrets:
@@ -169,9 +175,12 @@ docker run -d --name cadence-daemon --restart unless-stopped \
   ghcr.io/vyynl/cadence-daemon:latest
 ```
 
-`setup` prompts for the server URL and the API token, then stores both in the
-state directory with mode `0600`, so no secret appears on the command line or
-in shell history. Use the origin you reach the server at, for example
+`setup` prompts for the server URL, the API token, and an optional LLM API key
+(with provider, model, and base URL defaults), then stores them in the state
+directory with mode `0600`, so no secret appears on the command line or in
+shell history. Leave the LLM key blank to skip AI configuration (a re-run
+keeps an existing key unless you replace it). Use the origin you reach the
+server at, for example
 `https://cadence.example.com`, or a LAN or Tailscale address such as
 `http://100.107.198.51:4000`; plain HTTP is fine inside a private network or
 tunnel. `localhost` does not mean the server container, so use a routable
@@ -213,6 +222,20 @@ keeps shares public while sync stays private; [DAEMON.md](DAEMON.md) covers the
 compose and release forms, and
 [DEPLOY.md](DEPLOY.md#public-domain-with-private-access) covers signing in over
 the private address.
+
+## AI features (optional)
+
+Generated commit messages, doc automation, and meld conflict resolution use an
+OpenAI-compatible model. The minimal stack above leaves `CAD_LLM_API_KEY` blank,
+which disables them; set the four `CAD_LLM_*` variables from
+[`.env.example`](.env.example) in the stack environment to turn them on. The
+server needs the key for melds; the daemon needs it for commit messages and
+docs, and its `setup` stores it in `daemon.env` like the server token.
+
+Without a key, commits still land with the default message, doc jobs are
+skipped, and a union with conflicts fails with an incident; a union with no
+conflicts still resolves. `CAD_LLM_BASE_URL` points at any compatible endpoint,
+so a local model works too.
 
 ## Demo
 

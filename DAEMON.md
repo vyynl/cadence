@@ -51,10 +51,14 @@ docker run -d --name cadence-daemon --restart unless-stopped \
   ghcr.io/vyynl/cadence-daemon:latest
 ```
 
-`setup` asks for the server URL and the API token from `/auth/tokens/new`
-(sign in first; the page asks for your password and TOTP code again if the sudo
-window has expired), writes both to `$STATE/daemon.env` (mode 0600, inside the
-volume) and migrates the database. It then **verifies the token with a request**
+`setup` asks for the server URL, the API token from `/auth/tokens/new` (sign in
+first; the page asks for your password and TOTP code again if the sudo window
+has expired), and an optional LLM API key with provider/model/base-URL defaults.
+It writes them to `$STATE/daemon.env` (mode 0600, inside the volume) and
+migrates the database. The AI key is the same `CAD_LLM_*` set the compose and
+release forms read from `.env.daemon.example`; leave it blank to skip AI
+configuration (a re-run keeps an existing key unless you replace it). It then
+**verifies the token with a request**
 and prints `server authenticated`, or the reason it failed: `401` (mint a new
 token), `certificate is not trusted` (set `CAD_SYNC_CA_FILE`), or
 `cannot reach ... from this container` (the URL is wrong or unreachable). A
