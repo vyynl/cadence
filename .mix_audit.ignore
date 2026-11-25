@@ -30,12 +30,14 @@
 # axiom_ai/httpoison relax their hackney constraint or the LLM transport
 # moves to Req (Req/Finch instead of HTTPoison/hackney).
 #
-# hackney 1.25.0 is a prod transitive dep pinned below 2.0 by axiom_ai
-# (`~> 1.9`) and httpoison (`~> 1.21`). ex_aws's `~> 1.16` is
-# `optional: true`, and tesla already accepts `~> 1.21 or >= 4.0.2`, so
-# neither is the blocker. Every patched release is 4.x and no 1.x patch
-# exists. No custom `cacert`/`cacerts` option is set anywhere (hackney always
-# uses certifi CA certs).
+# hackney 1.25.0 is a prod transitive dep pinned to 1.x by axiom_ai
+# (`~> 1.9`) and httpoison 2.x (`~> 1.21`). Every patched release is 4.x and
+# no 1.x patch exists. That same pin holds ex_aws below 2.7 (2.7+ requires
+# hackney `~> 4.0`) and idna below 7 (idna 8.0.0 ships with hackney 4.x), so
+# those advisories are accepted here too. httpoison 3.x also requires hackney
+# 4.x but axiom_ai pins it `~> 2.0`. tesla already accepts `>= 4.0.2`, so it
+# is not the blocker. No custom `cacert`/`cacerts` option is set anywhere
+# (hackney always uses certifi CA certs).
 
 # GHSA-gp9c-pm5m-5cxr — CVE-2026-47071, "SOCKS5 TLS upgrade ignores caller
 # timeout" (high, vulnerable >= 0.10.0, < 4.0.1): hackney's SOCKS5 proxy
@@ -80,3 +82,39 @@ CVE-2026-115693
 EEF-CVE-2026-117656
 CVE-2026-117656
 GHSA-9fr5-g44g-9526
+
+# GHSA-hrw3-2h5r-fhxx / CVE-2026-59698 — "ex_aws normalizes `..` in S3 object
+# keys client-side, allowing bucket or key-prefix escape" (high, vulnerable
+# >= 2.1.7, < 2.8.0). Mitigation: Cadence never calls ExAws; only axiom_ai's
+# Bedrock provider does, and Cadence.Shared.LLM maps deepseek/openai/anthropic
+# (an unknown name falls back to `:deepseek`), so no S3 key path is reachable.
+GHSA-hrw3-2h5r-fhxx
+CVE-2026-59698
+
+# GHSA-mww9-g5mj-j664 / CVE-2026-59697 — "IMDSv2 metadata token request
+# follows HTTP redirects" (high, vulnerable >= 2.3.0, < 2.8.0). Mitigation:
+# the same unreachable ExAws path; Cadence configures no AWS credentials or
+# metadata endpoint.
+GHSA-mww9-g5mj-j664
+CVE-2026-59697
+
+# GHSA-96q9-mcc7-hqj8 / CVE-2026-62269 — "S3 object key query-string
+# injection and truncation via unencoded reserved characters" (moderate,
+# vulnerable >= 2.1.2, < 2.8.0). Mitigation: the same unreachable ExAws path.
+GHSA-96q9-mcc7-hqj8
+CVE-2026-62269
+
+# GHSA-rcv9-2jx2-63xh / CVE-2026-120720 — "S3 bucket name controls the
+# request host in virtual-host requests" (moderate, vulnerable >= 2.1.7,
+# < 2.8.0). Mitigation: the same unreachable ExAws path.
+GHSA-rcv9-2jx2-63xh
+CVE-2026-120720
+
+# EEF-CVE-2026-117678 / CVE-2026-117678 — "idna: punycode labels are decoded
+# before the 63-octet length check, so a long `xn--` label causes super-linear
+# CPU use" (moderate, vulnerable < 8.0.0). Mitigation: hackney only resolves
+# operator-configured hosts (`CAD_LLM_BASE_URL`, the daemon's
+# `CAD_SERVER_URL`); no user-supplied hostname reaches idna. idna 8.0.0 is
+# blocked by hackney 1.25.0's `~> 6.1.0`.
+EEF-CVE-2026-117678
+CVE-2026-117678

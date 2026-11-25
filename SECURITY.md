@@ -87,11 +87,12 @@ Out of scope:
 
 - Issues that require an already-compromised host account, root on the server,
   or control of the Docker daemon.
-- The accepted hackney 1.25.0 and assent 0.2.13 advisories recorded in
-  `.mix_audit.ignore` and `mix.exs`. They are ignored by exact advisory ID, not
-  by package. Report them again only with a concrete exploit path through
-  Cadence's usage: no SOCKS5 proxy, custom CA, user-supplied query string, or
-  Apple OAuth strategy is configured.
+- The accepted hackney 1.25.0, assent 0.2.13, ex_aws 2.6.1, and idna 6.1.1
+  advisories recorded in `.mix_audit.ignore` and `mix.exs`. They are ignored by
+  exact advisory ID, not by package. Report them again only with a concrete
+  exploit path through Cadence's usage: no SOCKS5 proxy, custom CA,
+  user-supplied query string, Apple OAuth strategy, or ExAws call is present,
+  and idna only resolves operator-configured hosts.
 - Known limitations that are already documented as deployment prerequisites
   rather than defects, for example action containers share the host user
   namespace and `/out` has no quota. See `CHANGELOG.md` (Known limitations).

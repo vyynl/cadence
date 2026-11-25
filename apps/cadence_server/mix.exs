@@ -26,7 +26,12 @@ defmodule Cadence.Server.MixProject do
           "GHSA-mp55-p8c9-rfw2",
           "GHSA-pj7v-xfvx-wmjq",
           "CVE-2026-115693",
-          "CVE-2026-117656"
+          "CVE-2026-117656",
+          "CVE-2026-59698",
+          "CVE-2026-59697",
+          "CVE-2026-62269",
+          "CVE-2026-120720",
+          "CVE-2026-117678"
         ]
       ],
       deps: deps()

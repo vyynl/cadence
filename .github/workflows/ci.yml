@@ -121,8 +121,10 @@ jobs:
         # (test_coverage in each mix.exs).
         run: mix test --cover
 
-      - name: Audit Hex package retirements
-        # Only reports retired package versions. CVE scanning is deps.audit.
+      - name: Audit Hex advisories
+        # Hex's advisory database covers retired versions and security
+        # advisories. Accepted IDs live in `hex: [ignore_advisories: ...]`;
+        # deps.audit below is the separate GitHub-fed check.
         run: mix hex.audit
 
       - name: Check for unused lockfile entries

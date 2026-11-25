@@ -60,6 +60,16 @@ Notable changes to Cadence. The format follows
   `:enoent`) instead of a bare `MatchError`, so a `docker run -d` that has not
   finished binding its socket reads as "retry" rather than as a crash.
 
+### Security
+
+- Updated `ash` to 3.38.1, `phoenix` to 1.8.17, `phoenix_live_view` to 1.2.15,
+  `db_connection` to 2.10.3, and their resolved transitives for published
+  advisories. The remaining `ex_aws` and `idna` advisories are accepted by exact
+  advisory ID: `axiom_ai` (latest) pins `hackney` to 1.x, which blocks the
+  patched `ex_aws`/`idna` releases. `ex_aws` is unreachable (Cadence never calls
+  it) and `idna` only sees operator-configured hosts. The rationale and
+  re-review date are in `.mix_audit.ignore` and `SECURITY.md`.
+
 ## [1.1.0] - 2026-11-18
 
 Turnkey self-hosting, operator-created accounts with mandatory TOTP, passkeys,
