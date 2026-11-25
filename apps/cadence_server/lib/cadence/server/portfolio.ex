@@ -90,9 +90,16 @@ defmodule Cadence.Server.Portfolio do
   @doc """
   List public projects for the portfolio index, newest first.
 
-  Returns `%{project: Project.t(), node_count: non_neg_integer()}` entries.
+  Returns `%{project: Project.t(), node_count: non_neg_integer(), imported?: boolean()}`
+  entries. `imported?` is true when any node carries the `:imported` flag.
   """
-  @spec list_projects() :: [%{project: Project.t(), node_count: non_neg_integer()}]
+  @spec list_projects() :: [
+          %{
+            project: Project.t(),
+            node_count: non_neg_integer(),
+            imported?: boolean()
+          }
+        ]
   def list_projects do
     projects =
       Repo.all(
@@ -110,9 +117,34 @@ defmodule Cadence.Server.Portfolio do
       )
       |> Map.new()
 
+    imported =
+      Repo.all(
+        from(n in Node,
+          where: fragment("? = ANY(?)", "imported", n.flags),
+          group_by: n.project_id,
+          select: n.project_id
+        )
+      )
+      |> MapSet.new()
+
     Enum.map(projects, fn project ->
-      %{project: project, node_count: Map.get(counts, project.id, 0)}
+      %{
+        project: project,
+        node_count: Map.get(counts, project.id, 0),
+        imported?: MapSet.member?(imported, project.id)
+      }
     end)
+  end
+
+  @doc "Whether any node in the project carries the `:imported` provenance flag."
+  @spec imported?(Ecto.UUID.t()) :: boolean()
+  def imported?(project_id) do
+    Repo.exists?(
+      from(n in Node,
+        where: n.project_id == ^project_id,
+        where: fragment("? = ANY(?)", "imported", n.flags)
+      )
+    )
   end
 
   @doc """

@@ -16,7 +16,7 @@ defmodule Cadence.ServerWeb.DAGLayout do
   @margin_x 24
   @margin_y 24
   @default_max_columns 10
-  @flag_priority [:broken, :"in-progress", :sandbox, :functioning]
+  @flag_priority [:broken, :"in-progress", :sandbox, :functioning, :imported]
 
   @doc """
   Lay out `nodes` for SVG rendering.

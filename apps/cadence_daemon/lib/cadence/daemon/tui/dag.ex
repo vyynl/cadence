@@ -19,7 +19,7 @@ defmodule Cadence.Daemon.TUI.DAG do
   @step 3
 
   # Highlight precedence when a node carries several flags (spec §3.1 flags).
-  @flag_priority ["broken", "in-progress", "sandbox", "functioning"]
+  @flag_priority ["broken", "in-progress", "sandbox", "functioning", "imported"]
 
   # When two edges overlap in one cell, keep the most structural glyph.
   @glyph_rank %{"|" => 3, "\\" => 2, "/" => 2, "-" => 1}

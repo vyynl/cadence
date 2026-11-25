@@ -48,7 +48,7 @@ setup() {
   fi
 
   step 'Cadence daemon setup'
-  hint 'Writes the server URL, API token, and optional AI settings into the state volume.'
+  hint 'Writes the server URL, API token, and optional AI and hub settings into the state volume.'
   printf '\n'
 
   if [ -f "$CONF" ]; then
@@ -67,8 +67,9 @@ setup() {
 
   # Preserve an AI configuration when setup is re-run. The key is a secret, so
   # it is never echoed: blank keeps it, and the other values become defaults.
-  old_llm_key='' old_llm_provider='' old_llm_model='' old_llm_base=''
+  old_projects_root='' old_llm_key='' old_llm_provider='' old_llm_model='' old_llm_base=''
   if [ -f "$CONF" ]; then
+    old_projects_root=$(sed -n 's/^CAD_PROJECTS_ROOT=//p' "$CONF" | head -n 1 || true)
     old_llm_key=$(sed -n 's/^CAD_LLM_API_KEY=//p' "$CONF" | head -n 1 || true)
     old_llm_provider=$(sed -n 's/^CAD_LLM_PROVIDER=//p' "$CONF" | head -n 1 || true)
     old_llm_model=$(sed -n 's/^CAD_LLM_MODEL=//p' "$CONF" | head -n 1 || true)
@@ -77,6 +78,28 @@ setup() {
 
   printf '%sServer URL%s (the public origin or a LAN/Tailscale address): ' "$c_bold" "$c_reset"
   read -r server_url
+
+  if [ -n "${CAD_PROJECTS_ROOT:-}" ]; then
+    projects_root="$CAD_PROJECTS_ROOT"
+    hint "Projects root: $projects_root (from CAD_PROJECTS_ROOT)"
+  else
+    if [ -n "$old_projects_root" ]; then
+      hint "Projects root is $old_projects_root; blank keeps it."
+    else
+      hint 'Projects root is optional; direct child directories become projects.'
+    fi
+    printf '%sProjects root%s (hub folder): ' "$c_bold" "$c_reset"
+    read -r projects_root || projects_root=''
+    if [ -z "$projects_root" ]; then
+      projects_root="$old_projects_root"
+    fi
+  fi
+
+  if [ -n "$projects_root" ] && [ ! -d "$projects_root" ]; then
+    warn "$projects_root is not a directory inside this container"
+    hint 'mount the hub at the same absolute path, or leave the root blank'
+  fi
+
   printf '%sAPI token%s (mint it at /auth/tokens/new on the server): ' "$c_bold" "$c_reset"
 
   # Hide secrets while they are typed. `stty` only works on a terminal, so a
@@ -134,6 +157,9 @@ setup() {
   umask 077
   {
     printf 'CAD_SERVER_URL=%s\nCAD_AUTH_TOKEN=%s\n' "$server_url" "$token"
+    if [ -n "$projects_root" ]; then
+      printf 'CAD_PROJECTS_ROOT=%s\n' "$projects_root"
+    fi
     if [ -n "$llm_key" ]; then
       printf 'CAD_LLM_API_KEY=%s\nCAD_LLM_PROVIDER=%s\nCAD_LLM_MODEL=%s\nCAD_LLM_BASE_URL=%s\n' \
         "$llm_key" "$llm_provider" "$llm_model" "$llm_base"
@@ -147,6 +173,12 @@ setup() {
   printf '\n'
   ok "wrote $CONF"
   hint 'mode 0600, inside the state volume; revoke the token from /account if it leaks'
+
+  if [ -n "$projects_root" ]; then
+    ok "projects root: $projects_root"
+  else
+    hint 'projects root disabled'
+  fi
 
   if [ -n "$llm_key" ]; then
     ok "AI features enabled ($llm_provider/$llm_model)"

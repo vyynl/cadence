@@ -56,11 +56,15 @@ defmodule Cadence.Daemon.CommitQueue do
     * `:skip_unchanged` — return the base node without writing a commit when the
       working tree equals the base node's tree. The watcher uses this so an
       automated write (or a duplicate file event) cannot create an empty node.
+    * `:flags` — node flags for the commit. Defaults to `[:in-progress]`; the
+      hub's initial snapshot passes `[:imported]`.
+    * `:timeout` — GenServer call timeout (default 5 s). The hub's first
+      snapshot of a large existing tree uses a longer bound.
   """
   @spec commit(GenServer.server(), String.t() | :auto, keyword()) ::
           {:ok, Node.t()} | {:error, term()}
   def commit(queue, message \\ :auto, opts \\ []) do
-    GenServer.call(queue, {:commit, message, opts})
+    GenServer.call(queue, {:commit, message, opts}, Keyword.get(opts, :timeout, 5_000))
   end
 
   @doc """
@@ -129,16 +133,23 @@ defmodule Cadence.Daemon.CommitQueue do
     if Keyword.get(opts, :skip_unchanged, false) and old_tree == tree do
       {:ok, base}
     else
-      do_write_commit(state, message, tree, git_parents, node_parents, old_tree)
+      do_write_commit(state, message, opts, tree, git_parents, node_parents, old_tree)
     end
   end
 
-  defp do_write_commit(state, message, tree, git_parents, node_parents, old_tree) do
-    {message, flags, metadata} = message_attrs(message)
+  defp do_write_commit(state, message, opts, tree, git_parents, node_parents, old_tree) do
+    {message, flags, metadata} = message_attrs(message, opts)
 
     sha = GitStore.write_commit(state.git, tree, git_parents, state.author, message)
     changes = diff_changes(state.git, old_tree, tree)
-    {docs_state, docs_metadata, docs_queued?} = docs_plan(state, changes, sha)
+
+    {docs_state, docs_metadata, docs_queued?} =
+      if :imported in flags do
+        {:skipped, %{}, false}
+      else
+        docs_plan(state, changes, sha)
+      end
+
     metadata = Map.merge(metadata, docs_metadata)
 
     attrs = %{
@@ -208,15 +219,15 @@ defmodule Cadence.Daemon.CommitQueue do
     {:ok, node}
   end
 
-  defp message_attrs(message) when is_binary(message) do
-    {message, [:"in-progress"], %{}}
+  defp message_attrs(message, opts) when is_binary(message) do
+    {message, Keyword.get(opts, :flags, [:"in-progress"]), %{}}
   end
 
   # Auto messages are generated off the commit path: write a placeholder now and
   # let `MessageQueue` fill the real message in the background. This keeps the
   # watcher non-blocking (spec §5.3, §5.5).
-  defp message_attrs(:auto) do
-    {@default_message, [:"in-progress"], %{"message_pending" => true}}
+  defp message_attrs(:auto, opts) do
+    {@default_message, Keyword.get(opts, :flags, [:"in-progress"]), %{"message_pending" => true}}
   end
 
   # Evaluates doc automation for a commit (spec §9.2). The schema file is the

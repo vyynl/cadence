@@ -137,7 +137,7 @@ defmodule Cadence.Server.DemoSeedTest do
     assert length(nodes) == 160
     assert nodes |> Enum.map(& &1.git_commit_sha) |> Enum.uniq() |> length() == 160
     assert Enum.all?(nodes, &(byte_size(&1.git_commit_sha) == 40))
-    assert Enum.all?(nodes, &(&1.flags == []))
+    assert Enum.all?(nodes, &(&1.flags == [:imported]))
     assert Enum.all?(nodes, &(&1.docs_state == :skipped))
 
     # Exactly the tip is pinned, and it is the project preview.
@@ -185,7 +185,7 @@ defmodule Cadence.Server.DemoSeedTest do
 
     node = Repo.get!(Node, incident.node_id)
     assert node.docs_state == :skipped
-    assert node.flags == []
+    assert node.flags == [:imported]
     assert Portfolio.quarantine_status(imported, node) == :quarantined
 
     # The secret commit is one of the ten oldest, so the capped DAG omits it

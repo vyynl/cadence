@@ -20,21 +20,38 @@ defmodule Cadence.Daemon.Application do
         {Task.Supervisor, name: Cadence.Daemon.SyncTasks},
         {Registry, keys: :unique, name: Cadence.Daemon.Queues},
         Cadence.Daemon.ProjectRegistry,
-        {Task.Supervisor, name: Cadence.Daemon.ImportTasks},
-        Cadence.Daemon.Importer,
-        Cadence.Daemon.SyncWorker,
-        Cadence.Daemon.SyncSocket
-      ] ++ api_children()
+        {Task.Supervisor, name: Cadence.Daemon.ImportTasks}
+      ] ++
+        discovery_children() ++
+        [
+          Cadence.Daemon.Importer,
+          Cadence.Daemon.SyncWorker,
+          Cadence.Daemon.SyncSocket
+        ] ++ api_children()
 
     opts = [strategy: :one_for_one, name: Cadence.Daemon.Supervisor]
     {:ok, pid} = Supervisor.start_link(children, opts)
 
     Cadence.Daemon.Projects.rehydrate()
+    maybe_scan_hub()
     Cadence.Daemon.MessageQueue.rehydrate()
     Cadence.Daemon.DocQueue.rehydrate()
     maybe_start_sync()
 
     {:ok, pid}
+  end
+
+  # The hub watcher is optional; without CAD_PROJECTS_ROOT the daemon keeps the
+  # explicit `mix cad.register` flow only.
+  defp discovery_children do
+    if Cadence.Daemon.Env.projects_root(), do: [Cadence.Daemon.Discovery], else: []
+  end
+
+  # Run after rehydrate so existing projects are already claimed; the initial
+  # scan then registers only the new hub children. It is queued, not awaited:
+  # a large hub must not hold up the daemon boot.
+  defp maybe_scan_hub do
+    if Cadence.Daemon.Env.projects_root(), do: Cadence.Daemon.Discovery.scan_later()
   end
 
   # Sync boot work is skipped entirely when the daemon is offline/unconfigured;

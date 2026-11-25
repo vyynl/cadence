@@ -272,6 +272,7 @@ defmodule Cadence.ServerWeb.ProjectPane do
       page_description: nil,
       canonical_url: nil,
       project: nil,
+      imported?: false,
       dag_layout: DAGLayout.layout([]),
       node_total: 0,
       selected_node: nil,
@@ -364,6 +365,7 @@ defmodule Cadence.ServerWeb.ProjectPane do
             "#{project.name} on Cadence — session history and repository snapshot.",
           canonical_url: Metadata.canonical(path),
           project: project,
+          imported?: Portfolio.imported?(project.id),
           dag_layout: dag_layout,
           node_total: node_total,
           selected_node: selected_node,
@@ -569,6 +571,7 @@ defmodule Cadence.ServerWeb.ProjectPane do
 
     assign(socket,
       node_total: node_total,
+      imported?: Portfolio.imported?(project.id),
       dag_layout: dag_layout,
       selected_node: selected_node,
       provenance: provenance,

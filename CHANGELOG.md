@@ -35,6 +35,17 @@ Notable changes to Cadence. The format follows
   provider, model, and base URL, and stores them in `daemon.env` with the server
   token. AI commit messages and doc automation can be enabled without putting
   the key in `docker run -e`; leaving it blank keeps them off.
+- Project hub: `CAD_PROJECTS_ROOT` names a directory whose direct child
+  directories become projects automatically. The hub is stored in `daemon.env`
+  by `setup`, scanned once on boot and watched for new children, so a new
+  folder is committed and synced without a register call. A child that is a Git
+  repository imports its history with the existing importer; a plain directory
+  gets one imported snapshot of its current tree. Hidden entries and paths that
+  overlap an existing project are skipped; deleting or renaming a child does not
+  delete its project.
+- Imported history is now visibly flagged: nodes created by `mix cad.import` or
+  the project hub carry the `imported` flag, and project pages and the portfolio
+  show an imported badge. The flag is provenance, not a lifecycle state.
 
 ### Changed
 

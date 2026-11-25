@@ -37,36 +37,42 @@ The daemon runs next to your code and syncs to a server elsewhere. A normal
 install does not need a local server, and the container reaches a remote
 `CAD_SERVER_URL` over its default bridge without a network flag.
 
+The directory you start from is the **hub**: every direct child directory is
+registered as a project. Navigate to the hub and run these commands:
+
 ```bash
+cd ~/Programming/projects          # the hub: direct children become projects
+HUB="$PWD"
 STATE="$HOME/.local/state/cadence"
 mkdir -p "$STATE"
 docker run --rm -it --user "$(id -u):$(id -g)" \
   -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
+  -v "$HUB:$HUB" -e "CAD_PROJECTS_ROOT=$HUB" \
   ghcr.io/vyynl/cadence-daemon:latest setup
 
 docker run -d --name cadence-daemon --restart unless-stopped \
   --user "$(id -u):$(id -g)" \
   -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
-  -v "$HOME:$HOME" \
+  -v "$HUB:$HUB" \
   ghcr.io/vyynl/cadence-daemon:latest
 ```
 
 `setup` asks for the server URL, the API token from `/auth/tokens/new` (sign in
 first; the page asks for your password and TOTP code again if the sudo window
 has expired), and an optional LLM API key with provider/model/base-URL defaults.
-It writes them to `$STATE/daemon.env` (mode 0600, inside the volume) and
-migrates the database. The AI key is the same `CAD_LLM_*` set the compose and
+`CAD_PROJECTS_ROOT` is taken from the command and stored in `$STATE/daemon.env`
+(mode 0600, inside the volume) with the rest; the hub is remembered across
+restarts and upgrades. The AI key is the same `CAD_LLM_*` set the compose and
 release forms read from `.env.daemon.example`; leave it blank to skip AI
 configuration (a re-run keeps an existing key unless you replace it). It then
-**verifies the token with a request**
-and prints `server authenticated`, or the reason it failed: `401` (mint a new
-token), `certificate is not trusted` (set `CAD_SYNC_CA_FILE`), or
-`cannot reach ... from this container` (the URL is wrong or unreachable). A
-public origin or a LAN/Tailscale address works as-is; plain HTTP is fine inside
-a private network or tunnel. No secret appears in a `docker run -e` flag, in
-shell history, or in `docker inspect`. The second command reads that file,
-migrates if needed and starts the daemon, with the socket at
-`$STATE/daemon.sock`, which is where the plugin already looks.
+**verifies the token with a request** and prints `server authenticated`, or the
+reason it failed: `401` (mint a new token), `certificate is not trusted` (set
+`CAD_SYNC_CA_FILE`), or `cannot reach ... from this container` (the URL is
+wrong or unreachable). A public origin or a LAN/Tailscale address works as-is;
+plain HTTP is fine inside a private network or tunnel. No secret appears in a
+`docker run -e` flag, in shell history, or in `docker inspect`. The second
+command reads that file, migrates if needed and starts the daemon, with the
+socket at `$STATE/daemon.sock`, which is where the plugin already looks.
 
 Create `$STATE` on the host first and pass the same `--user` to both commands.
 Docker creates a missing bind-mount directory as `root`, and a setup run as the
@@ -77,11 +83,19 @@ reach a server in another container. Add `--network cadence-prod_default` to
 both commands and enter `http://cadence:4000`; the README's minimal stack uses
 `cadence_default` instead. That is the only case that needs a network flag.
 
-Mount the parent of the directories you will register at the **same path** on
-both sides: the database stores absolute paths and the daemon watches the
-container path. `$HOME` covers every project under your home directory; use a
-narrower parent if your code lives elsewhere. To upgrade: `docker pull`,
-`docker rm -f cadence-daemon`, re-run the second command.
+The hub must be mounted at the **same absolute path** on both sides: the
+database stores absolute paths and the daemon watches the container path. The
+state directory is a separate mount. The first scan registers every existing
+direct child; new directories are registered as they appear. A child that is a
+Git repository imports its history through the existing importer; a plain
+directory gets one imported snapshot of its current tree. Imported nodes carry
+the `imported` flag, and the project page and portfolio show an imported badge.
+Hidden entries are skipped, and a candidate that overlaps an existing project
+is skipped. The daemon does not delete or rename projects when a hub child is
+deleted or renamed. To add a project outside the hub, mount its parent and use
+`Register a project` below. To upgrade: `docker pull`, `docker rm -f
+cadence-daemon`, re-run the second command (the hub and token stay in the
+state directory).
 
 ### Compose (declarative, many projects)
 
@@ -149,6 +163,10 @@ sync never touches the public domain. [`DEPLOY.md`](DEPLOY.md) covers the
 browser half of that layout.
 
 ## Register a project
+
+The hub registers its direct child directories automatically (see **Container**
+above). Use the explicit calls below for a project outside the hub, for a
+narrower mount, or when auto-discovery is off.
 
 The daemon must be running, and `WORK_DIR` must be an absolute path that exists
 inside the daemon's namespace: for a container that means under a mounted

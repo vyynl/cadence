@@ -12,7 +12,7 @@ defmodule Cadence.Server.DemoSeed do
     the real path), a rejected meld, and an isolated result carrying a critical
     `secret_detected` incident.
   - `imported-demo` — 160 nodes shaped exactly like a Git import (original
-    40-hex SHAs, preserved parents including one merge, flagless nodes,
+    40-hex SHAs, preserved parents including one merge, imported nodes,
     `docs_state: :skipped`, per-commit author/timestamp provenance). It
     deliberately exceeds the DAG render cap so the project page truncates and
     `History` pages, and one historical commit carries a high-confidence token,
@@ -736,7 +736,7 @@ defmodule Cadence.Server.DemoSeed do
       project_id: project.id,
       git_commit_sha: attrs.git_commit_sha,
       parents: Enum.map(attrs.parents, & &1.id),
-      flags: [],
+      flags: [:imported],
       pinned: tip?,
       message: attrs.message,
       session_metadata: import_metadata(attrs, tip?),
@@ -795,8 +795,8 @@ defmodule Cadence.Server.DemoSeed do
 
       This project is shaped like a local Git repository imported into Cadence:
       every node keeps its original 40-character commit SHA, parents, message,
-      author and timestamp. The nodes are flagless, docs are skipped (there is
-      no local session to generate them), and only the tip is pinned.
+      author and timestamp. The nodes carry the imported flag, docs are skipped
+      (there is no local session to generate them), and only the tip is pinned.
 
       The project has 160 commits, so the DAG renders the newest 150 and the
       rest live in **History** (50 per page). One old commit contains a fake

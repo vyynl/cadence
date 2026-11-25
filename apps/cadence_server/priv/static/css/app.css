@@ -9,6 +9,7 @@
   --in-progress: #bf8700;
   --broken: #cf222e;
   --sandbox: #6e7781;
+  --imported: #0a7ea4;
   --pinned: #8250df;
   /* Surfaces for cards and forms (auth, account). */
   --surface: #ffffff;
@@ -45,6 +46,7 @@
     --in-progress: #d29922;
     --broken: #f85149;
     --sandbox: #8b949e;
+    --imported: #56d4dd;
     --pinned: #bc8cff;
     --surface: #161b22;
     --surface-2: #21262d;
@@ -372,6 +374,11 @@ code {
   fill: var(--sandbox);
 }
 
+.flag-imported .node-dot,
+.node-dot.flag-imported {
+  fill: var(--imported);
+}
+
 .node-dot.flag-functioning {
   fill: var(--functioning);
 }
@@ -418,6 +425,10 @@ code {
 
 .dag-edge.flag-sandbox {
   stroke: var(--sandbox);
+}
+
+.dag-edge.flag-imported {
+  stroke: var(--imported);
 }
 
 .dag-edge.flag-unknown {

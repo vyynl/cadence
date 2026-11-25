@@ -11,7 +11,8 @@ defmodule Cadence.Daemon.Importer do
 
   Nothing about the source history is rewritten: every node keeps the original
   commit SHA, message, author timestamp, and parents (merges preserved).
-  Imported nodes are flagless and `docs_state: :skipped`, with provenance under
+  Imported nodes carry the `:imported` provenance flag (never `functioning`)
+  and `docs_state: :skipped`, with provenance under
   `session_metadata["import"]`. The selected refs are recorded on tip nodes
   only, so a repository with hundreds of refs does not repeat them on every
   node.
@@ -911,7 +912,7 @@ defmodule Cadence.Daemon.Importer do
         project_id: plan.project_id,
         git_commit_sha: commit.hash,
         parents: parents,
-        flags: [],
+        flags: [:imported],
         pinned: commit.hash == plan.tip,
         message: commit_message(commit),
         session_metadata: %{

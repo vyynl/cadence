@@ -29,16 +29,19 @@ services:
       # defaults CAD_STATE_DIR to /data/state, so this volume is the state.
       - daemon-state:/data/state
 
-      # PROJECT DIRECTORIES: mount their parent (or each one) at its REAL host
-      # path:
+      # PROJECT DIRECTORIES: mount the hub (`CAD_PROJECTS_ROOT` in
+      # .env.daemon) or each project's parent at its REAL host path:
       #
-      #   - /home/you/code:/home/you/code
+      #   - /home/you/Programming/projects:/home/you/Programming/projects
       #   - /home/you/code/my-project:/home/you/code/my-project
       #
       # Registration stores the absolute work_dir and the daemon watches that
       # path inside the container. A different target (for example
       # /projects/my-project) registers a directory that does not exist here,
-      # so the project never gets a node.
+      # so the project never gets a node. With `CAD_PROJECTS_ROOT` set, its
+      # direct child directories are registered automatically; a child that is
+      # a Git repository imports its history and its imported nodes carry the
+      # `imported` flag.
       #
       # Doc sync writes into the tree: give uid 10000 (the image user) write
       # access to the mounted project dirs.

@@ -39,6 +39,11 @@ if config_env() != :test do
   config :cadence_daemon,
     watch_debounce_ms: String.to_integer(System.get_env("CAD_WATCH_DEBOUNCE_MS", "2000")),
     watch_backend: watch_backend,
+    # Hub folder: every direct child directory is registered as a project.
+    # Unset/empty keeps auto-discovery off.
+    projects_root: System.get_env("CAD_PROJECTS_ROOT"),
+    projects_scan_interval_ms:
+      String.to_integer(System.get_env("CAD_PROJECTS_ROOT_SCAN_MS", "30000")),
     local_user_id: System.get_env("CAD_LOCAL_USER_ID", "00000000-0000-0000-0000-000000000000"),
     git_author: %{
       name: System.get_env("CAD_GIT_AUTHOR_NAME", "cadence"),

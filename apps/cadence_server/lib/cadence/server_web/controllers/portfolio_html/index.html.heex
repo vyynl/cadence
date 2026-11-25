@@ -7,7 +7,7 @@
 
   <section :if={@projects != []} class="project-grid" aria-label="Projects">
     <a
-      :for={%{project: project, node_count: node_count} <- @projects}
+      :for={%{project: project, node_count: node_count, imported?: imported?} <- @projects}
       href={"/p/#{project.slug}"}
       class="project-card"
     >
@@ -15,6 +15,7 @@
       <p class="slug">/{project.slug}</p>
       <p class="note">
         <span class="count-badge">{node_count} {if node_count == 1, do: "node", else: "nodes"}</span>
+        <span :if={imported?} class="flag-badge">imported</span>
       </p>
     </a>
   </section>

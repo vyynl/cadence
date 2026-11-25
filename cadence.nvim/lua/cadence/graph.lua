@@ -15,7 +15,7 @@
 local M = {}
 
 -- Highlight precedence when a node carries several flags.
-local FLAG_PRIORITY = { "broken", "in-progress", "sandbox", "functioning" }
+local FLAG_PRIORITY = { "broken", "in-progress", "sandbox", "functioning", "imported" }
 
 -- For merging overlapping edge glyphs: keep the most "structural" one.
 local GLYPH_RANK = { ["|"] = 3, ["\\"] = 2, ["/"] = 2, ["-"] = 1 }

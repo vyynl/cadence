@@ -5,6 +5,7 @@ local FLAG_HL = {
   ["in-progress"] = "CadenceInProgress",
   ["broken"] = "CadenceBroken",
   ["sandbox"] = "CadenceSandbox",
+  ["imported"] = "CadenceImported",
 }
 
 local function set_hl(group, fg, extra)
@@ -18,6 +19,7 @@ M.setup_highlights = function()
   set_hl("CadenceInProgress", "#e5c07b")
   set_hl("CadenceBroken", "#e06c75")
   set_hl("CadenceSandbox", "#61afef")
+  set_hl("CadenceImported", "#56b6c2")
   set_hl("CadencePinned", "#c678dd", { bold = true, underline = true })
   set_hl("CadenceEdge", "#5c6370")
   set_hl("CadenceDiffHeader", "#61afef", { bold = true })

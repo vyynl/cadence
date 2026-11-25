@@ -76,7 +76,7 @@ defmodule Cadence.Daemon.ImporterTest do
     assert n1.parents == []
     assert n2.parents == [n1.id]
     assert n3.parents == [n2.id]
-    assert Enum.all?(nodes, &(&1.flags == []))
+    assert Enum.all?(nodes, &(&1.flags == [:imported]))
     assert Enum.all?(nodes, &(&1.docs_state == :skipped))
     assert Enum.map(nodes, & &1.pinned) == [false, false, true]
     assert Enum.map(nodes, & &1.message) == ["first\n\nbody", "second", "third"]

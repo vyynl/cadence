@@ -15,6 +15,26 @@ defmodule Cadence.Daemon.Env do
   @spec ignore_names() :: [String.t()]
   def ignore_names, do: Application.get_env(:cadence_daemon, :ignore, [])
 
+  @doc """
+  Hub folder whose direct child directories are registered as projects.
+
+  `nil` or an empty string disables auto-discovery.
+  """
+  @spec projects_root() :: String.t() | nil
+  def projects_root do
+    case Application.get_env(:cadence_daemon, :projects_root) do
+      root when is_binary(root) and root != "" -> root
+      _other -> nil
+    end
+  end
+
+  @doc "Interval between hub rescans in milliseconds (default 30 s)."
+  @spec projects_scan_interval_ms() :: pos_integer()
+  def projects_scan_interval_ms do
+    Application.get_env(:cadence_daemon, :projects_scan_interval_ms, 30_000)
+    |> positive(30_000)
+  end
+
   @doc "Git author identity used for local commit objects."
   @spec git_author() :: %{name: String.t(), email: String.t()}
   def git_author do

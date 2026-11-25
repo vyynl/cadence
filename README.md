@@ -154,44 +154,57 @@ snapshots locally, and syncs them to the Cadence server you already deployed.
 It does not need a server on the same machine, and the commands below target a
 remote server by default.
 
-Mint a token on the server at `/auth/tokens/new` (sign in first; the page asks
-for your password and TOTP code again if the sudo window has expired). Create
-the state directory first and run both commands as yourself: `setup` writes
-`daemon.env` and the database into it, and the daemon must read them back with
-the same uid. The project mount is the parent of the directories you will add
-later, at the same absolute path on both sides.
+The directory you start from is the **hub**: every direct child directory
+becomes a project automatically, so a new folder under it is watched and synced
+without a separate register call. Navigate to the hub you want the daemon to
+serve, then run these commands:
 
 ```bash
+cd ~/Programming/projects          # the hub: direct children become projects
+HUB="$PWD"
 STATE="$HOME/.local/state/cadence"
 mkdir -p "$STATE"
 docker run --rm -it --user "$(id -u):$(id -g)" \
   -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
+  -v "$HUB:$HUB" -e "CAD_PROJECTS_ROOT=$HUB" \
   ghcr.io/vyynl/cadence-daemon:latest setup
 
 docker run -d --name cadence-daemon --restart unless-stopped \
   --user "$(id -u):$(id -g)" \
   -v "$STATE:$STATE" -e CAD_STATE_DIR="$STATE" \
-  -v "$HOME:$HOME" \
+  -v "$HUB:$HUB" \
   ghcr.io/vyynl/cadence-daemon:latest
 ```
+
+Mint a token on the server at `/auth/tokens/new` (sign in first; the page asks
+for your password and TOTP code again if the sudo window has expired). Create
+the state directory first and run both commands as yourself: `setup` writes
+`daemon.env` and the database into it, and the daemon must read them back with
+the same uid. The hub is mounted at the same absolute path inside and outside
+the container; the state directory is a separate mount.
 
 `setup` prompts for the server URL, the API token, and an optional LLM API key
 (with provider, model, and base URL defaults), then stores them in the state
 directory with mode `0600`, so no secret appears on the command line or in
-shell history. Leave the LLM key blank to skip AI configuration (a re-run
-keeps an existing key unless you replace it). Use the origin you reach the
-server at, for example
+shell history. `CAD_PROJECTS_ROOT` is taken from the command and stored in
+`daemon.env`, so the hub is remembered across restarts and upgrades. Leave the
+LLM key blank to skip AI configuration (a re-run keeps an existing key unless
+you replace it). Use the origin you reach the server at, for example
 `https://cadence.example.com`, or a LAN or Tailscale address such as
 `http://100.107.198.51:4000`; plain HTTP is fine inside a private network or
 tunnel. `localhost` does not mean the server container, so use a routable
 address unless the daemon runs in the server's network namespace. It finishes
 by calling the server: you should see `server authenticated`. A `401` means the
 token is wrong; `cannot reach ...` means the URL is wrong or unreachable from
-the container. `$HOME` keeps the command generic; use a narrower parent in its
-place if your projects live elsewhere.
+the container.
 
-Add any directory under that mount as a project. The path must be absolute. From
-a checkout, `mix deps.get && mix compile` once (a fresh clone has neither), then:
+New direct children of the hub are registered automatically. A child that is a
+Git repository imports its history (original SHAs, parents, authors) and its
+nodes carry the `imported` flag; a plain directory gets one imported snapshot of
+its current tree, then the normal watcher. The project page and portfolio show
+an imported badge. To add a project outside the hub, mount its parent and
+register it explicitly. The path must be absolute. From a checkout,
+`mix deps.get && mix compile` once (a fresh clone has neither), then:
 
 ```bash
 mix cad.register "My Project" my-project "$HOME/code/my-project"

@@ -31,7 +31,8 @@ defmodule Cadence.Daemon.TUI.Scene do
     "broken" => :red,
     "in-progress" => :yellow,
     "sandbox" => :magenta,
-    "functioning" => :green
+    "functioning" => :green,
+    "imported" => :cyan
   }
 
   @help [
@@ -143,7 +144,8 @@ defmodule Cadence.Daemon.TUI.Scene do
       span("broken", %Style{fg: :red}),
       span("  in-progress", %Style{fg: :yellow}),
       span("  sandbox", %Style{fg: :magenta}),
-      span("  functioning", %Style{fg: :green})
+      span("  functioning", %Style{fg: :green}),
+      span("  imported", %Style{fg: :cyan})
     ]
 
     lines ++ [blank_line(), Line.new(legend)]

@@ -15,7 +15,7 @@ defmodule Cadence.Shared.Node do
 
   @primary_key {:id, Ecto.UUID, autogenerate: true}
 
-  @flags [:functioning, :"in-progress", :broken, :sandbox]
+  @flags [:functioning, :"in-progress", :broken, :sandbox, :imported]
   @docs_states [:current, :pending, :skipped]
 
   @doc "The allowed flag atoms (spec §3.1)."

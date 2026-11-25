@@ -96,6 +96,9 @@ defmodule Cadence.ServerWeb.ProjectLive do
           <p class="eyebrow">Project</p>
           <h1>{@project.name}</h1>
           <p class="slug">/{@project.slug}</p>
+          <p :if={@imported?} class="project-imported">
+            <span class="flag-badge">imported</span>
+          </p>
 
           <p :if={@membership} class="project-nav">
             <.link class="button-link" navigate={~p"/p/#{@project.slug}/reviews"}>Reviews</.link>
