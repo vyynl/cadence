@@ -25,6 +25,8 @@
 #   CAD_STATE_DIR          state directory (~/.local/state/cadence)
 #   CAD_SERVER_URL, CAD_AUTH_TOKEN, CAD_SYNC_CA_FILE, CAD_SYNC_VERIFY_TLS
 #                          forwarded when set, otherwise read from daemon.env
+#   CAD_PUBLIC_URL         browser origin for the printed project link (falls
+#                          back to CAD_SERVER_URL, which may be a service name)
 #
 # Exit status: 0 when the project is registered locally. The server connection
 # is reported on its own line and only fails the run with
@@ -142,6 +144,7 @@ env_value() {
 }
 
 server_url="$(env_value CAD_SERVER_URL)"
+public_url="$(env_value CAD_PUBLIC_URL)"
 ca_file="$(env_value CAD_SYNC_CA_FILE)"
 verify_tls="$(env_value CAD_SYNC_VERIFY_TLS)"
 
@@ -171,11 +174,22 @@ fi
 
 # -- start the daemon --------------------------------------------------------
 
+# A project is reachable when a bind destination is the project itself or a
+# parent of it: the docs mount $HOME once and register directories under it.
+project_mounted() {
+  local cname="$1" project="$2" dest
+  while IFS= read -r dest; do
+    [[ -n "$dest" ]] || continue
+    [[ "$project" == "$dest" ]] && return 0
+    [[ "$project" == "$dest"/* ]] && return 0
+  done < <(docker inspect -f '{{range .Mounts}}{{println .Destination}}{{end}}' "$cname")
+  return 1
+}
+
 if [[ "$mode" == 'container' ]]; then
   if docker inspect "$cname" >/dev/null 2>&1; then
-    if ! docker inspect -f '{{range .Mounts}}{{println .Destination}}{{end}}' "$cname" |
-      grep -Fxq -- "$project"; then
-      fail "container $cname does not mount $project; recreate it with -v $project:$project (DAEMON.md)"
+    if ! project_mounted "$cname" "$project"; then
+      fail "container $cname does not mount $project or a parent of it; recreate it with -v $project:$project, or with a parent such as -v \"$HOME:$HOME\" (DAEMON.md)"
     fi
 
     if [[ "$(docker inspect -f '{{.State.Running}}' "$cname")" == 'true' ]]; then
@@ -339,14 +353,20 @@ esac
 # -- the page ----------------------------------------------------------------
 
 printf '\n'
-if [[ -n "$server_url" ]]; then
-  url="${server_url%/}/p/${slug}"
+# CAD_SERVER_URL may be a compose service name (http://cadence:4000), which no
+# browser resolves. CAD_PUBLIC_URL, when set, is the browser-facing origin.
+page_base="${public_url:-$server_url}"
+if [[ -n "$page_base" ]]; then
+  url="${page_base%/}/p/${slug}"
   if [[ -t 1 ]] && [[ -z "${NO_COLOR:-}" ]]; then
     # OSC 8 hyperlink. The URL is the link text too, so a terminal without
     # support still shows something usable.
     printf '  %-8s \033]8;;%s\033\\%s%s%s\033]8;;\033\\\n' 'page' "$url" "$c_blue" "$url" "$c_reset"
   else
     printf '  %-8s %s\n' 'page' "$url"
+  fi
+  if [[ -z "$public_url" ]]; then
+    info 'that is the sync address; export CAD_PUBLIC_URL for the browser link'
   fi
 else
   info 'set CAD_SERVER_URL in daemon.env to get a project URL'

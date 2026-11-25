@@ -49,6 +49,11 @@ Notable changes to Cadence. The format follows
 
 ### Fixed
 
+- `scripts/cadence-up.sh` accepts a project mounted through a **parent** (the
+  documented `-v "$HOME:$HOME"` flow) instead of demanding the project itself as
+  a bind destination, and it takes the printed page link from `CAD_PUBLIC_URL`
+  when that is set, because `CAD_SERVER_URL` is usually a compose service name
+  (`http://cadence:4000`) that no browser resolves.
 - Daemon helpers name the socket instead of crashing when it is missing or has
   no listener: `Release.register/4`, `Release.import/2`, and every `mix cad.*`
   task now report `cadence daemon unreachable at <path>: :econnrefused` (or
