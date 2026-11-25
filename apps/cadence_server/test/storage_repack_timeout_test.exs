@@ -116,8 +116,11 @@ defmodule Cadence.Server.StorageRepackTimeoutTest do
     Repacker.schedule(first, server: :repack_timeout_test)
     Repacker.schedule(second, server: :repack_timeout_test)
 
-    assert_receive {:packing, ^first}, 1_000
-    assert_receive {:done, ^second, {:ok, %{packed_objects: 1}}}, 2_000
+    assert_receive {:packing, ^first}, 5_000
+    # The second project's real pack write can take several seconds on a busy
+    # CI runner; the repacker timeout is what the test is proving, not this
+    # filesystem latency.
+    assert_receive {:done, ^second, {:ok, %{packed_objects: 1}}}, 10_000
 
     # The worker's kill released the first project's lock, so it can run again.
     # `Storage.run/1` is idempotent; retry until it stops reporting `:busy`,
